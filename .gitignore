@@ -1,0 +1,38 @@
+# Operating-system and editor files
+.DS_Store
+**/.DS_Store
+~$*
+.idea/
+.vscode/
+
+# Python build and test state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local source material. Redistribution permission has not been confirmed.
+/input/
+
+# Local planning and review state
+/.local/
+
+# Generated runtime state and heavyweight artifacts
+/artifacts/
+/models/
+/runs/
+*.log
