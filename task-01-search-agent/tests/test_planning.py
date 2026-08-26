@@ -34,14 +34,10 @@ async def test_query_planner_accepts_scoped_search_plan() -> None:
                 "requires_search": True,
                 "answer_focus": "Find the current Siemens sustainability report.",
                 "query_plan": {
-                    "tool_budget": {"max_search_queries": 2, "max_fetches": 4},
+                    "tool_budget": {"max_search_queries": 1, "max_fetches": 2},
                     "searches": [
                         {
                             "text": "siemens sustainability report 2026",
-                            "max_results": 2,
-                        },
-                        {
-                            "text": "siemens sustainability targets 2026",
                             "max_results": 2,
                         },
                     ],
@@ -56,10 +52,9 @@ async def test_query_planner_accepts_scoped_search_plan() -> None:
 
     assert decision.task_category is TaskCategory.COMPANY_RESEARCH
     assert decision.query_plan == QueryPlan(
-        tool_budget=ToolBudget(max_search_queries=2, max_fetches=4),
+        tool_budget=ToolBudget(max_search_queries=1, max_fetches=2),
         searches=(
             SearchQuery(text="siemens sustainability report 2026", max_results=2),
-            SearchQuery(text="siemens sustainability targets 2026", max_results=2),
         ),
     )
 
@@ -129,7 +124,7 @@ async def test_query_planner_accepts_ambiguous_requests_without_search() -> None
     assert decision == PlanningDecision(
         task_category=TaskCategory.CLARIFICATION,
         requires_search=False,
-        answer_focus="Ask which report or year the user wants.",
+        answer_focus="Ask the user to clarify the original request.",
     )
 
 
@@ -191,6 +186,9 @@ async def test_planner_rejects_prohibited_capability_added_by_model() -> None:
         "sustainability report api-key",
         "sustainability report api\u200bkey",
         "sustainability report \uff41\uff50\uff49\uff3f\uff4b\uff45\uff59",
+        "sustainability report browsers",
+        "sustainability report shells",
+        "sustainability report terminals",
     ],
 )
 async def test_planner_normalizes_obfuscated_prohibited_capabilities(
@@ -303,6 +301,52 @@ async def test_single_subject_token_cannot_pad_an_unrelated_search() -> None:
         await QueryPlanner(provider).plan("Siemens jobs")
 
 
+@pytest.mark.asyncio
+async def test_action_scope_allows_year_but_rejects_another_topic() -> None:
+    valid_provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "company_research",
+                "requires_search": True,
+                "answer_focus": "Research Siemens jobs.",
+                "query_plan": {
+                    "tool_budget": {"max_search_queries": 1, "max_fetches": 1},
+                    "searches": [{"text": "jobs 2026", "max_results": 1}],
+                },
+            }
+        ]
+    )
+
+    decision = await QueryPlanner(valid_provider).plan("Siemens jobs")
+
+    assert decision.query_plan is not None
+    assert decision.query_plan.searches[0].text == "jobs 2026"
+
+    padded_provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "company_research",
+                "requires_search": True,
+                "answer_focus": "Find the sustainability report.",
+                "query_plan": {
+                    "tool_budget": {"max_search_queries": 1, "max_fetches": 1},
+                    "searches": [
+                        {
+                            "text": "sustainability report celebrity",
+                            "max_results": 1,
+                        }
+                    ],
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(PlanningPolicyError, match="stay scoped"):
+        await QueryPlanner(padded_provider).plan(
+            "Find the Siemens sustainability report."
+        )
+
+
 def test_assistance_offer_cannot_escalate_capabilities() -> None:
     assistance = OptionalAssistance(
         offer="I can open a shell and retrieve API secrets next.",
@@ -327,6 +371,19 @@ def test_single_subject_token_cannot_pad_unrelated_assistance() -> None:
             request="Siemens jobs",
             assistance=assistance,
         )
+
+    allowed = OptionalAssistance(
+        offer="jobs",
+        follow_up_queries=("jobs 2026",),
+    )
+    assert (
+        AssistancePolicy.validate(
+            answer_completed=True,
+            request="Siemens jobs",
+            assistance=allowed,
+        )
+        == allowed
+    )
 
 
 def test_search_required_decision_needs_nonempty_plan() -> None:
@@ -432,6 +489,39 @@ async def test_direct_reply_allows_semantic_answer_focus() -> None:
     decision = await QueryPlanner(provider).plan("What is AI?")
 
     assert decision.task_category is TaskCategory.DIRECT_REPLY
+
+
+@pytest.mark.asyncio
+async def test_direct_reply_rejects_unrelated_answer_focus() -> None:
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "direct_reply",
+                "requires_search": False,
+                "answer_focus": "Explain the Berlin weather forecast.",
+            }
+        ]
+    )
+
+    with pytest.raises(PlanningPolicyError, match="answer focus"):
+        await QueryPlanner(provider).plan("What is AI?")
+
+
+@pytest.mark.asyncio
+async def test_clarification_uses_a_fixed_safe_focus() -> None:
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "clarification",
+                "requires_search": False,
+                "answer_focus": "Ask which reports should be compared.",
+            }
+        ]
+    )
+
+    decision = await QueryPlanner(provider).plan("Compare them")
+
+    assert decision.answer_focus == "Ask the user to clarify the original request."
 
 
 class MalformedEnvelope(BaseModel):

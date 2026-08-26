@@ -32,7 +32,8 @@ PlanningText = Annotated[
 
 _TOKEN_PATTERN = re.compile(r"[^\W_]{4,}", flags=re.UNICODE)
 _POLICY_WORD_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
-_ACTION_SCOPE_COVERAGE = 0.51
+_ACRONYM_PATTERN = re.compile(r"\b[A-Z]{2,8}\b")
+_YEAR_PATTERN = re.compile(r"(?:19|20)\d{2}\Z")
 _SCOPE_GENERIC_TOKENS = {
     "about",
     "compare",
@@ -51,8 +52,10 @@ _SCOPE_GENERIC_TOKENS = {
     "please",
     "previous",
     "research",
+    "review",
     "search",
     "siemens",
+    "summarize",
     "that",
     "this",
     "with",
@@ -77,9 +80,12 @@ _FORBIDDEN_REQUEST_MARKERS = (
     "developer message",
     "developer messages",
     "browser",
+    "browsers",
     "playwright",
     "shell",
+    "shells",
     "terminal",
+    "terminals",
 )
 
 PLANNING_SYSTEM_PROMPT = (
@@ -215,6 +221,12 @@ class QueryPlanner:
                 "planner output violated the public planning contract"
             ) from exc
         _validate_generated_policy(request=request, decision=decision)
+        if decision.task_category is TaskCategory.CLARIFICATION:
+            return PlanningDecision(
+                task_category=TaskCategory.CLARIFICATION,
+                requires_search=False,
+                answer_focus="Ask the user to clarify the original request.",
+            )
         return decision
 
 
@@ -235,7 +247,7 @@ class AssistancePolicy:
         if not _stays_scoped(
             request=request,
             candidate=assistance.offer,
-            min_candidate_coverage=_ACTION_SCOPE_COVERAGE,
+            restrict_expansions=True,
         ):
             msg = "assistance offer must stay tied to the answered request"
             raise PlanningPolicyError(msg)
@@ -245,7 +257,7 @@ class AssistancePolicy:
                 request=request,
                 candidate=follow_up_query,
                 min_shared_tokens=2,
-                min_candidate_coverage=_ACTION_SCOPE_COVERAGE,
+                restrict_expansions=True,
             ):
                 msg = "assistance follow-up queries must stay tied to the answered request"
                 raise PlanningPolicyError(msg)
@@ -264,9 +276,22 @@ def _reject_forbidden_request(request: str) -> None:
 
 def _validate_generated_policy(*, request: str, decision: PlanningDecision) -> None:
     _reject_forbidden_request(decision.answer_focus)
-    if decision.task_category is not TaskCategory.DIRECT_REPLY and not _stays_scoped(
-        request=request, candidate=decision.answer_focus
-    ):
+    company_focus_is_invalid = (
+        decision.task_category is TaskCategory.COMPANY_RESEARCH
+        and not _stays_scoped(
+            request=request,
+            candidate=decision.answer_focus,
+            restrict_expansions=True,
+        )
+    )
+    direct_focus_is_invalid = (
+        decision.task_category is TaskCategory.DIRECT_REPLY
+        and not _stays_scoped(request=request, candidate=decision.answer_focus)
+        and not _expands_request_acronym(
+            request=request, candidate=decision.answer_focus
+        )
+    )
+    if company_focus_is_invalid or direct_focus_is_invalid:
         raise PlanningPolicyError("answer focus must stay scoped to the user request")
     if decision.query_plan is not None:
         for search in decision.query_plan.searches:
@@ -275,7 +300,7 @@ def _validate_generated_policy(*, request: str, decision: PlanningDecision) -> N
                 request=request,
                 candidate=search.text,
                 min_shared_tokens=2,
-                min_candidate_coverage=_ACTION_SCOPE_COVERAGE,
+                restrict_expansions=True,
             ):
                 raise PlanningPolicyError(
                     "search queries must stay scoped to the user request"
@@ -285,7 +310,7 @@ def _validate_generated_policy(*, request: str, decision: PlanningDecision) -> N
         if not _stays_scoped(
             request=request,
             candidate=decision.assistance.offer,
-            min_candidate_coverage=_ACTION_SCOPE_COVERAGE,
+            restrict_expansions=True,
         ):
             raise PlanningPolicyError(
                 "assistance offer must stay tied to the user request"
@@ -296,7 +321,7 @@ def _validate_generated_policy(*, request: str, decision: PlanningDecision) -> N
                 request=request,
                 candidate=query,
                 min_shared_tokens=2,
-                min_candidate_coverage=_ACTION_SCOPE_COVERAGE,
+                restrict_expansions=True,
             ):
                 raise PlanningPolicyError(
                     "assistance queries must stay tied to the user request"
@@ -308,24 +333,24 @@ def _stays_scoped(
     request: str,
     candidate: str,
     min_shared_tokens: int = 1,
-    min_candidate_coverage: float = 0.0,
+    restrict_expansions: bool = False,
 ) -> bool:
     normalized_request = " ".join(request.casefold().split())
     normalized_candidate = " ".join(candidate.casefold().split())
     if normalized_request == normalized_candidate:
         return True
-    # Action text must retain the subject without padding it with unrelated terms.
-    # Capping the count keeps exact single-subject requests usable; coverage blocks
-    # that one token from authorizing a different multi-token action.
+    # Generated actions may narrow the request by year, but cannot invent another
+    # topic. This deterministic rule is stricter than semantic guessing by design.
     request_tokens = _meaningful_tokens(request)
     candidate_tokens = _meaningful_tokens(candidate)
     required_shared = min(min_shared_tokens, len(request_tokens), len(candidate_tokens))
     if required_shared == 0:
         return False
     shared_count = len(request_tokens.intersection(candidate_tokens))
-    return (
-        shared_count >= required_shared
-        and shared_count / len(candidate_tokens) >= min_candidate_coverage
+    added_tokens = candidate_tokens - request_tokens
+    return shared_count >= required_shared and (
+        not restrict_expansions
+        or all(_YEAR_PATTERN.fullmatch(token) for token in added_tokens)
     )
 
 
@@ -336,3 +361,17 @@ def _meaningful_tokens(text: str) -> set[str]:
 def _normalized_policy_text(text: str) -> str:
     normalized = unicodedata.normalize("NFKC", text).casefold()
     return " ".join(_POLICY_WORD_PATTERN.findall(normalized))
+
+
+def _expands_request_acronym(*, request: str, candidate: str) -> bool:
+    candidate_tokens = [
+        token
+        for token in _TOKEN_PATTERN.findall(candidate.casefold())
+        if token not in _SCOPE_GENERIC_TOKENS
+    ]
+    if not candidate_tokens:
+        return False
+    initials = "".join(token[0] for token in candidate_tokens)
+    return any(
+        initials == acronym.casefold() for acronym in _ACRONYM_PATTERN.findall(request)
+    )
