@@ -104,15 +104,22 @@ class LocalExtractor:
                 raw_title, (str, type(None))
             ):
                 raise TypeError
-            stripped_text = raw_text.strip() if isinstance(raw_text, str) else ""
-            stripped_title = raw_title.strip() if isinstance(raw_title, str) else ""
-            if not isinstance(stripped_text, str) or not isinstance(
-                stripped_title, str
-            ):
+            checked_text = raw_text.strip() if isinstance(raw_text, str) else ""
+            checked_title = raw_title.strip() if isinstance(raw_title, str) else ""
+            if not isinstance(checked_text, str) or not isinstance(checked_title, str):
                 raise TypeError
-            # Base slicing drops third-party str subclasses without invoking hooks.
-            text = str.__getitem__(stripped_text, slice(None))
-            title = str.__getitem__(stripped_title, slice(None)) or None
+            # Exercise parser hooks only to detect failures. Base operations on the
+            # original value prevent a subclass from changing whitespace semantics.
+            text = (
+                str.strip(str.__getitem__(raw_text, slice(None)))
+                if isinstance(raw_text, str)
+                else ""
+            )
+            title = (
+                str.strip(str.__getitem__(raw_title, slice(None))) or None
+                if isinstance(raw_title, str)
+                else None
+            )
             output_chars = len(text) + (len(title) if title is not None else 0)
         except Exception:
             raise ExtractionError(

@@ -59,8 +59,6 @@ class SearchAdapter:
             raise SearchFailure("search backend returned an invalid result")
         try:
             return self._normalize(rows, query.max_results)
-        except SearchFailure:
-            raise
         except Exception:
             raise SearchFailure("search backend returned an invalid result") from None
 

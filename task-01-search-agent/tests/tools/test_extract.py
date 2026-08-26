@@ -25,6 +25,11 @@ class BenignString(str):
     pass
 
 
+class LyingStripString(str):
+    def strip(self, chars: str | None = None) -> str:
+        return self
+
+
 def _document(body: bytes, *, content_type: str = "text/html") -> FetchedDocument:
     return FetchedDocument(
         canonical_url="https://example.com/report",
@@ -214,6 +219,23 @@ def test_extractor_returns_plain_strings_from_subclass_fields(
     assert type(extracted.text) is str
     assert extracted.title == "Title"
     assert extracted.text == "Main text"
+
+
+def test_string_subclass_cannot_forge_nonempty_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        extract_module,
+        "bare_extraction",
+        lambda *args, **kwargs: SimpleNamespace(
+            title=None, text=LyingStripString("   ")
+        ),
+    )
+
+    with pytest.raises(ExtractionError) as error:
+        LocalExtractor().extract(_document(b"<html>content</html>"))
+
+    assert error.value.reason is ExtractionFailureReason.NO_CONTENT
 
 
 @pytest.mark.parametrize(
