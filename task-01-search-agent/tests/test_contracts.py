@@ -80,6 +80,18 @@ def test_public_event_failure_reason_only_exists_for_failed_runs() -> None:
         )
 
 
+def test_public_event_rejects_mismatched_terminal_state() -> None:
+    with pytest.raises(ValidationError, match="public terminal event"):
+        PublicEvent(
+            tenant_id="tenant-123",
+            session_id="session-123",
+            run_id="run-123",
+            event_type=EventType.RUN_CANCELLED,
+            message="Cancelled cited answer",
+            terminal_state=TerminalState.FAILED,
+        )
+
+
 def test_models_are_strict_about_scalar_types() -> None:
     with pytest.raises(ValidationError):
         ToolBudget(max_search_queries="1", max_fetches=2)  # type: ignore[arg-type]

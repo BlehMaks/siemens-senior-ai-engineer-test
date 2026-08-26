@@ -152,13 +152,19 @@ class PublicEvent(StrictModel):
 
     @model_validator(mode="after")
     def validate_terminal_fields(self) -> PublicEvent:
-        terminal_event = self.event_type in {
-            EventType.RUN_COMPLETED,
-            EventType.RUN_FAILED,
-            EventType.RUN_CANCELLED,
-        }
-        if terminal_event != (self.terminal_state is not None):
+        expected_terminal = {
+            EventType.RUN_COMPLETED: TerminalState.COMPLETED,
+            EventType.RUN_FAILED: TerminalState.FAILED,
+            EventType.RUN_CANCELLED: TerminalState.CANCELLED,
+        }.get(self.event_type)
+        if (expected_terminal is not None) != (self.terminal_state is not None):
             msg = "terminal_state must match terminal events"
+            raise ValueError(msg)
+        if (
+            expected_terminal is not None
+            and self.terminal_state is not expected_terminal
+        ):
+            msg = "terminal_state must match the public terminal event"
             raise ValueError(msg)
         if self.event_type == EventType.RUN_FAILED and self.failure_reason is None:
             msg = "run_failed events require failure_reason"
