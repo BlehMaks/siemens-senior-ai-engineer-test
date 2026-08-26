@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -14,6 +15,8 @@ from search_agent.contracts import SearchHit, SearchQuery
 from search_agent.security.site_policy import SafeSearch, SitePolicy
 
 _URL_ADAPTER = TypeAdapter(AnyHttpUrl)
+_PERCENT_ESCAPE = re.compile(r"%[0-9A-Fa-f]{2}")
+_ROWS_PER_REQUESTED_HIT = 4
 _SAFE_SEARCH_ARGUMENT = {
     SafeSearch.STRICT: "on",
     SafeSearch.MODERATE: "moderate",
@@ -55,10 +58,11 @@ class SearchAdapter:
         if isinstance(rows, (str, bytes)) or not isinstance(rows, Sequence):
             raise SearchFailure("search backend returned an invalid result")
         try:
-            materialized_rows = tuple(rows)
+            return self._normalize(rows, query.max_results)
+        except SearchFailure:
+            raise
         except Exception:
             raise SearchFailure("search backend returned an invalid result") from None
-        return self._normalize(materialized_rows, query.max_results)
 
     def _normalize(
         self, rows: Sequence[object], max_results: int
@@ -66,7 +70,14 @@ class SearchAdapter:
         hits: list[SearchHit] = []
         seen_urls: set[str] = set()
 
-        for row in rows:
+        # The backend was asked for max_results; a small allowance preserves useful
+        # filtering without letting a hostile Sequence create unbounded work.
+        iterator = iter(rows)
+        for _ in range(max_results * _ROWS_PER_REQUESTED_HIT):
+            try:
+                row = next(iterator)
+            except StopIteration:
+                break
             normalized = self._normalize_row(row, rank=len(hits) + 1)
             if normalized is None:
                 continue
@@ -127,8 +138,8 @@ class SearchAdapter:
             (
                 parsed_canonical.scheme,
                 netloc,
-                parsed_canonical.path,
-                parsed_canonical.query,
+                _uppercase_percent_escapes(parsed_canonical.path),
+                _uppercase_percent_escapes(parsed_canonical.query),
                 "",
             )
         )
@@ -146,3 +157,9 @@ def _normalize_text(value: object) -> str | None:
         return None
     normalized = " ".join(value.split())
     return normalized[:400] or None
+
+
+def _uppercase_percent_escapes(value: str) -> str:
+    """Normalize valid escapes only; invalid percent text keeps its identity."""
+
+    return _PERCENT_ESCAPE.sub(lambda match: match.group(0).upper(), value)

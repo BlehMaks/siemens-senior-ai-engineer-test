@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 
 import pytest
@@ -29,6 +29,30 @@ class FakeSearchBackend:
 class ExplodingMapping(dict[str, object]):
     def get(self, key: str, default: object = None) -> object:
         raise RuntimeError("backend-secret-must-not-escape")
+
+
+class CountingSequence(Sequence[object]):
+    def __init__(self, rows: Sequence[object]) -> None:
+        self.rows = rows
+        self.reads = 0
+
+    def __getitem__(self, index: int) -> object:
+        self.reads += 1
+        return self.rows[index]
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+
+class ExplodingSequence(Sequence[object]):
+    def __getitem__(self, index: int) -> object:
+        raise RuntimeError("sequence-secret-must-not-escape")
+
+    def __len__(self) -> int:
+        raise RuntimeError("sequence-secret-must-not-escape")
+
+    def __iter__(self) -> Iterator[object]:
+        return super().__iter__()
 
 
 @pytest.mark.asyncio
@@ -215,6 +239,77 @@ async def test_search_never_exceeds_query_max_results() -> None:
     )
 
     assert len(hits) == 2
+    assert [hit.rank for hit in hits] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_search_scans_only_bounded_rows_and_stops_after_enough_hits() -> None:
+    valid_first = CountingSequence(
+        tuple(
+            {
+                "title": f"Result {index}",
+                "href": f"https://example.com/{index}",
+                "body": "body",
+            }
+            for index in range(1_000)
+        )
+    )
+    hits = await SearchAdapter(
+        FakeSearchBackend(rows=valid_first), SitePolicy()
+    ).search(SearchQuery(text="siemens annual report", max_results=1))
+
+    invalid = CountingSequence(("invalid row",) * 1_000)
+    empty = await SearchAdapter(FakeSearchBackend(rows=invalid), SitePolicy()).search(
+        SearchQuery(text="siemens annual report", max_results=2)
+    )
+
+    assert len(hits) == 1
+    assert valid_first.reads == 1
+    assert empty == ()
+    assert invalid.reads == 8
+
+
+@pytest.mark.asyncio
+async def test_hostile_sequence_iteration_is_sanitized() -> None:
+    with pytest.raises(SearchFailure, match="invalid result") as caught:
+        await SearchAdapter(
+            FakeSearchBackend(rows=ExplodingSequence()), SitePolicy()
+        ).search(SearchQuery(text="siemens annual report", max_results=2))
+
+    assert caught.value.__cause__ is None
+    assert "sequence-secret" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_percent_escape_case_is_canonical_in_path_and_query_only() -> None:
+    backend = FakeSearchBackend(
+        rows=(
+            {
+                "title": "First",
+                "href": "https://example.com/report%2f2026?q=%3a&bad=%zz",
+                "body": "first body",
+            },
+            {
+                "title": "Duplicate",
+                "href": "https://example.com/report%2F2026?q=%3A&bad=%zz",
+                "body": "duplicate body",
+            },
+            {
+                "title": "Invalid escape remains distinct",
+                "href": "https://example.com/report%2F2026?q=%3A&bad=%ZZ",
+                "body": "distinct body",
+            },
+        )
+    )
+
+    hits = await SearchAdapter(backend, SitePolicy()).search(
+        SearchQuery(text="siemens annual report", max_results=5)
+    )
+
+    assert [str(hit.url) for hit in hits] == [
+        "https://example.com/report%2F2026?q=%3A&bad=%zz",
+        "https://example.com/report%2F2026?q=%3A&bad=%ZZ",
+    ]
     assert [hit.rank for hit in hits] == [1, 2]
 
 

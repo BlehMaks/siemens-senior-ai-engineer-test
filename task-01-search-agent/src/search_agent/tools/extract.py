@@ -100,30 +100,31 @@ class LocalExtractor:
         try:
             raw_text = extracted.text
             raw_title = extracted.title
+            if not isinstance(raw_text, (str, type(None))) or not isinstance(
+                raw_title, (str, type(None))
+            ):
+                raise TypeError
+            stripped_text = raw_text.strip() if isinstance(raw_text, str) else ""
+            stripped_title = raw_title.strip() if isinstance(raw_title, str) else ""
+            if not isinstance(stripped_text, str) or not isinstance(
+                stripped_title, str
+            ):
+                raise TypeError
+            # Base slicing drops third-party str subclasses without invoking hooks.
+            text = str.__getitem__(stripped_text, slice(None))
+            title = str.__getitem__(stripped_title, slice(None)) or None
+            output_chars = len(text) + (len(title) if title is not None else 0)
         except Exception:
             raise ExtractionError(
                 ExtractionFailureReason.MALFORMED_CONTENT,
                 "content extractor returned an invalid result",
             ) from None
-        if not isinstance(raw_text, (str, type(None))) or not isinstance(
-            raw_title, (str, type(None))
-        ):
-            raise ExtractionError(
-                ExtractionFailureReason.MALFORMED_CONTENT,
-                "content extractor returned an invalid result",
-            )
-        text = raw_text.strip() if isinstance(raw_text, str) else ""
         if not text:
             raise ExtractionError(
                 ExtractionFailureReason.NO_CONTENT,
                 "no main content was extracted",
             )
-        title = (
-            raw_title.strip()
-            if isinstance(raw_title, str) and raw_title.strip()
-            else None
-        )
-        if len(text) + (len(title) if title is not None else 0) > self.max_output_chars:
+        if output_chars > self.max_output_chars:
             raise ExtractionError(
                 ExtractionFailureReason.OUTPUT_TOO_LARGE,
                 "extracted content exceeds the output limit",

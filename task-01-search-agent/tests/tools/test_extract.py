@@ -16,6 +16,15 @@ from search_agent.tools.extract import (
 from search_agent.tools.fetch import FetchedDocument
 
 
+class ExplodingString(str):
+    def strip(self, chars: str | None = None) -> str:
+        raise RuntimeError("parser-secret-must-not-escape")
+
+
+class BenignString(str):
+    pass
+
+
 def _document(body: bytes, *, content_type: str = "text/html") -> FetchedDocument:
     return FetchedDocument(
         canonical_url="https://example.com/report",
@@ -168,6 +177,43 @@ def test_malformed_parser_result_is_typed(
         LocalExtractor().extract(_document(b"<html>content</html>"))
 
     assert error.value.reason is ExtractionFailureReason.MALFORMED_CONTENT
+
+
+@pytest.mark.parametrize("field", ["text", "title"])
+def test_hostile_string_fields_are_sanitized(
+    monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    result = SimpleNamespace(title="Title", text="Main text")
+    setattr(result, field, ExplodingString("hostile"))
+    monkeypatch.setattr(
+        extract_module, "bare_extraction", lambda *args, **kwargs: result
+    )
+
+    with pytest.raises(ExtractionError) as error:
+        LocalExtractor().extract(_document(b"<html>content</html>"))
+
+    assert error.value.reason is ExtractionFailureReason.MALFORMED_CONTENT
+    assert error.value.__cause__ is None
+    assert "parser-secret" not in str(error.value)
+
+
+def test_extractor_returns_plain_strings_from_subclass_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        extract_module,
+        "bare_extraction",
+        lambda *args, **kwargs: SimpleNamespace(
+            title=BenignString(" Title "), text=BenignString(" Main text ")
+        ),
+    )
+
+    extracted = LocalExtractor().extract(_document(b"<html>content</html>"))
+
+    assert type(extracted.title) is str
+    assert type(extracted.text) is str
+    assert extracted.title == "Title"
+    assert extracted.text == "Main text"
 
 
 @pytest.mark.parametrize(
