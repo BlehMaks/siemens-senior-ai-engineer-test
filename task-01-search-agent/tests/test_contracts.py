@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from pydantic import ValidationError
+from pydantic import AnyHttpUrl, TypeAdapter, ValidationError
 
 from search_agent import (
     Citation,
@@ -18,6 +18,12 @@ from search_agent import (
     ToolBudget,
 )
 from search_agent.state import RunSnapshot, RunStatus
+
+URL_ADAPTER = TypeAdapter(AnyHttpUrl)
+
+
+def _url(value: str) -> AnyHttpUrl:
+    return URL_ADAPTER.validate_python(value)
 
 
 def test_query_plan_rejects_over_budget_search_count() -> None:
@@ -50,12 +56,12 @@ def test_scoped_answer_requires_unique_citations() -> None:
                 Citation(
                     claim="Claim A",
                     evidence_id="ev-report",
-                    source_url="https://example.com/report",
+                    source_url=_url("https://example.com/report"),
                 ),
                 Citation(
                     claim="Claim B",
                     evidence_id="ev-report",
-                    source_url="https://example.com/report-2",
+                    source_url=_url("https://example.com/report-2"),
                 ),
             ),
         )
@@ -76,14 +82,14 @@ def test_public_event_failure_reason_only_exists_for_failed_runs() -> None:
 
 def test_models_are_strict_about_scalar_types() -> None:
     with pytest.raises(ValidationError):
-        ToolBudget(max_search_queries="1", max_fetches=2)
+        ToolBudget(max_search_queries="1", max_fetches=2)  # type: ignore[arg-type]
     with pytest.raises(ValidationError):
-        SearchQuery(text=123, max_results=2)
+        SearchQuery(text=123, max_results=2)  # type: ignore[arg-type]
     with pytest.raises(ValidationError):
         PublicEvent(
             tenant_id="tenant-123",
             session_id="session-123",
-            run_id=123,
+            run_id=123,  # type: ignore[arg-type]
             event_type=EventType.RUN_CREATED,
             message="Created run",
         )
@@ -116,7 +122,7 @@ def test_scoped_answer_allows_optional_assistance_without_extra_fields() -> None
             Citation(
                 claim="Siemens links decarbonization targets to product and operations work.",
                 evidence_id="ev-siemens-report",
-                source_url="https://example.com/report",
+                source_url=_url("https://example.com/report"),
             ),
         ),
         assistance=OptionalAssistance(
@@ -146,7 +152,7 @@ def test_terminal_runs_require_matching_terminal_fields() -> None:
                     Citation(
                         claim="Answer",
                         evidence_id="ev-answer",
-                        source_url="https://example.com/answer",
+                        source_url=_url("https://example.com/answer"),
                     ),
                 ),
             ),

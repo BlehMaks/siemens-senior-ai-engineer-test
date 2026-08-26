@@ -1,18 +1,30 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
+from pydantic import AnyHttpUrl, TypeAdapter
 
 from search_agent import (
     Citation,
     ExtractedEvidence,
     FailureReason,
+    PublicEvent,
     QueryPlan,
+    RunSnapshot,
     ScopedAnswer,
     SearchHit,
     SearchQuery,
     ToolBudget,
 )
 from search_agent.state import IllegalTransitionError, RunStateGraph, RunStatus
+
+URL_ADAPTER = TypeAdapter(AnyHttpUrl)
+TransitionBuilder = Callable[[RunSnapshot], tuple[RunSnapshot, PublicEvent]]
+
+
+def _url(value: str) -> AnyHttpUrl:
+    return URL_ADAPTER.validate_python(value)
 
 
 def _plan() -> QueryPlan:
@@ -29,7 +41,7 @@ def _evidence() -> tuple[tuple[SearchHit, ...], tuple[ExtractedEvidence, ...]]:
     hits = (
         SearchHit(
             title="Siemens sustainability report",
-            url="https://example.com/report",
+            url=_url("https://example.com/report"),
             snippet="Annual sustainability overview",
             rank=1,
         ),
@@ -37,7 +49,7 @@ def _evidence() -> tuple[tuple[SearchHit, ...], tuple[ExtractedEvidence, ...]]:
     evidence = (
         ExtractedEvidence(
             evidence_id="ev-report",
-            source_url="https://example.com/report",
+            source_url=_url("https://example.com/report"),
             source_title="Siemens sustainability report",
             summary="The report covers decarbonization targets.",
             quotes=("Decarbonization targets are tracked annually.",),
@@ -53,7 +65,7 @@ def _answer() -> ScopedAnswer:
             Citation(
                 claim="Siemens reports annual progress against decarbonization targets.",
                 evidence_id="ev-report",
-                source_url="https://example.com/report",
+                source_url=_url("https://example.com/report"),
             ),
         ),
     )
@@ -118,7 +130,9 @@ def _answer() -> ScopedAnswer:
     ],
 )
 def test_legal_transitions(
-    builder, expected_status: RunStatus, expected_event: str
+    builder: TransitionBuilder,
+    expected_status: RunStatus,
+    expected_event: str,
 ) -> None:
     run = RunStateGraph.create(
         tenant_id="tenant-123",
@@ -140,7 +154,10 @@ def test_legal_transitions(
         (lambda run: RunStateGraph.complete(run), "created -> completed"),
     ],
 )
-def test_illegal_transitions_raise(builder, match: str) -> None:
+def test_illegal_transitions_raise(
+    builder: Callable[[RunSnapshot], object],
+    match: str,
+) -> None:
     run = RunStateGraph.create(
         tenant_id="tenant-123",
         session_id="session-123",
