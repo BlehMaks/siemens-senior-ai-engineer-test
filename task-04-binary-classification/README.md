@@ -10,13 +10,16 @@ The supplied files use semicolon delimiters. Each has 4,070 rows but only 3,700 
 
 The positive/majority label appears 3,764 times and the minority label 306 times in the uncleaned second table. The features mix numeric values, low-cardinality categorical values, and substantial missingness. `RAS` is missing in 2,365 rows. These facts make accuracy alone misleading and require leakage checks before choosing a model.
 
-## Recommended stack and approach
+## Implemented approach
 
-- `pandas` for transparent ingestion, validation, deduplication, and joining. The dataset is too small to justify a distributed engine.
-- `scikit-learn` pipelines for a dummy baseline and a regularized logistic-regression baseline with imputation and one-hot encoding.
-- CatBoost as the primary nonlinear candidate because it handles mixed categorical/numeric data and missing values with limited preprocessing.
-- Stratified cross-validation on the deduplicated entity set, with a final untouched holdout if the sample size supports both.
-- PR-AUC as the primary imbalance-sensitive ranking metric, accompanied by ROC-AUC, confusion matrices, minority recall/precision, F1, calibration, and a documented operating threshold.
+- `pandas` performs strict, transparent ingestion and the one-to-one entity join.
+- Exact feature-vector groups stay together in both the final holdout and grouped CV.
+- Fold-fitted `scikit-learn` pipelines compare a stratified dummy, logistic regression,
+  and class-weighted logistic regression.
+- PR-AUC is primary. The report also records dispersion, minority precision/recall,
+  F1, ROC-AUC, calibration, cost-sensitive thresholds, and error slices.
+- CatBoost has a documented early-exit decision in the model card; it cannot block the
+  mandatory baseline.
 
 ## Constraints and acceptance checks
 
@@ -31,3 +34,21 @@ The positive/majority label appears 3,764 times and the minority label 306 times
 - On the recorded reference machine, the mandatory CPU baseline and evaluation
   target at most five minutes and 2 GB peak memory. CatBoost exploration stops after
   20 declared configurations or 15 minutes, whichever comes first.
+
+## Run
+
+```bash
+uv sync --all-packages --all-groups --locked
+uv run --locked python -m binary_classification.evaluate \
+  --part1 "$SIEMENS_TASK4_INPUT_DIR/Training_part1.csv" \
+  --part2 "$SIEMENS_TASK4_INPUT_DIR/Training_part2.csv" \
+  --output-dir /tmp/task4-run \
+  --seed 42
+uv run --locked pytest -q task-04-binary-classification/tests
+```
+
+The recorded seed-42 run selected weighted logistic regression. Its grouped-CV mean
+PR-AUC is `0.5792`; untouched-holdout PR-AUC is `0.4230`. The selected `0.6700`
+threshold yields holdout recall `0.8545` and precision `0.4234`. Full results and
+limitations are in `reports/model-card.md`; machine-readable aggregates are in
+`reports/metrics.json`.
