@@ -87,20 +87,40 @@ class LocalExtractor:
                 "content extraction failed",
             ) from None
 
-        if extracted is None or isinstance(extracted, dict):
+        if extracted is None:
             raise ExtractionError(
                 ExtractionFailureReason.NO_CONTENT,
                 "no main content was extracted",
             )
-        text = extracted.text.strip() if isinstance(extracted.text, str) else ""
+        if isinstance(extracted, dict):
+            raise ExtractionError(
+                ExtractionFailureReason.MALFORMED_CONTENT,
+                "content extractor returned an invalid result",
+            )
+        try:
+            raw_text = extracted.text
+            raw_title = extracted.title
+        except Exception:
+            raise ExtractionError(
+                ExtractionFailureReason.MALFORMED_CONTENT,
+                "content extractor returned an invalid result",
+            ) from None
+        if not isinstance(raw_text, (str, type(None))) or not isinstance(
+            raw_title, (str, type(None))
+        ):
+            raise ExtractionError(
+                ExtractionFailureReason.MALFORMED_CONTENT,
+                "content extractor returned an invalid result",
+            )
+        text = raw_text.strip() if isinstance(raw_text, str) else ""
         if not text:
             raise ExtractionError(
                 ExtractionFailureReason.NO_CONTENT,
                 "no main content was extracted",
             )
         title = (
-            extracted.title.strip()
-            if isinstance(extracted.title, str) and extracted.title.strip()
+            raw_title.strip()
+            if isinstance(raw_title, str) and raw_title.strip()
             else None
         )
         if len(text) + (len(title) if title is not None else 0) > self.max_output_chars:

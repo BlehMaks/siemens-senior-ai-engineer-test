@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import AnyHttpUrl, TypeAdapter, ValidationError
 
@@ -53,7 +54,11 @@ class SearchAdapter:
 
         if isinstance(rows, (str, bytes)) or not isinstance(rows, Sequence):
             raise SearchFailure("search backend returned an invalid result")
-        return self._normalize(rows, query.max_results)
+        try:
+            materialized_rows = tuple(rows)
+        except Exception:
+            raise SearchFailure("search backend returned an invalid result") from None
+        return self._normalize(materialized_rows, query.max_results)
 
     def _normalize(
         self, rows: Sequence[object], max_results: int
@@ -79,14 +84,18 @@ class SearchAdapter:
         if not isinstance(row, Mapping):
             return None
 
-        title = _normalize_text(row.get("title"))
-        href = row.get("href")
-        snippet = _normalize_text(row.get("body"))
-        if title is None or snippet is None or not isinstance(href, str):
-            return None
+        try:
+            title = _normalize_text(row.get("title"))
+            raw_href = row.get("href")
+            snippet = _normalize_text(row.get("body"))
+            if title is None or snippet is None or not isinstance(raw_href, str):
+                return None
+            href = raw_href.strip()
+        except Exception:
+            raise SearchFailure("search backend returned an invalid result") from None
 
         try:
-            parsed_url = _URL_ADAPTER.validate_python(href.strip())
+            parsed_url = _URL_ADAPTER.validate_python(href)
         except ValidationError:
             return None
         if parsed_url.username is not None or parsed_url.password is not None:
@@ -94,18 +103,35 @@ class SearchAdapter:
         if parsed_url.port not in self.site_policy.allowed_ports:
             return None
 
-        host = parsed_url.host
-        if host is None:
+        raw_host = parsed_url.host
+        if raw_host is None:
             return None
+        host = raw_host.strip("[]").rstrip(".")
         try:
-            decision = self.site_policy.evaluate(host.strip("[]"))
+            decision = self.site_policy.evaluate(host)
         except ValueError:
             return None
         if not decision.allowed:
             return None
 
-        # Fragments identify a location within the same resource, not another source.
-        canonical_text = str(parsed_url).partition("#")[0]
+        # DNS root dots and fragments do not identify another source resource.
+        parsed_canonical = urlsplit(str(parsed_url))
+        rendered_host = f"[{host}]" if ":" in host else host
+        default_port = 443 if parsed_canonical.scheme == "https" else 80
+        netloc = (
+            rendered_host
+            if parsed_url.port == default_port
+            else f"{rendered_host}:{parsed_url.port}"
+        )
+        canonical_text = urlunsplit(
+            (
+                parsed_canonical.scheme,
+                netloc,
+                parsed_canonical.path,
+                parsed_canonical.query,
+                "",
+            )
+        )
         canonical_url = _URL_ADAPTER.validate_python(canonical_text)
         return SearchHit(
             title=title,

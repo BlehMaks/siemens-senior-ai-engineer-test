@@ -154,6 +154,23 @@ def test_parser_failure_is_mapped_to_malformed_content(
 
 
 @pytest.mark.parametrize(
+    "malformed",
+    [object(), SimpleNamespace(title="Title", text=object())],
+)
+def test_malformed_parser_result_is_typed(
+    monkeypatch: pytest.MonkeyPatch, malformed: object
+) -> None:
+    monkeypatch.setattr(
+        extract_module, "bare_extraction", lambda *args, **kwargs: malformed
+    )
+
+    with pytest.raises(ExtractionError) as error:
+        LocalExtractor().extract(_document(b"<html>content</html>"))
+
+    assert error.value.reason is ExtractionFailureReason.MALFORMED_CONTENT
+
+
+@pytest.mark.parametrize(
     "kwargs",
     [
         {"max_input_bytes": 0},

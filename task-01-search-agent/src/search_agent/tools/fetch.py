@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import sys
+import zlib
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite
 from numbers import Real
-from typing import NoReturn
+from typing import NoReturn, Protocol, cast
 
 import httpx
 
@@ -19,9 +22,18 @@ from ..security import (
 
 _ALLOWED_CONTENT_TYPES = frozenset({"application/xhtml+xml", "text/html", "text/plain"})
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+_DECODE_CHUNK_BYTES = 64 * 1024
 _MALFORMED_URL_REASONS = frozenset(
     {PolicyReason.INVALID_URL, PolicyReason.INVALID_HOST}
 )
+
+
+class _Decompressor(Protocol):
+    eof: bool
+    unconsumed_tail: bytes
+    unused_data: bytes
+
+    def decompress(self, data: bytes, max_length: int = 0) -> bytes: ...
 
 
 class FetchFailureReason(StrEnum):
@@ -146,7 +158,9 @@ class GuardedFetcher:
                         body=body,
                     )
             finally:
-                await response.aclose()
+                await _close_response(
+                    response, suppress_failure=sys.exception() is not None
+                )
 
             redirect_count += 1
             guarded = await self._validate_redirect(
@@ -189,7 +203,16 @@ class GuardedFetcher:
             )
         except httpx.TimeoutException:
             raise FetchError(FetchFailureReason.TIMEOUT, "fetch timed out") from None
+        except httpx.DecodingError:
+            raise FetchError(
+                FetchFailureReason.INVALID_RESPONSE,
+                "response compression is invalid",
+            ) from None
         except httpx.RequestError:
+            raise FetchError(
+                FetchFailureReason.NETWORK_ERROR, "fetch transport failed"
+            ) from None
+        except Exception:
             raise FetchError(
                 FetchFailureReason.NETWORK_ERROR, "fetch transport failed"
             ) from None
@@ -210,28 +233,49 @@ class GuardedFetcher:
                 "response exceeds the byte limit",
             )
 
+        encoding = _content_encoding(response)
+        if response.is_stream_consumed and encoding != "identity":
+            raise FetchError(
+                FetchFailureReason.INVALID_RESPONSE,
+                "response was decoded before bounded retrieval",
+            )
+        decoder = _decoder(encoding)
         body = bytearray()
+        raw_size = 0
         try:
-            # HTTPX yields decoded bytes, so this cap also bounds compressed responses.
-            async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
-                if len(body) + len(chunk) > self.max_bytes:
+            # Raw streaming keeps third-party decoders from materializing a zip bomb.
+            async for chunk in _raw_chunks(response):
+                raw_size += len(chunk)
+                if raw_size > self.max_bytes:
                     raise FetchError(
                         FetchFailureReason.CONTENT_TOO_LARGE,
                         "response exceeds the byte limit",
                     )
-                body.extend(chunk)
+                if decoder is None:
+                    _append_bounded(body, chunk, self.max_bytes)
+                else:
+                    _decode_bounded(decoder, chunk, body, self.max_bytes)
+            if decoder is not None and (not decoder.eof or decoder.unused_data):
+                raise FetchError(
+                    FetchFailureReason.INVALID_RESPONSE,
+                    "response compression is invalid",
+                )
         except FetchError:
             raise
         except httpx.TimeoutException:
             raise FetchError(FetchFailureReason.TIMEOUT, "fetch timed out") from None
-        except httpx.DecodingError:
+        except httpx.RequestError:
+            raise FetchError(
+                FetchFailureReason.NETWORK_ERROR, "fetch transport failed"
+            ) from None
+        except zlib.error:
             raise FetchError(
                 FetchFailureReason.INVALID_RESPONSE,
                 "response compression is invalid",
             ) from None
-        except httpx.RequestError:
+        except Exception:
             raise FetchError(
-                FetchFailureReason.NETWORK_ERROR, "fetch transport failed"
+                FetchFailureReason.NETWORK_ERROR, "response stream failed"
             ) from None
 
         rendered = bytes(body)
@@ -302,6 +346,89 @@ def _content_length(response: httpx.Response) -> int | None:
             "response Content-Length is invalid",
         )
     return int(rendered)
+
+
+def _content_encoding(response: httpx.Response) -> str:
+    values = response.headers.get_list("content-encoding")
+    if not values:
+        return "identity"
+    encoding = values[0].strip().lower() if len(values) == 1 else ""
+    if encoding not in {"deflate", "gzip", "identity"}:
+        raise FetchError(
+            FetchFailureReason.INVALID_RESPONSE,
+            "response content encoding is not supported",
+        )
+    return encoding
+
+
+def _decoder(encoding: str) -> _Decompressor | None:
+    if encoding == "gzip":
+        return cast(_Decompressor, zlib.decompressobj(zlib.MAX_WBITS | 16))
+    if encoding == "deflate":
+        return cast(_Decompressor, zlib.decompressobj(zlib.MAX_WBITS))
+    return None
+
+
+async def _raw_chunks(response: httpx.Response) -> AsyncIterator[bytes]:
+    if hasattr(response, "_content"):
+        content = response.content
+        for start in range(0, len(content), _DECODE_CHUNK_BYTES):
+            yield content[start : start + _DECODE_CHUNK_BYTES]
+        return
+    async for chunk in response.aiter_raw(chunk_size=_DECODE_CHUNK_BYTES):
+        yield chunk
+
+
+def _append_bounded(body: bytearray, chunk: bytes, max_bytes: int) -> None:
+    if len(body) + len(chunk) > max_bytes:
+        raise FetchError(
+            FetchFailureReason.CONTENT_TOO_LARGE,
+            "response exceeds the byte limit",
+        )
+    body.extend(chunk)
+
+
+def _decode_bounded(
+    decoder: _Decompressor,
+    chunk: bytes,
+    body: bytearray,
+    max_bytes: int,
+) -> None:
+    pending = chunk
+    while pending:
+        output_limit = min(_DECODE_CHUNK_BYTES, max_bytes - len(body) + 1)
+        decoded = decoder.decompress(pending, output_limit)
+        _append_bounded(body, decoded, max_bytes)
+        remaining = decoder.unconsumed_tail
+        if remaining and not decoded and len(remaining) == len(pending):
+            raise FetchError(
+                FetchFailureReason.INVALID_RESPONSE,
+                "response compression made no progress",
+            )
+        pending = remaining
+    if decoder.unused_data:
+        raise FetchError(
+            FetchFailureReason.INVALID_RESPONSE,
+            "response compression is invalid",
+        )
+
+
+async def _close_response(response: httpx.Response, *, suppress_failure: bool) -> None:
+    try:
+        await response.aclose()
+    except Exception as error:
+        if suppress_failure:
+            return
+        if isinstance(error, httpx.TimeoutException):
+            reason = FetchFailureReason.TIMEOUT
+            message = "response close timed out"
+        elif isinstance(error, httpx.RequestError):
+            reason = FetchFailureReason.NETWORK_ERROR
+            message = "response close failed"
+        else:
+            reason = FetchFailureReason.INVALID_RESPONSE
+            message = "response could not be closed"
+        raise FetchError(reason, message) from None
 
 
 def _raise_policy_failure(error: PolicyViolationError, *, redirect: bool) -> NoReturn:

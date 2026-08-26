@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import gzip
+import zlib
 from collections.abc import AsyncIterator
 
 import httpx
+import httpx._decoders as httpx_decoders
 import pytest
 
 from search_agent.security import PolicyReason, SitePolicy, UrlGuard
@@ -39,6 +42,32 @@ class TimeoutStream(httpx.AsyncByteStream):
     async def __aiter__(self) -> AsyncIterator[bytes]:
         yield b"partial"
         raise httpx.ReadTimeout("slow body")
+
+
+class ExplodingStream(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        raise RuntimeError("transport-secret-must-not-escape")
+        yield b"unreachable"  # pragma: no cover
+
+
+class CloseFailureStream(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"body"
+
+    async def aclose(self) -> None:
+        raise httpx.CloseError("transport-secret-must-not-escape")
+
+
+class CancellationStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        raise asyncio.CancelledError
+        yield b"unreachable"  # pragma: no cover
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 def _guard(
@@ -257,7 +286,18 @@ async def test_streamed_body_is_capped_without_content_length() -> None:
 
 
 @pytest.mark.asyncio
-async def test_decompressed_body_is_capped_and_valid_gzip_is_decoded() -> None:
+async def test_decompressed_body_is_capped_and_valid_gzip_is_decoded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    httpx_decoder_calls = 0
+    original_decode = httpx_decoders.GZipDecoder.decode
+
+    def tracking_decode(decoder: httpx_decoders.GZipDecoder, data: bytes) -> bytes:
+        nonlocal httpx_decoder_calls
+        httpx_decoder_calls += 1
+        return original_decode(decoder, data)
+
+    monkeypatch.setattr(httpx_decoders.GZipDecoder, "decode", tracking_decode)
     large = gzip.compress(b"x" * 1_000)
     small = gzip.compress(b"decoded text")
     payloads = iter((large, small))
@@ -271,7 +311,7 @@ async def test_decompressed_body_is_capped_and_valid_gzip_is_decoded() -> None:
                 "Content-Length": str(len(payload)),
                 "Content-Type": "text/plain",
             },
-            content=payload,
+            stream=ChunkStream((payload,)),
         )
 
     guard, _ = _guard({"example.com": [("93.184.216.34",), ("93.184.216.34",)]})
@@ -283,6 +323,58 @@ async def test_decompressed_body_is_capped_and_valid_gzip_is_decoded() -> None:
 
     assert error.value.reason is FetchFailureReason.CONTENT_TOO_LARGE
     assert document.body == b"decoded text"
+    assert httpx_decoder_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("encoding", "payload"),
+    [
+        ("deflate", zlib.compress(b"deflate body")),
+        ("identity", b"identity body"),
+    ],
+)
+async def test_supported_content_encodings_are_decoded(
+    encoding: str, payload: bytes
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Encoding": encoding, "Content-Type": "text/plain"},
+            stream=ChunkStream((payload,)),
+        )
+
+    guard, _ = _guard({"example.com": [("93.184.216.34",)]})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        document = await GuardedFetcher(client, guard).fetch("https://example.com")
+
+    assert document.body == f"{encoding} body".encode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("encoding", "payload"),
+    [
+        ("gzip", gzip.compress(b"truncated")[:-4]),
+        ("br", b"unsupported"),
+    ],
+)
+async def test_truncated_and_unsupported_compression_are_typed(
+    encoding: str, payload: bytes
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Encoding": encoding, "Content-Type": "text/plain"},
+            stream=ChunkStream((payload,)),
+        )
+
+    guard, _ = _guard({"example.com": [("93.184.216.34",)]})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(FetchError) as error:
+            await GuardedFetcher(client, guard).fetch("https://example.com")
+
+    assert error.value.reason is FetchFailureReason.INVALID_RESPONSE
 
 
 @pytest.mark.asyncio
@@ -298,6 +390,11 @@ async def test_decompressed_body_is_capped_and_valid_gzip_is_decoded() -> None:
             ChunkStream((b"not-gzip",)),
             {"Content-Type": "text/plain", "Content-Encoding": "gzip"},
             FetchFailureReason.INVALID_RESPONSE,
+        ),
+        (
+            ExplodingStream(),
+            {"Content-Type": "text/plain"},
+            FetchFailureReason.NETWORK_ERROR,
         ),
     ],
 )
@@ -315,15 +412,18 @@ async def test_body_timeout_and_invalid_compression_are_typed(
             await GuardedFetcher(client, guard).fetch("https://example.com")
 
     assert error.value.reason is reason
+    assert "transport-secret" not in str(error.value)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["timeout", "network"])
+@pytest.mark.parametrize("failure", ["timeout", "network", "unknown"])
 async def test_timeout_and_network_failures_are_typed(failure: str) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         if failure == "timeout":
             raise httpx.ReadTimeout("slow response", request=request)
-        raise httpx.ConnectError("connection failed", request=request)
+        if failure == "network":
+            raise httpx.ConnectError("connection failed", request=request)
+        raise RuntimeError("transport-secret-must-not-escape")
 
     guard, _ = _guard({"example.com": [("93.184.216.34",)]})
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -336,6 +436,53 @@ async def test_timeout_and_network_failures_are_typed(failure: str) -> None:
         else FetchFailureReason.NETWORK_ERROR
     )
     assert error.value.reason is expected
+    assert "transport-secret" not in str(error.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "reason"),
+    [
+        (503, FetchFailureReason.HTTP_STATUS),
+        (200, FetchFailureReason.NETWORK_ERROR),
+    ],
+)
+async def test_close_failure_is_sanitized_without_masking_primary_failure(
+    status_code: int, reason: FetchFailureReason
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code,
+            headers={"Content-Type": "text/plain"},
+            stream=CloseFailureStream(),
+        )
+
+    guard, _ = _guard({"example.com": [("93.184.216.34",)]})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(FetchError) as error:
+            await GuardedFetcher(client, guard).fetch("https://example.com")
+
+    assert error.value.reason is reason
+    assert "transport-secret" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_body_cancellation_propagates_after_response_is_closed() -> None:
+    stream = CancellationStream()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/plain"},
+            stream=stream,
+        )
+
+    guard, _ = _guard({"example.com": [("93.184.216.34",)]})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(asyncio.CancelledError):
+            await GuardedFetcher(client, guard).fetch("https://example.com")
+
+    assert stream.closed is True
 
 
 @pytest.mark.asyncio

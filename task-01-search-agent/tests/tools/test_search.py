@@ -26,6 +26,11 @@ class FakeSearchBackend:
         return self.rows
 
 
+class ExplodingMapping(dict[str, object]):
+    def get(self, key: str, default: object = None) -> object:
+        raise RuntimeError("backend-secret-must-not-escape")
+
+
 @pytest.mark.asyncio
 async def test_search_passes_exact_bounded_ddgs_arguments_off_loop() -> None:
     backend = FakeSearchBackend(
@@ -122,6 +127,32 @@ async def test_search_filters_before_ranking_and_preserves_first_canonical_url()
 
 
 @pytest.mark.asyncio
+async def test_search_collapses_root_dot_idna_canonical_duplicates() -> None:
+    backend = FakeSearchBackend(
+        rows=(
+            {
+                "title": "First",
+                "href": "HTTPS://BÜCHER.example.:443/report?year=2026#summary",
+                "body": "first body",
+            },
+            {
+                "title": "Duplicate",
+                "href": "https://xn--bcher-kva.example/report?year=2026#details",
+                "body": "duplicate body",
+            },
+        )
+    )
+
+    hits = await SearchAdapter(backend, SitePolicy()).search(
+        SearchQuery(text="siemens annual report", max_results=5)
+    )
+
+    assert [(hit.title, str(hit.url), hit.rank) for hit in hits] == [
+        ("First", "https://xn--bcher-kva.example/report?year=2026", 1)
+    ]
+
+
+@pytest.mark.asyncio
 async def test_search_skips_malformed_and_policy_invalid_rows() -> None:
     backend = FakeSearchBackend(
         rows=(
@@ -198,6 +229,19 @@ async def test_backend_exception_becomes_sanitized_search_failure() -> None:
 
     assert caught.value.__cause__ is None
     assert "top-secret" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_mapping_exception_becomes_sanitized_search_failure() -> None:
+    backend = FakeSearchBackend(rows=(ExplodingMapping(),))
+
+    with pytest.raises(SearchFailure, match="invalid result") as caught:
+        await SearchAdapter(backend, SitePolicy()).search(
+            SearchQuery(text="siemens annual report", max_results=2)
+        )
+
+    assert caught.value.__cause__ is None
+    assert "backend-secret" not in str(caught.value)
 
 
 @pytest.mark.asyncio
