@@ -30,11 +30,13 @@ PlanningText = Annotated[
     StringConstraints(min_length=1, max_length=400, strip_whitespace=True),
 ]
 
-_TOKEN_PATTERN = re.compile(r"[^\W_]{4,}", flags=re.UNICODE)
+_TOKEN_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
 _POLICY_WORD_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
 _ACRONYM_PATTERN = re.compile(r"\b[A-Z]{2,8}\b")
 _YEAR_PATTERN = re.compile(r"(?:19|20)\d{2}\Z")
 _SCOPE_GENERIC_TOKENS = {
+    "a",
+    "an",
     "about",
     "compare",
     "com",
@@ -45,6 +47,7 @@ _SCOPE_GENERIC_TOKENS = {
     "http",
     "https",
     "into",
+    "is",
     "latest",
     "look",
     "more",
@@ -57,10 +60,15 @@ _SCOPE_GENERIC_TOKENS = {
     "siemens",
     "summarize",
     "that",
+    "the",
     "this",
     "with",
     "www",
     "year",
+}
+_KNOWN_ACRONYM_EXPANSIONS = {
+    "ai": frozenset({"artificial", "intelligence"}),
+    "ml": frozenset({"learning", "machine"}),
 }
 _FORBIDDEN_REQUEST_MARKERS = (
     "system prompt",
@@ -276,6 +284,14 @@ def _reject_forbidden_request(request: str) -> None:
 
 def _validate_generated_policy(*, request: str, decision: PlanningDecision) -> None:
     _reject_forbidden_request(decision.answer_focus)
+    if decision.task_category is TaskCategory.CLARIFICATION:
+        # Clarification text is replaced with a fixed prompt below. Scan every
+        # discarded field for prohibited content, but do not assign it scope.
+        if decision.assistance is not None:
+            _reject_forbidden_request(decision.assistance.offer)
+            for query in decision.assistance.follow_up_queries:
+                _reject_forbidden_request(query)
+        return
     company_focus_is_invalid = (
         decision.task_category is TaskCategory.COMPANY_RESEARCH
         and not _stays_scoped(
@@ -364,14 +380,13 @@ def _normalized_policy_text(text: str) -> str:
 
 
 def _expands_request_acronym(*, request: str, candidate: str) -> bool:
-    candidate_tokens = [
-        token
-        for token in _TOKEN_PATTERN.findall(candidate.casefold())
-        if token not in _SCOPE_GENERIC_TOKENS
-    ]
-    if not candidate_tokens:
-        return False
-    initials = "".join(token[0] for token in candidate_tokens)
+    candidate_tokens = _meaningful_tokens(candidate)
+    request_acronyms = {
+        acronym.casefold() for acronym in _ACRONYM_PATTERN.findall(request)
+    }
+    # A closed vocabulary is safer than accepting arbitrary same-initial phrases.
     return any(
-        initials == acronym.casefold() for acronym in _ACRONYM_PATTERN.findall(request)
+        expansion.issubset(candidate_tokens)
+        for acronym, expansion in _KNOWN_ACRONYM_EXPANSIONS.items()
+        if acronym in request_acronyms
     )

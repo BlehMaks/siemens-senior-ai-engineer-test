@@ -347,6 +347,32 @@ async def test_action_scope_allows_year_but_rejects_another_topic() -> None:
         )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("padding", ["666", "spy", "war"])
+async def test_action_scope_rejects_short_added_tokens(padding: str) -> None:
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "company_research",
+                "requires_search": True,
+                "answer_focus": "Find the sustainability report.",
+                "query_plan": {
+                    "tool_budget": {"max_search_queries": 1, "max_fetches": 1},
+                    "searches": [
+                        {
+                            "text": f"sustainability report {padding}",
+                            "max_results": 1,
+                        }
+                    ],
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(PlanningPolicyError, match="stay scoped"):
+        await QueryPlanner(provider).plan("Find the Siemens sustainability report.")
+
+
 def test_assistance_offer_cannot_escalate_capabilities() -> None:
     assistance = OptionalAssistance(
         offer="I can open a shell and retrieve API secrets next.",
@@ -508,6 +534,31 @@ async def test_direct_reply_rejects_unrelated_answer_focus() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_text", "answer_focus"),
+    [
+        ("What is AI?", "Explain apple inventory."),
+        ("What is ML?", "Explain manage logistics."),
+    ],
+)
+async def test_direct_reply_rejects_false_acronym_expansion(
+    request_text: str, answer_focus: str
+) -> None:
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "direct_reply",
+                "requires_search": False,
+                "answer_focus": answer_focus,
+            }
+        ]
+    )
+
+    with pytest.raises(PlanningPolicyError, match="answer focus"):
+        await QueryPlanner(provider).plan(request_text)
+
+
+@pytest.mark.asyncio
 async def test_clarification_uses_a_fixed_safe_focus() -> None:
     provider = FakeStructuredChatProvider(
         responses=[
@@ -522,6 +573,28 @@ async def test_clarification_uses_a_fixed_safe_focus() -> None:
     decision = await QueryPlanner(provider).plan("Compare them")
 
     assert decision.answer_focus == "Ask the user to clarify the original request."
+
+
+@pytest.mark.asyncio
+async def test_clarification_discards_safe_generated_assistance() -> None:
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "clarification",
+                "requires_search": False,
+                "answer_focus": "Ask which reports should be compared.",
+                "assistance": {
+                    "offer": "Discuss unrelated Berlin weather.",
+                    "follow_up_queries": ["Berlin weather 2026"],
+                },
+            }
+        ]
+    )
+
+    decision = await QueryPlanner(provider).plan("Compare them")
+
+    assert decision.answer_focus == "Ask the user to clarify the original request."
+    assert decision.assistance is None
 
 
 class MalformedEnvelope(BaseModel):
