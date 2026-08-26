@@ -14,6 +14,18 @@ from .contracts import (
     TerminalState,
     ToolBudget,
 )
+from .providers import (
+    FakeStructuredChatProvider,
+    OllamaStructuredChatProvider,
+    ProviderError,
+    ProviderInvocation,
+    ProviderMessage,
+    ProviderMetadata,
+    ProviderResponseError,
+    ProviderResult,
+    ProviderTimeoutError,
+    StructuredChatProvider,
+)
 from .state import IllegalTransitionError, RunSnapshot, RunStateGraph, RunStatus
 
 __all__ = [
@@ -21,8 +33,17 @@ __all__ = [
     "EventType",
     "ExtractedEvidence",
     "FailureReason",
+    "FakeStructuredChatProvider",
     "IllegalTransitionError",
+    "OllamaStructuredChatProvider",
     "OptionalAssistance",
+    "ProviderError",
+    "ProviderInvocation",
+    "ProviderMessage",
+    "ProviderMetadata",
+    "ProviderResponseError",
+    "ProviderResult",
+    "ProviderTimeoutError",
     "PublicEvent",
     "QueryPlan",
     "RunSnapshot",
@@ -31,6 +52,7 @@ __all__ = [
     "ScopedAnswer",
     "SearchHit",
     "SearchQuery",
+    "StructuredChatProvider",
     "TerminalState",
     "ToolBudget",
 ]
