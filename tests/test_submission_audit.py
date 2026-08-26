@@ -32,6 +32,8 @@ def test_clean_index_passes(repository: Path) -> None:
     ("path", "content", "expected"),
     [
         (".local/plan.md", b"private\n", "forbidden path"),
+        (".env.production", b"SAFE_VALUE=1\n", "state filename"),
+        ("infra/prod.tfstate.1700000000", b"{}\n", "state filename"),
         (
             "config.py",
             seed("OPEN", 'ROUTER_API_KEY = "not-a-real-key"\n'),
@@ -43,8 +45,28 @@ def test_clean_index_passes(repository: Path) -> None:
             "private key",
         ),
         (
+            "encrypted-key.txt",
+            seed("-----BEGIN ENCRYPTED ", "PRIVATE KEY-----\n"),
+            "private key",
+        ),
+        (
+            "config.yaml",
+            seed("api_", "key: abcdefghijklmnop\n"),
+            "credential",
+        ),
+        (
             "notes.md",
             seed("/Us", "ers/example/private/input.csv\n"),
+            "absolute user path",
+        ),
+        (
+            "linux-notes.md",
+            seed("/ho", "me/alice/private/input.csv\n"),
+            "absolute user path",
+        ),
+        (
+            "windows-notes.md",
+            seed("C:\\Us", "ers\\Alice\\private\\input.csv\n"),
             "absolute user path",
         ),
     ],
@@ -72,3 +94,11 @@ def test_ignored_local_files_do_not_enter_audit(repository: Path) -> None:
     local_file.write_text("private data\n", encoding="utf-8")
 
     assert audit_repository(repository) == []
+
+
+def test_tracked_symlink_fails(repository: Path) -> None:
+    link = repository / "public-data.csv"
+    link.symlink_to("../../.local/private.csv")
+    git(repository, "add", link.name)
+
+    assert audit_repository(repository) == ["tracked symlink: public-data.csv"]

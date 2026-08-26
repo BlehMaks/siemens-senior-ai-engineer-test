@@ -23,22 +23,19 @@ FORBIDDEN_PARTS = {
     "runs",
 }
 FORBIDDEN_SUFFIXES = {
-    ".env",
     ".key",
     ".pem",
-    ".tfstate",
-    ".tfstate.backup",
 }
 CONTENT_RULES = (
     (
         "private key",
-        re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+        re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----"),
     ),
     (
         "credential assignment",
         re.compile(
             rb"(?i)(?:api[_-]?key|password|secret|token)\s*[:=]\s*"
-            rb"[\"'][A-Za-z0-9_./+=-]{16,}[\"']"
+            rb"[\"']?[A-Za-z0-9_./+=-]{16,}[\"']?"
         ),
     ),
     ("OpenRouter credential", re.compile(rb"OPENROUTER_(?:API_)?KEY")),
@@ -47,7 +44,13 @@ CONTENT_RULES = (
         re.compile(rb"(?:\.local/)?council/(?:final-plan|prompt|transcript)"),
     ),
     ("hidden prompt artifact", re.compile(rb"BEGIN (?:HIDDEN|SYSTEM) PROMPT")),
-    ("absolute user path", re.compile(rb"/Users/[A-Za-z0-9._-]+/")),
+    (
+        "absolute user path",
+        re.compile(
+            rb"(?:/Users/|/home/)[A-Za-z0-9._-]+/"
+            rb"|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+\\"
+        ),
+    ),
 )
 
 
@@ -64,16 +67,34 @@ def _git(repo: Path, *args: str) -> bytes:
     return result.stdout
 
 
+def _index_entries(raw: bytes) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    for item in raw.split(b"\0"):
+        if not item:
+            continue
+        metadata, raw_path = item.split(b"\t", 1)
+        mode = metadata.split(b" ", 1)[0].decode()
+        entries.append((raw_path.decode(errors="surrogateescape"), mode))
+    return entries
+
+
 def _nul_paths(raw: bytes) -> list[str]:
     return [item.decode(errors="surrogateescape") for item in raw.split(b"\0") if item]
 
 
 def _path_findings(path: str) -> list[str]:
     normalized = PurePosixPath(path)
+    name = normalized.name
     findings: list[str] = []
     if any(part in FORBIDDEN_PARTS for part in normalized.parts):
         findings.append(f"forbidden path: {path}")
-    if path == ".env" or any(path.endswith(suffix) for suffix in FORBIDDEN_SUFFIXES):
+    if (
+        name == ".env"
+        or name.startswith(".env.")
+        or ".tfstate." in name
+        or name.endswith(".tfstate")
+        or any(name.endswith(suffix) for suffix in FORBIDDEN_SUFFIXES)
+    ):
         findings.append(f"secret or state filename: {path}")
     return findings
 
@@ -83,11 +104,14 @@ def audit_repository(repo: Path) -> list[str]:
 
     repo = repo.resolve()
     findings: list[str] = []
-    tracked = _nul_paths(_git(repo, "ls-files", "-z"))
+    tracked = _index_entries(_git(repo, "ls-files", "--stage", "-z"))
 
-    for path in tracked:
+    for path, mode in tracked:
         findings.extend(_path_findings(path))
         content = _git(repo, "show", f":{path}")
+        if mode == "120000":
+            findings.append(f"tracked symlink: {path}")
+            continue
         if len(content) > MAX_PUBLIC_FILE_BYTES:
             findings.append(f"oversized tracked file: {path}")
             continue
