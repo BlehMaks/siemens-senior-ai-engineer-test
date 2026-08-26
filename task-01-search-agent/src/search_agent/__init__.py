@@ -14,6 +14,13 @@ from .contracts import (
     TerminalState,
     ToolBudget,
 )
+from .planning import (
+    AssistancePolicy,
+    PlanningDecision,
+    PlanningPolicyError,
+    QueryPlanner,
+    TaskCategory,
+)
 from .providers import (
     FakeStructuredChatProvider,
     OllamaStructuredChatProvider,
@@ -29,6 +36,7 @@ from .providers import (
 from .state import IllegalTransitionError, RunSnapshot, RunStateGraph, RunStatus
 
 __all__ = [
+    "AssistancePolicy",
     "Citation",
     "EventType",
     "ExtractedEvidence",
@@ -37,6 +45,8 @@ __all__ = [
     "IllegalTransitionError",
     "OllamaStructuredChatProvider",
     "OptionalAssistance",
+    "PlanningDecision",
+    "PlanningPolicyError",
     "ProviderError",
     "ProviderInvocation",
     "ProviderMessage",
@@ -46,6 +56,7 @@ __all__ = [
     "ProviderTimeoutError",
     "PublicEvent",
     "QueryPlan",
+    "QueryPlanner",
     "RunSnapshot",
     "RunStateGraph",
     "RunStatus",
@@ -53,6 +64,7 @@ __all__ = [
     "SearchHit",
     "SearchQuery",
     "StructuredChatProvider",
+    "TaskCategory",
     "TerminalState",
     "ToolBudget",
 ]
