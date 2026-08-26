@@ -1,5 +1,6 @@
 """Bounded research agent with validated evidence and citations."""
 
+from .answering import AbstentionReason, AnswerAbstained, AnswerValidator
 from .contracts import (
     Citation,
     EventType,
@@ -13,6 +14,13 @@ from .contracts import (
     SearchQuery,
     TerminalState,
     ToolBudget,
+)
+from .evidence import (
+    EvidenceFailureReason,
+    EvidenceRecord,
+    EvidenceValidationError,
+    build_evidence,
+    validate_record,
 )
 from .planning import (
     AssistancePolicy,
@@ -63,9 +71,15 @@ from .tools import (
 )
 
 __all__ = [
+    "AbstentionReason",
+    "AnswerAbstained",
+    "AnswerValidator",
     "AssistancePolicy",
     "Citation",
     "EventType",
+    "EvidenceFailureReason",
+    "EvidenceRecord",
+    "EvidenceValidationError",
     "ExtractedDocument",
     "ExtractedEvidence",
     "ExtractionError",
@@ -116,5 +130,7 @@ __all__ = [
     "TerminalState",
     "ToolBudget",
     "UrlGuard",
+    "build_evidence",
     "create_fetch_client",
+    "validate_record",
 ]
