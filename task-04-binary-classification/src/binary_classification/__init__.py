@@ -14,13 +14,23 @@ from binary_classification.data import (
     TrainingDataset,
     load_training_data,
 )
+from binary_classification.modeling import (
+    BinaryMetrics,
+    CandidateMetrics,
+    FeatureSchema,
+    ThresholdChoice,
+)
 
 __all__ = [
     "AnalysisReport",
+    "BinaryMetrics",
+    "CandidateMetrics",
     "DataContractError",
     "DataProfile",
+    "FeatureSchema",
     "JoinAudit",
     "LeakageReport",
+    "ThresholdChoice",
     "TrainingDataset",
     "analyze_training_frame",
     "feature_group_ids",
