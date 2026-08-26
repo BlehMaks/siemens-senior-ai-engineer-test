@@ -151,3 +151,54 @@ def test_revalidates_hash_and_evidence_id_before_answering() -> None:
         validate_record(record)
 
     assert error.value.reason is EvidenceFailureReason.INVALID_DATA
+
+
+def test_requires_document_title_and_rejects_public_title_tamper() -> None:
+    with pytest.raises(EvidenceValidationError) as missing:
+        build_evidence(
+            _hit(),
+            _document(title=None),
+            retrieved_at=_NOW,
+            now=_NOW,
+        )
+
+    record = build_evidence(_hit(), _document(), retrieved_at=_NOW, now=_NOW)
+    object.__setattr__(
+        record,
+        "public",
+        record.public.model_copy(update={"source_title": "Tampered title"}),
+    )
+    with pytest.raises(EvidenceValidationError) as tampered:
+        validate_record(record)
+
+    assert missing.value.reason is EvidenceFailureReason.INVALID_DATA
+    assert tampered.value.reason is EvidenceFailureReason.INVALID_DATA
+
+
+def test_rejects_malformed_quotes_and_constructed_public_fields() -> None:
+    with pytest.raises(EvidenceValidationError) as malformed_quotes:
+        build_evidence(
+            _hit(),
+            _document(),
+            retrieved_at=_NOW,
+            quotes=None,  # type: ignore[arg-type]
+            now=_NOW,
+        )
+
+    record = build_evidence(_hit(), _document(), retrieved_at=_NOW, now=_NOW)
+    object.__setattr__(
+        record,
+        "public",
+        record.public.model_construct(
+            evidence_id=record.evidence_id,
+            source_url=record.public.source_url,
+            source_title="",
+            summary="",
+            quotes=("",),
+        ),
+    )
+    with pytest.raises(EvidenceValidationError) as malformed_public:
+        validate_record(record)
+
+    assert malformed_quotes.value.reason is EvidenceFailureReason.INVALID_DATA
+    assert malformed_public.value.reason is EvidenceFailureReason.INVALID_DATA

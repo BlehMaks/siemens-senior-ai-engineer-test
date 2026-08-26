@@ -143,6 +143,50 @@ def test_rejects_uncited_answer_content_and_partial_word_support() -> None:
     assert partial_error.value.reason is AbstentionReason.UNSUPPORTED_CLAIM
 
 
+@pytest.mark.parametrize("word", ["net\u0301work", "net_work"])
+def test_unicode_word_continuations_do_not_create_a_boundary(word: str) -> None:
+    record = _record(text=f"The {word} remains active.")
+
+    with pytest.raises(AnswerAbstained) as error:
+        AnswerValidator().validate(_answer(record, claim="net"), (record,), now=_NOW)
+
+    assert error.value.reason is AbstentionReason.UNSUPPORTED_CLAIM
+
+
+@pytest.mark.parametrize("citations", [[], None])
+def test_revalidates_constructed_outer_answer_contract(citations: object) -> None:
+    record = _record()
+    malformed = ScopedAnswer.model_construct(
+        answer_text=record.source_text,
+        citations=citations,
+        assistance=None,
+    )
+
+    with pytest.raises(AnswerAbstained) as error:
+        AnswerValidator().validate(malformed, (record,), now=_NOW)
+
+    assert error.value.reason is AbstentionReason.INVALID_ANSWER
+
+
+def test_revalidates_constructed_nested_citation_contract() -> None:
+    record = _record()
+    malformed_citation = Citation.model_construct(
+        claim="",
+        evidence_id=record.evidence_id,
+        source_url=record.public.source_url,
+    )
+    malformed = ScopedAnswer.model_construct(
+        answer_text="",
+        citations=(malformed_citation,),
+        assistance=None,
+    )
+
+    with pytest.raises(AnswerAbstained) as error:
+        AnswerValidator().validate(malformed, (record,), now=_NOW)
+
+    assert error.value.reason is AbstentionReason.INVALID_ANSWER
+
+
 def test_rejects_duplicate_citation_ids_even_if_contract_was_bypassed() -> None:
     record = _record()
     citation = _answer(record).citations[0]

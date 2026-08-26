@@ -44,6 +44,7 @@ class EvidenceRecord:
     retrieved_at: datetime
     source_text: str
     content_hash: str
+    source_title: str
 
     @property
     def evidence_id(self) -> str:
@@ -52,10 +53,6 @@ class EvidenceRecord:
     @property
     def source_url(self) -> str:
         return str(self.public.source_url)
-
-    @property
-    def source_title(self) -> str:
-        return self.public.source_title
 
 
 def build_evidence(
@@ -82,17 +79,16 @@ def build_evidence(
         )
 
     title = _normalize_text(hit.title, field="source title", limit=400)
-    if document.title is not None:
-        document_title = _normalize_text(
-            document.title,
-            field="document title",
-            limit=400,
+    document_title = _normalize_text(
+        document.title,
+        field="document title",
+        limit=400,
+    )
+    if document_title != title:
+        raise EvidenceValidationError(
+            EvidenceFailureReason.SOURCE_MISMATCH,
+            "search and extracted document titles do not match",
         )
-        if document_title != title:
-            raise EvidenceValidationError(
-                EvidenceFailureReason.SOURCE_MISMATCH,
-                "search and extracted document titles do not match",
-            )
 
     source_text = _normalize_text(
         document.text,
@@ -116,6 +112,7 @@ def build_evidence(
         retrieved_at=checked_retrieved_at,
         source_text=source_text,
         content_hash=content_hash,
+        source_title=title,
     )
 
 
@@ -123,6 +120,12 @@ def validate_record(record: EvidenceRecord) -> None:
     """Re-check record integrity before it crosses the answer boundary."""
 
     try:
+        public = ExtractedEvidence.model_validate(
+            record.public.model_dump(mode="python", warnings="error"),
+            strict=True,
+        )
+        if public != record.public:
+            raise ValueError("public evidence is not strictly normalized")
         source_text = _normalize_text(
             record.source_text,
             field="source text",
@@ -130,27 +133,38 @@ def validate_record(record: EvidenceRecord) -> None:
         )
         if source_text != record.source_text:
             raise ValueError("source text is not normalized")
+        source_title = _normalize_text(
+            record.source_title,
+            field="source title",
+            limit=_MAX_PUBLIC_TEXT_CHARS,
+        )
+        if source_title != record.source_title or public.source_title != source_title:
+            raise ValueError("source title does not match provenance")
         content_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
-        source_url = _canonical_url(str(record.public.source_url))
+        source_url = _canonical_url(str(public.source_url))
         if record.content_hash != content_hash:
             raise ValueError("content hash does not match source text")
-        if record.public.evidence_id != _evidence_id(source_url, content_hash):
+        if public.evidence_id != _evidence_id(source_url, content_hash):
             raise ValueError("evidence id does not match source provenance")
-        if record.public.summary not in source_text:
-            raise ValueError("summary does not occur in source text")
-        for quote in record.public.quotes:
-            if quote not in source_text:
-                raise ValueError("quote does not occur in source text")
+        expected_summary = source_text[:_MAX_PUBLIC_TEXT_CHARS].rstrip()
+        if public.summary != expected_summary:
+            raise ValueError("summary does not match source text")
+        if _validated_quotes(public.quotes, source_text) != public.quotes:
+            raise ValueError("quotes are not strictly normalized")
         _utc_time(record.retrieved_at, field="retrieved_at")
-    except (AttributeError, TypeError, ValueError, ValidationError) as error:
+    except Exception:
         raise EvidenceValidationError(
             EvidenceFailureReason.INVALID_DATA,
             "evidence record failed its integrity check",
-        ) from error
+        ) from None
 
 
-def _validated_quotes(quotes: Sequence[str], source_text: str) -> tuple[str, ...]:
-    if isinstance(quotes, (str, bytes)) or len(quotes) > _MAX_QUOTES:
+def _validated_quotes(quotes: object, source_text: str) -> tuple[str, ...]:
+    if (
+        isinstance(quotes, (str, bytes))
+        or not isinstance(quotes, Sequence)
+        or len(quotes) > _MAX_QUOTES
+    ):
         raise EvidenceValidationError(
             EvidenceFailureReason.INVALID_DATA,
             "quotes must be a bounded sequence",
@@ -172,7 +186,7 @@ def _validated_quotes(quotes: Sequence[str], source_text: str) -> tuple[str, ...
     return tuple(normalized)
 
 
-def _normalize_text(value: str, *, field: str, limit: int) -> str:
+def _normalize_text(value: object, *, field: str, limit: int) -> str:
     if not isinstance(value, str):
         raise EvidenceValidationError(
             EvidenceFailureReason.INVALID_DATA,

@@ -27,6 +27,7 @@ class AbstentionReason(StrEnum):
     UNCITED_CONTENT = "uncited_content"
     DUPLICATE_SOURCE = "duplicate_source"
     INSUFFICIENT_SOURCE_DIVERSITY = "insufficient_source_diversity"
+    INVALID_ANSWER = "invalid_answer"
 
 
 class AnswerAbstained(RuntimeError):
@@ -61,6 +62,7 @@ class AnswerValidator:
         *,
         now: datetime | None = None,
     ) -> ScopedAnswer:
+        checked_answer = self._validate_answer_contract(answer)
         if not evidence:
             raise AnswerAbstained(
                 AbstentionReason.NO_EVIDENCE,
@@ -69,18 +71,11 @@ class AnswerValidator:
         checked_now = _utc_now(now)
         records = self._index_records(evidence)
 
-        citation_ids = [citation.evidence_id for citation in answer.citations]
-        if len(citation_ids) != len(set(citation_ids)):
-            raise AnswerAbstained(
-                AbstentionReason.DUPLICATE_CITATION,
-                "citation evidence ids must be unique",
-            )
-
-        answer_text = _normalize(answer.answer_text)
+        answer_text = _normalize(checked_answer.answer_text)
         cited_urls: list[str] = []
         cited_hashes: set[str] = set()
         cited_claims: list[str] = []
-        for citation in answer.citations:
+        for citation in checked_answer.citations:
             record = records.get(citation.evidence_id)
             if record is None:
                 raise AnswerAbstained(
@@ -150,6 +145,28 @@ class AnswerValidator:
         return answer
 
     @staticmethod
+    def _validate_answer_contract(answer: ScopedAnswer) -> ScopedAnswer:
+        try:
+            if isinstance(answer.citations, tuple):
+                citation_ids = [citation.evidence_id for citation in answer.citations]
+                if len(citation_ids) != len(set(citation_ids)):
+                    raise AnswerAbstained(
+                        AbstentionReason.DUPLICATE_CITATION,
+                        "citation evidence ids must be unique",
+                    )
+            return ScopedAnswer.model_validate(
+                answer.model_dump(mode="python", warnings="error"),
+                strict=True,
+            )
+        except AnswerAbstained:
+            raise
+        except (AttributeError, TypeError, ValueError):
+            raise AnswerAbstained(
+                AbstentionReason.INVALID_ANSWER,
+                "answer failed strict contract validation",
+            ) from None
+
+    @staticmethod
     def _index_records(
         evidence: Sequence[EvidenceRecord],
     ) -> dict[str, EvidenceRecord]:
@@ -161,14 +178,23 @@ class AnswerValidator:
                     AbstentionReason.INVALID_EVIDENCE,
                     "evidence collection contains an invalid record",
                 )
-            existing = records.get(record.evidence_id)
+            try:
+                evidence_id = record.evidence_id
+                content_hash = record.content_hash
+                source_text = record.source_text
+            except (AttributeError, TypeError, ValueError):
+                raise AnswerAbstained(
+                    AbstentionReason.INVALID_EVIDENCE,
+                    "evidence collection contains an invalid record",
+                ) from None
+            existing = records.get(evidence_id)
             if existing is not None:
                 raise AnswerAbstained(
                     AbstentionReason.CONFLICTING_EVIDENCE,
                     "evidence collection contains a duplicate evidence id",
                 )
-            prior_text = hashes.get(record.content_hash)
-            if prior_text is not None and prior_text != record.source_text:
+            prior_text = hashes.get(content_hash)
+            if prior_text is not None and prior_text != source_text:
                 raise AnswerAbstained(
                     AbstentionReason.CONFLICTING_EVIDENCE,
                     "evidence collection contains a conflicting content hash",
@@ -180,8 +206,8 @@ class AnswerValidator:
                     AbstentionReason.INVALID_EVIDENCE,
                     "evidence collection contains an invalid record",
                 ) from None
-            records[record.evidence_id] = record
-            hashes[record.content_hash] = record.source_text
+            records[evidence_id] = record
+            hashes[content_hash] = source_text
         return records
 
 
@@ -194,15 +220,24 @@ def _contains_exact_text(source: str, claim: str) -> bool:
     while start >= 0:
         end = start + len(claim)
         left_boundary = (
-            start == 0 or not claim[0].isalnum() or not source[start - 1].isalnum()
+            start == 0
+            or not _is_word_character(claim[0])
+            or not _is_word_character(source[start - 1])
         )
         right_boundary = (
-            end == len(source) or not claim[-1].isalnum() or not source[end].isalnum()
+            end == len(source)
+            or not _is_word_character(claim[-1])
+            or not _is_word_character(source[end])
         )
         if left_boundary and right_boundary:
             return True
         start = source.find(claim, start + 1)
     return False
+
+
+def _is_word_character(character: str) -> bool:
+    category = unicodedata.category(character)
+    return character.isalnum() or category.startswith("M") or category == "Pc"
 
 
 def _utc_now(value: datetime | None) -> datetime:
