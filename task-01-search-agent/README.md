@@ -22,7 +22,10 @@ Required deliverables are a working agent and documentation of the approach and 
 - Pydantic models for tool arguments, state transitions, citations, and persisted memory records.
 - DuckDuckGo search for discovery, `httpx` for bounded HTTP retrieval, and a dedicated main-content extractor for static pages.
 - Playwright only as a controlled fallback for pages that require a browser. It is not the default fetch path.
-- SQLite for local checkpoints and memory, with a storage interface that can move to PostgreSQL in Task 2.
+- SQLite for local checkpoints and memory. Repository ports keep Task 1 independent
+  of the deployed store: Task 2 retains SQLite locally, Task 3 uses Firestore in the
+  assessment environment, and production can select Spanner or AlloyDB/PostgreSQL
+  without changing the agent.
 - `pytest` plus a versioned behavior-evaluation set covering routing, source quality, grounding, safety, and failure handling.
 
 The final local model is an evaluation result, not a documentation preference. Candidate models must support reliable structured output or tool calling at an acceptable latency on the MacBook Pro M5 with 48 GB memory. Record quality, time to first token, generation rate, peak memory, context size, quantization, and license before selecting one.

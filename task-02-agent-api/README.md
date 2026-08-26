@@ -11,7 +11,13 @@ Required deliverables are the API source code and API documentation with endpoin
 - FastAPI and Pydantic for an async, typed HTTP boundary and generated OpenAPI documentation.
 - Uvicorn for local execution.
 - A versioned `/v1` contract with opaque identifiers, idempotency keys, structured errors, and correlation IDs.
-- PostgreSQL for users, sessions, runs, durable agent state, and memory metadata. Add `pgvector` only if semantic-memory retrieval is demonstrated by an evaluation.
+- SQLite for durable local users, sessions, runs, and memory metadata, accessed
+  through repository ports with explicit transaction and concurrency semantics.
+  The assessment deployment uses Firestore and Cloud Tasks through the same ports.
+  Siemens-scale production evaluates Spanner for strongly consistent regional or
+  multi-region control state, or AlloyDB/PostgreSQL when a regional relational model
+  is the better fit. Add a vector index only after semantic-memory retrieval shows a
+  measurable benefit.
 - A queue abstraction for long-running research. Local tests may use an in-process adapter; the deployed implementation uses a durable managed queue from Task 3.
 - Server-Sent Events for progress updates, with polling as a simple fallback. Full WebSockets are unnecessary unless bidirectional streaming becomes a measured requirement.
 - `httpx` and `pytest` for contract and integration tests.
