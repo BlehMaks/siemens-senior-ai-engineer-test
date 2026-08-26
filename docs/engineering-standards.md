@@ -31,6 +31,10 @@ The minimum loop for a code change is:
 
 Tasks 1 to 3 also require integration tests at trust boundaries and an end-to-end smoke test. Model behavior is evaluated with a versioned dataset rather than a few handpicked prompts.
 
+The executable commands and failure policy for each gate are defined in
+[test-strategy.md](test-strategy.md). Confirmed reviewer findings are reproduced
+before remediation and retained as regression tests when accepted.
+
 ## Security and privacy
 
 - Validate untrusted input at the boundary and encode output for its destination.

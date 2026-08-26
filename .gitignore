@@ -14,6 +14,8 @@ __pycache__/
 .coverage
 htmlcov/
 .venv/
+.uv-cache/
+.python-version
 dist/
 build/
 *.egg-info/
@@ -36,3 +38,8 @@ build/
 /models/
 /runs/
 *.log
+
+# Terraform local state and provider downloads
+**/.terraform/
+*.tfstate
+*.tfstate.*
