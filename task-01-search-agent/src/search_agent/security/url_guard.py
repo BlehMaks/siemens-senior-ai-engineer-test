@@ -123,6 +123,10 @@ class UrlGuard:
             raise PolicyViolationError(
                 PolicyReason.BLOCKED_ADDRESS, "URL resolves to a non-public address"
             )
+        # Apply canonical IP rules after resolution so numeric and DNS aliases
+        # cannot bypass an address explicitly denied by site policy.
+        for address in addresses:
+            self.policy.require_allowed(address.compressed)
         return GuardedUrl(
             canonical_url=canonical_url,
             scheme=scheme,

@@ -249,6 +249,20 @@ async def test_public_ip_literal_obeys_explicit_domain_policy() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("alias", ["134744072", "0x08080808"])
+async def test_numeric_alias_obeys_canonical_ip_policy(alias: str) -> None:
+    guard = _guard(
+        {alias: ("8.8.8.8",)},
+        policy=SitePolicy(denied_domains=frozenset({"8.8.8.8"})),
+    )
+
+    with pytest.raises(PolicyViolationError) as error:
+        await guard.validate_for_connection(f"https://{alias}/")
+
+    assert error.value.reason is PolicyReason.DENIED_DOMAIN
+
+
+@pytest.mark.asyncio
 async def test_revalidation_detects_dns_rebinding() -> None:
     guard = UrlGuard(
         resolver=RebindingResolver([("93.184.216.34",), ("169.254.169.254",)])
