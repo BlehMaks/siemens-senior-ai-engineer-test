@@ -1,5 +1,6 @@
 """Validated ingestion for the two entity-level training tables."""
 
+import csv
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,24 +47,46 @@ class TrainingDataset:
 
 def _read_table(path: str | Path, expected_columns: tuple[str, ...]) -> pd.DataFrame:
     try:
-        frame = pd.read_csv(path, sep=";", dtype=object)
-    except (OSError, pd.errors.ParserError) as error:
+        with Path(path).open(encoding="utf-8", newline="") as source:
+            rows = list(csv.reader(source, delimiter=";", strict=True))
+    except (OSError, UnicodeError, csv.Error) as error:
         raise DataContractError(f"Could not read {path}: {error}") from error
 
-    if tuple(frame.columns) != expected_columns:
+    if not rows or tuple(rows[0]) != expected_columns:
+        actual_columns = tuple(rows[0]) if rows else ()
         raise DataContractError(
             f"Unexpected columns in {path}: expected {expected_columns}, "
-            f"got {tuple(frame.columns)}"
+            f"got {actual_columns}"
+        )
+    invalid_widths = [
+        row_number
+        for row_number, row in enumerate(rows[1:], start=2)
+        if len(row) != len(expected_columns)
+    ]
+    if invalid_widths:
+        raise DataContractError(
+            f"Unexpected field count in {path} at rows {invalid_widths[:5]}"
         )
 
-    numeric_ids = pd.to_numeric(frame["id"], errors="coerce")
-    invalid_id = numeric_ids.isna() | (numeric_ids % 1 != 0)
-    if invalid_id.any():
-        positions = frame.index[invalid_id].tolist()[:5]
-        raise DataContractError(f"Invalid id values in {path} at rows {positions}")
+    frame = pd.DataFrame(rows[1:], columns=expected_columns, dtype=object)
+
+    parsed_ids: list[int] = []
+    invalid_ids: list[int] = []
+    for position, raw_value in enumerate(frame["id"].tolist()):
+        value = str(raw_value)
+        is_decimal_integer = bool(value) and value.lstrip("+-").isdigit()
+        parsed = int(value) if is_decimal_integer else None
+        if parsed is None or not -(2**63) <= parsed < 2**63:
+            invalid_ids.append(position)
+        else:
+            parsed_ids.append(parsed)
+    if invalid_ids:
+        raise DataContractError(
+            f"Invalid id values in {path} at rows {invalid_ids[:5]}"
+        )
 
     result = frame.copy()
-    result["id"] = numeric_ids.astype("int64")
+    result["id"] = pd.Series(parsed_ids, dtype="int64")
     return result
 
 
@@ -90,6 +113,11 @@ def load_training_data(
     part2 = _read_table(part2_path, PART2_COLUMNS)
     part1_entities, part1_duplicates = _deduplicate_entities(part1, "part1")
     part2_entities, part2_duplicates = _deduplicate_entities(part2, "part2")
+
+    # Normalize missing cells only after raw-row conflict detection distinguishes them
+    # from literal category values such as "NA".
+    part1_entities = part1_entities.replace("", pd.NA)
+    part2_entities = part2_entities.replace("", pd.NA)
 
     target_values = frozenset(part2_entities["Class"].dropna().unique())
     if part2_entities["Class"].isna().any() or target_values != TARGET_VALUES:

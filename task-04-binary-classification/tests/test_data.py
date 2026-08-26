@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -76,6 +77,18 @@ def test_wrong_delimiter_is_exposed_by_schema_validation(tmp_path: Path) -> None
         load_training_data(part1, part2)
 
 
+def test_extra_fields_are_rejected_instead_of_becoming_an_index(tmp_path: Path) -> None:
+    part1 = _write(
+        tmp_path / "part1.csv",
+        PART1_HEADER,
+        [f"unexpected;{row}" for row in PART1_ROWS],
+    )
+    part2 = _write(tmp_path / "part2.csv", PART2_HEADER, PART2_ROWS)
+
+    with pytest.raises(DataContractError, match="Unexpected field count"):
+        load_training_data(part1, part2)
+
+
 @pytest.mark.parametrize("invalid_id", ["", "one", "1.5"])
 def test_invalid_ids_are_rejected(tmp_path: Path, invalid_id: str) -> None:
     invalid_row = PART1_ROWS[1].rsplit(";", 1)[0] + f";{invalid_id}\n"
@@ -83,6 +96,29 @@ def test_invalid_ids_are_rejected(tmp_path: Path, invalid_id: str) -> None:
     part2 = _write(tmp_path / "part2.csv", PART2_HEADER, PART2_ROWS)
 
     with pytest.raises(DataContractError, match="Invalid id values"):
+        load_training_data(part1, part2)
+
+
+def test_out_of_range_integer_id_is_rejected_without_wraparound(tmp_path: Path) -> None:
+    large_id = str(2**64 - 1)
+    part1_row = PART1_ROWS[0].rsplit(";", 1)[0] + f";{large_id}\n"
+    part2_row = PART2_ROWS[0].rsplit(";", 1)[0] + f";{large_id}\n"
+    part1 = _write(tmp_path / "part1.csv", PART1_HEADER, [part1_row, PART1_ROWS[1]])
+    part2 = _write(tmp_path / "part2.csv", PART2_HEADER, [part2_row, PART2_ROWS[1]])
+
+    with pytest.raises(DataContractError, match="Invalid id values"):
+        load_training_data(part1, part2)
+
+
+def test_literal_na_and_empty_cell_are_conflicting_raw_rows(tmp_path: Path) -> None:
+    empty_ras = "160;iii;www;80.0;iii;5.0;eee;800000.0;xxx;;0\n"
+    literal_na = "160;iii;www;80.0;iii;5.0;eee;800000.0;xxx;NA;0\n"
+    part1 = _write(
+        tmp_path / "part1.csv", PART1_HEADER, [empty_ras, literal_na, PART1_ROWS[1]]
+    )
+    part2 = _write(tmp_path / "part2.csv", PART2_HEADER, PART2_ROWS)
+
+    with pytest.raises(DataContractError, match=r"conflicting rows for ids \[0\]"):
         load_training_data(part1, part2)
 
 
@@ -115,12 +151,10 @@ def test_unexpected_or_reordered_columns_are_rejected(tmp_path: Path) -> None:
 
 
 def test_reference_files_have_expected_entity_contract() -> None:
-    input_dir = Path(
-        "/Users/blehmaks/Desktop/Maks_files/Side_hustle/personal_projects/"
-        "siemens-senior-ai-engineer-test/input/IT DA AI Tasks"
-    )
-    if not input_dir.exists():
-        pytest.skip("Private assignment data is intentionally absent from clean clones")
+    input_dir_value = os.environ.get("SIEMENS_TASK4_INPUT_DIR")
+    if input_dir_value is None:
+        pytest.skip("Set SIEMENS_TASK4_INPUT_DIR to validate private assignment data")
+    input_dir = Path(input_dir_value)
 
     dataset = load_training_data(
         input_dir / "Training_part1.csv", input_dir / "Training_part2.csv"
