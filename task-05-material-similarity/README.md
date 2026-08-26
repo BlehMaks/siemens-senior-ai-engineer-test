@@ -40,3 +40,6 @@ These are not cosmetic cleaning issues. A description-only model has no evidence
 - Evaluate with a small reviewed relevance set, duplicate/near-duplicate checks, catalog constraints, coverage, and stability. With no supplied ground truth, explain the limits of every offline metric.
 - Show representative successes and failures, including blank descriptions, identical descriptions, conflicting attributes, and sparse rows.
 - Produce exactly five alternatives only where five defensible candidates exist; otherwise expose the coverage limitation explicitly.
+- The lexical all-pairs baseline for 998 rows targets at most 60 seconds and 1 GB
+  peak memory on the recorded reference machine. ANN infrastructure is out of scope
+  unless a later catalog-size benchmark demonstrates a need.

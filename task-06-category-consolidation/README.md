@@ -36,3 +36,6 @@ For an alternative, compare leakage-safe target encoding with smoothing and cros
 - Invalid thresholds and unsupported values fail with useful messages.
 - Training-derived category mappings are reusable on unseen data.
 - Tests cover generic-label collision, missing values, and unseen inference categories.
+- A 100,000-value fit-and-transform benchmark targets less than one second and 256 MB
+  peak memory on the recorded reference machine; the property-test suite has a
+  30-second ceiling.

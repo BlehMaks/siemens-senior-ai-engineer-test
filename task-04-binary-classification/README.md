@@ -28,3 +28,6 @@ The positive/majority label appears 3,764 times and the minority label 306 times
 - Report cross-validation dispersion and confidence limitations, not only a best score.
 - Fix seeds where possible and serialize the complete preprocessing-plus-model pipeline.
 - Keep an executable training command and focused tests for the join and transformation invariants.
+- On the recorded reference machine, the mandatory CPU baseline and evaluation
+  target at most five minutes and 2 GB peak memory. CatBoost exploration stops after
+  20 declared configurations or 15 minutes, whichever comes first.
