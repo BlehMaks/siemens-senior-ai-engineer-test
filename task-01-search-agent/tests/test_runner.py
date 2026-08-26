@@ -28,6 +28,7 @@ from search_agent import (
     QueryPlan,
     ResearchRunner,
     RunBudget,
+    RunResult,
     RunStatus,
     ScopedAnswer,
     SearchHit,
@@ -249,7 +250,7 @@ def _runner(
     )
 
 
-async def _run(runner: ResearchRunner, budget: RunBudget | None = None):
+async def _run(runner: ResearchRunner, budget: RunBudget | None = None) -> RunResult:
     return await runner.run(
         tenant_id="tenant-one",
         session_id="session-one",

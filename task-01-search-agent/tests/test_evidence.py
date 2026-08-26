@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
+from typing import overload
 
 import pytest
 from pydantic import AnyHttpUrl, TypeAdapter
@@ -31,7 +32,15 @@ class _UnboundedQuotes(Sequence[str]):
     def __len__(self) -> int:
         return 6
 
-    def __getitem__(self, index: int) -> str:
+    @overload
+    def __getitem__(self, index: int) -> str: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> Sequence[str]: ...
+
+    def __getitem__(self, index: int | slice) -> str | Sequence[str]:
+        if isinstance(index, slice):
+            return ("supported",)
         self.reads += 1
         if self.reads > 6:
             raise AssertionError("quote materialization exceeded the hard cap")
@@ -279,6 +288,7 @@ def test_record_integrity_rejects_public_type_subclasses(public_kind: str) -> No
         now=_NOW,
     )
     payload = record.public.model_dump(mode="python")
+    public: ExtractedEvidence
     if public_kind == "model":
         public = _PublicEvidence.model_validate(payload)
     else:

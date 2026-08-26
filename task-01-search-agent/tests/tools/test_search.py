@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
+from typing import overload
 
 import pytest
 
@@ -36,7 +37,13 @@ class CountingSequence(Sequence[object]):
         self.rows = rows
         self.reads = 0
 
-    def __getitem__(self, index: int) -> object:
+    @overload
+    def __getitem__(self, index: int) -> object: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> Sequence[object]: ...
+
+    def __getitem__(self, index: int | slice) -> object | Sequence[object]:
         self.reads += 1
         return self.rows[index]
 
@@ -45,7 +52,13 @@ class CountingSequence(Sequence[object]):
 
 
 class ExplodingSequence(Sequence[object]):
-    def __getitem__(self, index: int) -> object:
+    @overload
+    def __getitem__(self, index: int) -> object: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> Sequence[object]: ...
+
+    def __getitem__(self, index: int | slice) -> object | Sequence[object]:
         raise RuntimeError("sequence-secret-must-not-escape")
 
     def __len__(self) -> int:
