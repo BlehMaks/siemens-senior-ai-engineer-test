@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from pydantic import AnyHttpUrl, TypeAdapter
 
-from search_agent.contracts import SearchHit
+from search_agent.contracts import ExtractedEvidence, SearchHit
 from search_agent.evidence import (
     EvidenceFailureReason,
     EvidenceValidationError,
@@ -22,6 +22,24 @@ _NOW = datetime(2026, 8, 27, 12, tzinfo=UTC)
 class _HostileQuotes(tuple[str, ...]):
     def __iter__(self) -> Iterator[str]:
         raise RuntimeError("hostile quote iteration")
+
+
+class _UnboundedQuotes(Sequence[str]):
+    def __init__(self) -> None:
+        self.reads = 0
+
+    def __len__(self) -> int:
+        return 6
+
+    def __getitem__(self, index: int) -> str:
+        self.reads += 1
+        if self.reads > 6:
+            raise AssertionError("quote materialization exceeded the hard cap")
+        return "supported"
+
+
+class _PublicEvidence(ExtractedEvidence):
+    pass
 
 
 def _hit(
@@ -231,5 +249,45 @@ def test_hostile_quote_container_becomes_typed_invalid_data() -> None:
             quotes=_HostileQuotes(("supported",)),
             now=_NOW,
         )
+
+    assert error.value.reason is EvidenceFailureReason.INVALID_DATA
+
+
+def test_quote_materialization_stops_at_the_first_excess_item() -> None:
+    quotes = _UnboundedQuotes()
+
+    with pytest.raises(EvidenceValidationError) as error:
+        build_evidence(
+            _hit(),
+            _document(text="supported"),
+            retrieved_at=_NOW,
+            quotes=quotes,
+            now=_NOW,
+        )
+
+    assert error.value.reason is EvidenceFailureReason.INVALID_DATA
+    assert quotes.reads == 6
+
+
+@pytest.mark.parametrize("public_kind", ["model", "quotes"])
+def test_record_integrity_rejects_public_type_subclasses(public_kind: str) -> None:
+    record = build_evidence(
+        _hit(),
+        _document(text="supported"),
+        retrieved_at=_NOW,
+        quotes=("supported",),
+        now=_NOW,
+    )
+    payload = record.public.model_dump(mode="python")
+    if public_kind == "model":
+        public = _PublicEvidence.model_validate(payload)
+    else:
+        public = ExtractedEvidence.model_construct(
+            **{**payload, "quotes": _HostileQuotes(("supported",))}
+        )
+    object.__setattr__(record, "public", public)
+
+    with pytest.raises(EvidenceValidationError) as error:
+        validate_record(record)
 
     assert error.value.reason is EvidenceFailureReason.INVALID_DATA

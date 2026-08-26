@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from itertools import islice
 
 from pydantic import AnyHttpUrl, TypeAdapter, ValidationError
 
@@ -122,6 +123,12 @@ def validate_record(record: EvidenceRecord) -> None:
     """Re-check record integrity before it crosses the answer boundary."""
 
     try:
+        if (
+            type(record) is not EvidenceRecord
+            or type(record.public) is not ExtractedEvidence
+            or type(record.public.quotes) is not tuple
+        ):
+            raise ValueError("evidence must use its exact public types")
         public = ExtractedEvidence.model_validate(
             record.public.model_dump(mode="python", warnings="error"),
             strict=True,
@@ -174,7 +181,7 @@ def _validated_quotes(quotes: object, source_text: str) -> tuple[str, ...]:
             "quotes must be a bounded sequence",
         )
     try:
-        materialized_quotes = tuple(quotes)
+        materialized_quotes = tuple(islice(quotes, _MAX_QUOTES + 1))
     except Exception:
         raise EvidenceValidationError(
             EvidenceFailureReason.INVALID_DATA,

@@ -208,7 +208,7 @@ class AnswerValidator:
         records: dict[str, EvidenceRecord] = {}
         hashes: dict[str, str] = {}
         for record in evidence:
-            if not isinstance(record, EvidenceRecord):
+            if type(record) is not EvidenceRecord:
                 raise AnswerAbstained(
                     AbstentionReason.INVALID_EVIDENCE,
                     "evidence collection contains an invalid record",

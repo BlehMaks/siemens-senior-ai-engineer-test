@@ -25,6 +25,12 @@ class _HostileEvidence:
         raise RuntimeError("hostile evidence iteration")
 
 
+class _HostileRecord(EvidenceRecord):
+    @property
+    def evidence_id(self) -> str:
+        raise RuntimeError("hostile evidence id read")
+
+
 def _record(
     *,
     url: str = "https://example.com/report",
@@ -251,6 +257,23 @@ def test_unhashable_constructed_id_becomes_typed_abstention() -> None:
 
     with pytest.raises(AnswerAbstained) as error:
         AnswerValidator().validate(_answer(_record()), (record,), now=_NOW)
+
+    assert error.value.reason is AbstentionReason.INVALID_EVIDENCE
+
+
+def test_record_subclass_is_rejected_before_hostile_property_access() -> None:
+    record = _record()
+    hostile = _HostileRecord(
+        public=record.public,
+        retrieved_at=record.retrieved_at,
+        source_text=record.source_text,
+        content_hash=record.content_hash,
+        source_title=record.source_title,
+        title_provenance_hash=record.title_provenance_hash,
+    )
+
+    with pytest.raises(AnswerAbstained) as error:
+        AnswerValidator().validate(_answer(record), (hostile,), now=_NOW)
 
     assert error.value.reason is AbstentionReason.INVALID_EVIDENCE
 
