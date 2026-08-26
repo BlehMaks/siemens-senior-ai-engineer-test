@@ -65,6 +65,15 @@ def test_next_float_above_fractional_boundary_is_consolidated() -> None:
     assert consolidate_rare_categories(values, threshold)[:5] == ["__RARE__"] * 5
 
 
+def test_next_float_above_half_boundary_is_consolidated() -> None:
+    threshold = nextafter(50.0, inf)
+
+    assert consolidate_rare_categories(["a", "b"], threshold) == [
+        "__RARE__",
+        "__RARE__",
+    ]
+
+
 def test_empty_input_returns_empty_output() -> None:
     consolidator = RareCategoryConsolidator(25.0)
 

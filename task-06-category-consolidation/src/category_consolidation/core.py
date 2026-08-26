@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Hashable, Iterable
 from dataclasses import dataclass, field
-from math import inf, isfinite, nextafter
+from math import isfinite
 from numbers import Real
 
 
@@ -171,10 +171,10 @@ def _assert_hashable(value: object, *, label: str) -> None:
 
 
 def _meets_threshold(*, count: int, total: int, threshold_percent: float) -> bool:
-    frequency = count / total
-    threshold = threshold_percent / 100.0
-    # Percentage scaling can move an equal rational boundary by one float step.
-    return frequency >= nextafter(threshold, -inf)
+    # Either natural percentage operation order can differ by one float step.
+    # Accept both exact boundary representations, without a general tolerance.
+    boundary = max((count / total) * 100.0, (count * 100.0) / total)
+    return boundary >= threshold_percent
 
 
 def _resolve_rare_label(
