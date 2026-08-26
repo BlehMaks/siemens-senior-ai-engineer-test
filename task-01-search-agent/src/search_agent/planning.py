@@ -19,11 +19,17 @@ from pydantic import (
 from .contracts import (
     OptionalAssistance,
     QueryPlan,
+    ScopedAnswer,
     SearchQuery,
     StrictModel,
     ToolBudget,
 )
-from .providers import ProviderMessage, ProviderResponseError, StructuredChatProvider
+from .providers import (
+    ProviderMessage,
+    ProviderMetadata,
+    ProviderResponseError,
+    StructuredChatProvider,
+)
 
 PlanningText = Annotated[
     str,
@@ -34,6 +40,7 @@ _TOKEN_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
 _POLICY_WORD_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
 _ACRONYM_PATTERN = re.compile(r"\b[A-Z]{2,8}\b")
 _YEAR_PATTERN = re.compile(r"(?:19|20)\d{2}\Z")
+_CLAIM_SEGMENT_PATTERN = re.compile(r"(?:\n+|;+|(?<!\d)[.!?]+|[.!?]+(?!\d))")
 _SCOPE_GENERIC_TOKENS = {
     "a",
     "an",
@@ -170,6 +177,11 @@ class PlanningDecision(StrictModel):
         return self
 
 
+class PlanningOutcome(StrictModel):
+    decision: PlanningDecision
+    metadata: ProviderMetadata
+
+
 class DraftSearchQuery(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -242,6 +254,9 @@ class QueryPlanner:
         self._provider = provider
 
     async def plan(self, request: str) -> PlanningDecision:
+        return (await self.plan_with_metadata(request)).decision
+
+    async def plan_with_metadata(self, request: str) -> PlanningOutcome:
         _reject_forbidden_request(request)
         result = await self._provider.generate_structured(
             messages=(
@@ -260,14 +275,14 @@ class QueryPlanner:
             raise ProviderResponseError(
                 "planner output violated the public planning contract"
             ) from exc
-        _validate_generated_policy(request=request, decision=decision)
+        validate_planning_decision(request=request, decision=decision)
         if decision.task_category is TaskCategory.CLARIFICATION:
-            return PlanningDecision(
+            decision = PlanningDecision(
                 task_category=TaskCategory.CLARIFICATION,
                 requires_search=False,
                 answer_focus="Ask the user to clarify the original request.",
             )
-        return decision
+        return PlanningOutcome(decision=decision, metadata=result.metadata)
 
 
 class AssistancePolicy:
@@ -302,6 +317,68 @@ class AssistancePolicy:
                 msg = "assistance follow-up queries must stay tied to the answered request"
                 raise PlanningPolicyError(msg)
         return assistance
+
+
+class AnswerScopePolicy:
+    """Reject cited output that strays from the validated research intent."""
+
+    _INSTRUCTION_MARKERS = (
+        "follow these instructions",
+        "ignore previous instructions",
+        "ignore prior instructions",
+        "reveal the prompt",
+        "send money",
+        "transfer funds",
+    )
+
+    @classmethod
+    def validate(
+        cls,
+        *,
+        request: str,
+        answer_focus: str,
+        answer: ScopedAnswer,
+    ) -> ScopedAnswer:
+        if not _stays_scoped(
+            request=request,
+            candidate=answer_focus,
+            restrict_expansions=True,
+        ):
+            raise PlanningPolicyError("answer focus must stay scoped to the request")
+        _reject_forbidden_request(answer.answer_text)
+        normalized_answer = _normalized_policy_text(answer.answer_text)
+        if any(marker in normalized_answer for marker in cls._INSTRUCTION_MARKERS):
+            raise PlanningPolicyError("answer contains unrequested instructions")
+        for citation in answer.citations:
+            for segment in _CLAIM_SEGMENT_PATTERN.split(citation.claim):
+                if not segment.strip():
+                    continue
+                if not (
+                    _stays_scoped(
+                        request=request,
+                        candidate=segment,
+                        min_shared_tokens=2,
+                    )
+                    or _stays_scoped(
+                        request=answer_focus,
+                        candidate=segment,
+                        min_shared_tokens=2,
+                    )
+                ):
+                    raise PlanningPolicyError(
+                        "answer claim must stay scoped to the research request"
+                    )
+        return answer
+
+
+def validate_planning_decision(
+    *, request: str, decision: PlanningDecision
+) -> PlanningDecision:
+    """Re-check an injected planning port before any tool can run."""
+
+    _reject_forbidden_request(request)
+    _validate_generated_policy(request=request, decision=decision)
+    return decision
 
 
 def _reject_forbidden_request(request: str) -> None:
