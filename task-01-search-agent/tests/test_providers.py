@@ -12,6 +12,7 @@ from search_agent import (
     ProviderMessage,
     ProviderResponseError,
     ProviderTimeoutError,
+    ProviderTransportError,
 )
 
 
@@ -198,3 +199,60 @@ async def test_ollama_provider_maps_http_and_schema_failures() -> None:
             messages=_messages(),
             response_model=PlanEnvelope,
         )
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_maps_connection_failure_to_typed_error() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    provider = OllamaStructuredChatProvider(
+        model_name="llama3.1",
+        max_retries=0,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ProviderTransportError, match="request failed"):
+        await provider.generate_structured(
+            messages=_messages(), response_model=PlanEnvelope
+        )
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_rejects_non_object_response() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    provider = OllamaStructuredChatProvider(
+        model_name="llama3.1", transport=httpx.MockTransport(handler)
+    )
+
+    with pytest.raises(ProviderResponseError, match="not a JSON object"):
+        await provider.generate_structured(
+            messages=_messages(), response_model=PlanEnvelope
+        )
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_does_not_echo_error_body() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="sensitive prompt and model reasoning")
+
+    provider = OllamaStructuredChatProvider(
+        model_name="llama3.1", transport=httpx.MockTransport(handler)
+    )
+
+    with pytest.raises(ProviderResponseError, match="HTTP 503") as error:
+        await provider.generate_structured(
+            messages=_messages(), response_model=PlanEnvelope
+        )
+
+    assert "sensitive prompt" not in str(error.value)
+
+
+@pytest.mark.parametrize("kwargs", [{"timeout_seconds": 0.0}, {"max_retries": -1}])
+def test_ollama_provider_rejects_invalid_retry_configuration(
+    kwargs: dict[str, float | int],
+) -> None:
+    with pytest.raises(ValueError):
+        OllamaStructuredChatProvider(model_name="llama3.1", **kwargs)  # type: ignore[arg-type]

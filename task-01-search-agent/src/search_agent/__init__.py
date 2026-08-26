@@ -31,6 +31,7 @@ from .providers import (
     ProviderResponseError,
     ProviderResult,
     ProviderTimeoutError,
+    ProviderTransportError,
     StructuredChatProvider,
 )
 from .state import IllegalTransitionError, RunSnapshot, RunStateGraph, RunStatus
@@ -54,6 +55,7 @@ __all__ = [
     "ProviderResponseError",
     "ProviderResult",
     "ProviderTimeoutError",
+    "ProviderTransportError",
     "PublicEvent",
     "QueryPlan",
     "QueryPlanner",

@@ -245,8 +245,9 @@ class RunStateGraph:
         if next_status not in cls._ALLOWED[run.status]:
             msg = f"illegal transition: {run.status.value} -> {next_status.value}"
             raise IllegalTransitionError(msg)
-        next_run = run.model_copy(
-            update={
+        next_values = run.model_dump(mode="python")
+        next_values.update(
+            {
                 "status": next_status,
                 "plan": run.plan if plan is None else plan,
                 "hits": run.hits if hits is None else hits,
@@ -256,6 +257,9 @@ class RunStateGraph:
                 "failure_reason": failure_reason,
             }
         )
+        # Pydantic model_copy skips validation; every public transition must re-check
+        # the destination state's cross-field invariants.
+        next_run = RunSnapshot.model_validate(next_values)
         event = PublicEvent(
             tenant_id=run.tenant_id,
             session_id=run.session_id,

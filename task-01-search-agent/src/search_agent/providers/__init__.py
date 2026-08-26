@@ -6,6 +6,7 @@ from .base import (
     ProviderResponseError,
     ProviderResult,
     ProviderTimeoutError,
+    ProviderTransportError,
     StructuredChatProvider,
 )
 from .fake import FakeStructuredChatProvider
@@ -21,5 +22,6 @@ __all__ = [
     "ProviderResponseError",
     "ProviderResult",
     "ProviderTimeoutError",
+    "ProviderTransportError",
     "StructuredChatProvider",
 ]

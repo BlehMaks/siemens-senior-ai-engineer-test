@@ -4,7 +4,16 @@ import re
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StringConstraints,
+    ValidationError,
+    model_validator,
+)
 
 from .contracts import (
     OptionalAssistance,
@@ -13,18 +22,35 @@ from .contracts import (
     StrictModel,
     ToolBudget,
 )
-from .providers import ProviderMessage, StructuredChatProvider
+from .providers import ProviderMessage, ProviderResponseError, StructuredChatProvider
 
 PlanningText = Annotated[
     str,
     StringConstraints(min_length=1, max_length=400, strip_whitespace=True),
 ]
 
-_TOKEN_PATTERN = re.compile(r"[a-z0-9]{4,}")
+_TOKEN_PATTERN = re.compile(r"[^\W_]{4,}", flags=re.UNICODE)
+_SCOPE_GENERIC_TOKENS = {
+    "com",
+    "current",
+    "find",
+    "http",
+    "https",
+    "latest",
+    "please",
+    "search",
+    "siemens",
+    "www",
+}
 _FORBIDDEN_REQUEST_MARKERS = (
     "system prompt",
     "secret",
     "api key",
+    "access token",
+    "credential",
+    "password",
+    "private key",
+    "developer message",
     "browser",
     "playwright",
     "shell",
@@ -57,11 +83,18 @@ class PlanningDecision(StrictModel):
 
     @model_validator(mode="after")
     def validate_search_shape(self) -> PlanningDecision:
-        if self.requires_search and self.query_plan is None:
-            msg = "search-required plans must include a query_plan"
+        if self.requires_search and (
+            self.query_plan is None or not self.query_plan.searches
+        ):
+            msg = "search-required plans must include at least one search"
             raise ValueError(msg)
         if not self.requires_search and self.query_plan is not None:
             msg = "direct or clarification plans cannot include a query_plan"
+            raise ValueError(msg)
+        if self.requires_search != (
+            self.task_category is TaskCategory.COMPANY_RESEARCH
+        ):
+            msg = "task category must agree with the search requirement"
             raise ValueError(msg)
         return self
 
@@ -69,37 +102,37 @@ class PlanningDecision(StrictModel):
 class DraftSearchQuery(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    text: str = Field(min_length=3, max_length=240)
-    max_results: int = Field(ge=1, le=5)
+    text: PlanningText
+    max_results: StrictInt = Field(ge=1, le=5)
 
 
 class DraftToolBudget(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    max_search_queries: int = Field(ge=0, le=8)
-    max_fetches: int = Field(ge=0, le=24)
+    max_search_queries: StrictInt = Field(ge=1, le=8)
+    max_fetches: StrictInt = Field(ge=1, le=24)
 
 
 class DraftQueryPlan(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     tool_budget: DraftToolBudget
-    searches: list[DraftSearchQuery]
+    searches: list[DraftSearchQuery] = Field(min_length=1, max_length=8)
 
 
 class DraftOptionalAssistance(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    offer: str = Field(min_length=1, max_length=400)
-    follow_up_queries: list[str] = Field(default_factory=list)
+    offer: PlanningText
+    follow_up_queries: list[PlanningText] = Field(default_factory=list, max_length=3)
 
 
 class PlanningDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     task_category: TaskCategory
-    requires_search: bool
-    answer_focus: str = Field(min_length=1, max_length=400)
+    requires_search: StrictBool
+    answer_focus: PlanningText
     query_plan: DraftQueryPlan | None = None
     assistance: DraftOptionalAssistance | None = None
 
@@ -148,8 +181,13 @@ class QueryPlanner:
             temperature=0.0,
         )
         draft = PlanningDraft.model_validate(result.response.model_dump(mode="python"))
-        decision = draft.to_decision()
-        _validate_scoped_queries(request=request, decision=decision)
+        try:
+            decision = draft.to_decision()
+        except ValidationError as exc:
+            raise ProviderResponseError(
+                "planner output violated the public planning contract"
+            ) from exc
+        _validate_generated_policy(request=request, decision=decision)
         return decision
 
 
@@ -166,9 +204,17 @@ class AssistancePolicy:
         if not answer_completed:
             msg = "assistance requires the requested answer first"
             raise PlanningPolicyError(msg)
-        request_tokens = _meaningful_tokens(request)
+        _reject_forbidden_request(assistance.offer)
+        if not _stays_scoped(request=request, candidate=assistance.offer):
+            msg = "assistance offer must stay tied to the answered request"
+            raise PlanningPolicyError(msg)
         for follow_up_query in assistance.follow_up_queries:
-            if not request_tokens.intersection(_meaningful_tokens(follow_up_query)):
+            _reject_forbidden_request(follow_up_query)
+            if not _stays_scoped(
+                request=request,
+                candidate=follow_up_query,
+                min_shared_tokens=2,
+            ):
                 msg = "assistance follow-up queries must stay tied to the answered request"
                 raise PlanningPolicyError(msg)
         return assistance
@@ -178,18 +224,52 @@ def _reject_forbidden_request(request: str) -> None:
     lowered_request = request.casefold()
     for marker in _FORBIDDEN_REQUEST_MARKERS:
         if marker in lowered_request:
-            raise PlanningPolicyError(f"request asks for a prohibited capability: {marker}")
+            raise PlanningPolicyError(
+                f"request asks for a prohibited capability: {marker}"
+            )
 
 
-def _validate_scoped_queries(*, request: str, decision: PlanningDecision) -> None:
-    if decision.query_plan is None:
-        return
+def _validate_generated_policy(*, request: str, decision: PlanningDecision) -> None:
+    _reject_forbidden_request(decision.answer_focus)
+    if not _stays_scoped(request=request, candidate=decision.answer_focus):
+        raise PlanningPolicyError("answer focus must stay scoped to the user request")
+    if decision.query_plan is not None:
+        for search in decision.query_plan.searches:
+            _reject_forbidden_request(search.text)
+            if not _stays_scoped(
+                request=request, candidate=search.text, min_shared_tokens=2
+            ):
+                raise PlanningPolicyError(
+                    "search queries must stay scoped to the user request"
+                )
+    if decision.assistance is not None:
+        _reject_forbidden_request(decision.assistance.offer)
+        if not _stays_scoped(request=request, candidate=decision.assistance.offer):
+            raise PlanningPolicyError(
+                "assistance offer must stay tied to the user request"
+            )
+        for query in decision.assistance.follow_up_queries:
+            _reject_forbidden_request(query)
+            if not _stays_scoped(request=request, candidate=query, min_shared_tokens=2):
+                raise PlanningPolicyError(
+                    "assistance queries must stay tied to the user request"
+                )
+
+
+def _stays_scoped(*, request: str, candidate: str, min_shared_tokens: int = 1) -> bool:
+    normalized_request = " ".join(request.casefold().split())
+    normalized_candidate = " ".join(candidate.casefold().split())
+    if normalized_request == normalized_candidate:
+        return True
+    # Search actions need more evidence of scope than prose-only offers. Capping the
+    # requirement by both token sets keeps exact single-subject requests usable.
     request_tokens = _meaningful_tokens(request)
-    for search in decision.query_plan.searches:
-        if not request_tokens.intersection(_meaningful_tokens(search.text)):
-            msg = "search queries must stay scoped to the user request"
-            raise PlanningPolicyError(msg)
+    candidate_tokens = _meaningful_tokens(candidate)
+    required_shared = min(min_shared_tokens, len(request_tokens), len(candidate_tokens))
+    if required_shared == 0:
+        return False
+    return len(request_tokens.intersection(candidate_tokens)) >= required_shared
 
 
 def _meaningful_tokens(text: str) -> set[str]:
-    return set(_TOKEN_PATTERN.findall(text.casefold()))
+    return set(_TOKEN_PATTERN.findall(text.casefold())) - _SCOPE_GENERIC_TOKENS

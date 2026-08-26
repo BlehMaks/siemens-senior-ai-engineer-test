@@ -51,6 +51,10 @@ class ProviderTimeoutError(ProviderError):
     pass
 
 
+class ProviderTransportError(ProviderError):
+    pass
+
+
 class ProviderResponseError(ProviderError):
     pass
 

@@ -12,6 +12,7 @@ from .base import (
     ProviderResponseError,
     ProviderResult,
     ProviderTimeoutError,
+    ProviderTransportError,
     ThinkMode,
 )
 
@@ -25,6 +26,12 @@ class OllamaStructuredChatProvider:
     think: ThinkMode = False
     keep_alive: str | None = None
     transport: httpx.AsyncBaseTransport | None = None
+
+    def __post_init__(self) -> None:
+        if self.timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if self.max_retries < 0:
+            raise ValueError("max_retries cannot be negative")
 
     async def generate_structured(
         self,
@@ -51,6 +58,9 @@ class OllamaStructuredChatProvider:
             except httpx.TimeoutException as exc:
                 if attempts > self.max_retries:
                     raise ProviderTimeoutError("ollama request timed out") from exc
+            except httpx.RequestError as exc:
+                if attempts > self.max_retries:
+                    raise ProviderTransportError("ollama request failed") from exc
             except (json.JSONDecodeError, ValidationError) as exc:
                 raise ProviderResponseError(
                     "ollama returned invalid structured content"
@@ -85,9 +95,7 @@ class OllamaStructuredChatProvider:
             response = await client.post("/api/chat", json=payload)
 
         if response.status_code != httpx.codes.OK:
-            raise ProviderResponseError(
-                f"ollama returned HTTP {response.status_code}: {response.text}"
-            )
+            raise ProviderResponseError(f"ollama returned HTTP {response.status_code}")
         return response
 
     def _parse_response(
@@ -98,6 +106,8 @@ class OllamaStructuredChatProvider:
         attempt_count: int,
     ) -> ProviderResult:
         payload = response.json()
+        if not isinstance(payload, dict):
+            raise ProviderResponseError("ollama response was not a JSON object")
         message = payload.get("message")
         if not isinstance(message, dict):
             raise ProviderResponseError(

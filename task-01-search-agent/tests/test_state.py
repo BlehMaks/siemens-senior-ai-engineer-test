@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import pytest
-from pydantic import AnyHttpUrl, TypeAdapter
+from pydantic import AnyHttpUrl, TypeAdapter, ValidationError
 
 from search_agent import (
     Citation,
@@ -196,3 +196,17 @@ def test_terminal_states_do_not_transition_again() -> None:
 
     with pytest.raises(IllegalTransitionError, match="cancelled -> planned"):
         RunStateGraph.accept_plan(cancelled_run, _plan())
+
+
+def test_public_evidence_transition_revalidates_destination_invariants() -> None:
+    run = RunStateGraph.create(
+        tenant_id="tenant-123",
+        session_id="session-123",
+        run_id="run-123",
+        request="Find the latest Siemens sustainability report",
+    )
+    planned_run, _ = RunStateGraph.accept_plan(run, _plan())
+    searching_run, _ = RunStateGraph.start_search(planned_run)
+
+    with pytest.raises(ValidationError, match="evidence_ready runs require evidence"):
+        RunStateGraph.record_evidence(searching_run, hits=(), evidence=())
