@@ -24,3 +24,12 @@ The following stays outside Git history and remote branches:
 - supplied datasets until redistribution permission or the expected private-repository workflow is confirmed.
 
 Before any push, the staged diff and outgoing commits must be inspected directly. Ignore rules are a safeguard, not proof that the publication set is correct.
+
+Run `make audit-submission` against the exact Git index before release. The command
+is read-only and fails on private paths, state or key files, credential-shaped
+content, local machine paths, oversized tracked files, and non-ignored untracked
+candidates. It never deletes or rewrites a file.
+
+OpenRouter was used only for the completed private planning council. Its credential
+and provider are prohibited from implementation, tests, CI, deployment, and public
+release artifacts.
