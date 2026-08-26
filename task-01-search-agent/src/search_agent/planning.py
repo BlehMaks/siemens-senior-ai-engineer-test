@@ -37,37 +37,64 @@ _YEAR_PATTERN = re.compile(r"(?:19|20)\d{2}\Z")
 _SCOPE_GENERIC_TOKENS = {
     "a",
     "an",
+    "and",
     "about",
+    "are",
+    "as",
+    "at",
+    "be",
+    "been",
+    "but",
+    "by",
     "compare",
     "com",
     "could",
     "current",
     "explain",
     "find",
+    "for",
+    "from",
+    "has",
+    "have",
+    "how",
     "http",
     "https",
     "in",
     "into",
     "is",
+    "it",
     "latest",
     "look",
     "more",
     "next",
     "of",
+    "on",
     "or",
+    "per",
     "please",
     "previous",
     "research",
     "review",
     "search",
-    "siemens",
     "summarize",
+    "than",
     "that",
     "the",
     "this",
     "to",
+    "via",
+    "vs",
+    "was",
+    "were",
     "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "will",
     "with",
+    "would",
     "www",
     "year",
 }
@@ -368,7 +395,14 @@ def _stays_scoped(
     # topic. This deterministic rule is stricter than semantic guessing by design.
     request_tokens = _meaningful_tokens(request)
     candidate_tokens = _meaningful_tokens(candidate)
-    required_shared = min(min_shared_tokens, len(request_tokens), len(candidate_tokens))
+    candidate_topic_tokens = {
+        token for token in candidate_tokens if not _YEAR_PATTERN.fullmatch(token)
+    }
+    required_shared = min(
+        min_shared_tokens,
+        len(request_tokens),
+        len(candidate_topic_tokens),
+    )
     if required_shared == 0:
         return False
     shared_count = len(request_tokens.intersection(candidate_tokens))
@@ -389,17 +423,13 @@ def _normalized_policy_text(text: str) -> str:
 
 
 def _expands_request_acronym(*, request: str, candidate: str) -> bool:
-    candidate_tokens = tuple(
-        token
-        for token in _TOKEN_PATTERN.findall(candidate.casefold())
-        if token not in _SCOPE_GENERIC_TOKENS
-    )
+    candidate_tokens = tuple(_TOKEN_PATTERN.findall(candidate.casefold()))
     request_acronyms = {
         acronym.casefold() for acronym in _ACRONYM_PATTERN.findall(request)
     }
     # A closed vocabulary is safer than accepting arbitrary same-initial phrases.
     return any(
-        expansion == candidate_tokens
+        candidate_tokens in {expansion, ("explain", *expansion)}
         for acronym, expansion in _KNOWN_ACRONYM_EXPANSIONS.items()
         if acronym in request_acronyms
     )
