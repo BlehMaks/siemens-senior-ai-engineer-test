@@ -8,6 +8,9 @@ dependencies = [
     "scikit-learn>=1.7,<2",
 ]
 
+[dependency-groups]
+dev = ["pandas-stubs>=2.3,<4"]
+
 [build-system]
 requires = ["uv_build>=0.12.6,<0.13"]
 build-backend = "uv_build"
