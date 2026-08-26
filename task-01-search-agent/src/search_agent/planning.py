@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from enum import StrEnum
 from typing import Annotated
 
@@ -30,27 +31,51 @@ PlanningText = Annotated[
 ]
 
 _TOKEN_PATTERN = re.compile(r"[^\W_]{4,}", flags=re.UNICODE)
+_POLICY_WORD_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
+_ACTION_SCOPE_COVERAGE = 0.51
 _SCOPE_GENERIC_TOKENS = {
+    "about",
+    "compare",
     "com",
+    "could",
     "current",
+    "explain",
     "find",
     "http",
     "https",
+    "into",
     "latest",
+    "look",
+    "more",
+    "next",
     "please",
+    "previous",
+    "research",
     "search",
     "siemens",
+    "that",
+    "this",
+    "with",
     "www",
+    "year",
 }
 _FORBIDDEN_REQUEST_MARKERS = (
     "system prompt",
+    "system prompts",
     "secret",
+    "secrets",
     "api key",
+    "api keys",
     "access token",
+    "access tokens",
     "credential",
+    "credentials",
     "password",
+    "passwords",
     "private key",
+    "private keys",
     "developer message",
+    "developer messages",
     "browser",
     "playwright",
     "shell",
@@ -180,8 +205,10 @@ class QueryPlanner:
             response_model=PlanningDraft,
             temperature=0.0,
         )
-        draft = PlanningDraft.model_validate(result.response.model_dump(mode="python"))
         try:
+            draft = PlanningDraft.model_validate(
+                result.response.model_dump(mode="python")
+            )
             decision = draft.to_decision()
         except ValidationError as exc:
             raise ProviderResponseError(
@@ -205,7 +232,11 @@ class AssistancePolicy:
             msg = "assistance requires the requested answer first"
             raise PlanningPolicyError(msg)
         _reject_forbidden_request(assistance.offer)
-        if not _stays_scoped(request=request, candidate=assistance.offer):
+        if not _stays_scoped(
+            request=request,
+            candidate=assistance.offer,
+            min_candidate_coverage=_ACTION_SCOPE_COVERAGE,
+        ):
             msg = "assistance offer must stay tied to the answered request"
             raise PlanningPolicyError(msg)
         for follow_up_query in assistance.follow_up_queries:
@@ -214,6 +245,7 @@ class AssistancePolicy:
                 request=request,
                 candidate=follow_up_query,
                 min_shared_tokens=2,
+                min_candidate_coverage=_ACTION_SCOPE_COVERAGE,
             ):
                 msg = "assistance follow-up queries must stay tied to the answered request"
                 raise PlanningPolicyError(msg)
@@ -221,9 +253,10 @@ class AssistancePolicy:
 
 
 def _reject_forbidden_request(request: str) -> None:
-    lowered_request = request.casefold()
+    normalized_request = f" {_normalized_policy_text(request)} "
     for marker in _FORBIDDEN_REQUEST_MARKERS:
-        if marker in lowered_request:
+        normalized_marker = _normalized_policy_text(marker)
+        if f" {normalized_marker} " in normalized_request:
             raise PlanningPolicyError(
                 f"request asks for a prohibited capability: {marker}"
             )
@@ -231,45 +264,75 @@ def _reject_forbidden_request(request: str) -> None:
 
 def _validate_generated_policy(*, request: str, decision: PlanningDecision) -> None:
     _reject_forbidden_request(decision.answer_focus)
-    if not _stays_scoped(request=request, candidate=decision.answer_focus):
+    if decision.task_category is not TaskCategory.DIRECT_REPLY and not _stays_scoped(
+        request=request, candidate=decision.answer_focus
+    ):
         raise PlanningPolicyError("answer focus must stay scoped to the user request")
     if decision.query_plan is not None:
         for search in decision.query_plan.searches:
             _reject_forbidden_request(search.text)
             if not _stays_scoped(
-                request=request, candidate=search.text, min_shared_tokens=2
+                request=request,
+                candidate=search.text,
+                min_shared_tokens=2,
+                min_candidate_coverage=_ACTION_SCOPE_COVERAGE,
             ):
                 raise PlanningPolicyError(
                     "search queries must stay scoped to the user request"
                 )
     if decision.assistance is not None:
         _reject_forbidden_request(decision.assistance.offer)
-        if not _stays_scoped(request=request, candidate=decision.assistance.offer):
+        if not _stays_scoped(
+            request=request,
+            candidate=decision.assistance.offer,
+            min_candidate_coverage=_ACTION_SCOPE_COVERAGE,
+        ):
             raise PlanningPolicyError(
                 "assistance offer must stay tied to the user request"
             )
         for query in decision.assistance.follow_up_queries:
             _reject_forbidden_request(query)
-            if not _stays_scoped(request=request, candidate=query, min_shared_tokens=2):
+            if not _stays_scoped(
+                request=request,
+                candidate=query,
+                min_shared_tokens=2,
+                min_candidate_coverage=_ACTION_SCOPE_COVERAGE,
+            ):
                 raise PlanningPolicyError(
                     "assistance queries must stay tied to the user request"
                 )
 
 
-def _stays_scoped(*, request: str, candidate: str, min_shared_tokens: int = 1) -> bool:
+def _stays_scoped(
+    *,
+    request: str,
+    candidate: str,
+    min_shared_tokens: int = 1,
+    min_candidate_coverage: float = 0.0,
+) -> bool:
     normalized_request = " ".join(request.casefold().split())
     normalized_candidate = " ".join(candidate.casefold().split())
     if normalized_request == normalized_candidate:
         return True
-    # Search actions need more evidence of scope than prose-only offers. Capping the
-    # requirement by both token sets keeps exact single-subject requests usable.
+    # Action text must retain the subject without padding it with unrelated terms.
+    # Capping the count keeps exact single-subject requests usable; coverage blocks
+    # that one token from authorizing a different multi-token action.
     request_tokens = _meaningful_tokens(request)
     candidate_tokens = _meaningful_tokens(candidate)
     required_shared = min(min_shared_tokens, len(request_tokens), len(candidate_tokens))
     if required_shared == 0:
         return False
-    return len(request_tokens.intersection(candidate_tokens)) >= required_shared
+    shared_count = len(request_tokens.intersection(candidate_tokens))
+    return (
+        shared_count >= required_shared
+        and shared_count / len(candidate_tokens) >= min_candidate_coverage
+    )
 
 
 def _meaningful_tokens(text: str) -> set[str]:
     return set(_TOKEN_PATTERN.findall(text.casefold())) - _SCOPE_GENERIC_TOKENS
+
+
+def _normalized_policy_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return " ".join(_POLICY_WORD_PATTERN.findall(normalized))

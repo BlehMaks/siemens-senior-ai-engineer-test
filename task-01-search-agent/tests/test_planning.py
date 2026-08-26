@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from typing import TypeVar
+
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from search_agent import (
     AssistancePolicy,
@@ -9,13 +11,18 @@ from search_agent import (
     OptionalAssistance,
     PlanningDecision,
     PlanningPolicyError,
+    ProviderMessage,
+    ProviderMetadata,
     ProviderResponseError,
+    ProviderResult,
     QueryPlanner,
     SearchQuery,
     TaskCategory,
     ToolBudget,
 )
 from search_agent.contracts import QueryPlan
+
+ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
 
 
 @pytest.mark.asyncio
@@ -129,7 +136,7 @@ async def test_query_planner_accepts_ambiguous_requests_without_search() -> None
 def test_assistance_policy_requires_answer_before_follow_ups() -> None:
     assistance = OptionalAssistance(
         offer="I can compare this report with the previous year next.",
-        follow_up_queries=("compare siemens sustainability report 2025 2026",),
+        follow_up_queries=("compare siemens sustainability report 2026",),
     )
 
     with pytest.raises(PlanningPolicyError, match="requested answer first"):
@@ -165,6 +172,44 @@ async def test_planner_rejects_prohibited_capability_added_by_model() -> None:
                 "query_plan": {
                     "tool_budget": {"max_search_queries": 1, "max_fetches": 1},
                     "searches": [{"text": "siemens secret api key", "max_results": 1}],
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(PlanningPolicyError, match="prohibited capability"):
+        await QueryPlanner(provider).plan(
+            "Find the current Siemens sustainability report."
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prohibited_query",
+    [
+        "sustainability report api     key",
+        "sustainability report api-key",
+        "sustainability report api\u200bkey",
+        "sustainability report \uff41\uff50\uff49\uff3f\uff4b\uff45\uff59",
+    ],
+)
+async def test_planner_normalizes_obfuscated_prohibited_capabilities(
+    prohibited_query: str,
+) -> None:
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "company_research",
+                "requires_search": True,
+                "answer_focus": "Find the sustainability report.",
+                "query_plan": {
+                    "tool_budget": {"max_search_queries": 1, "max_fetches": 1},
+                    "searches": [
+                        {
+                            "text": prohibited_query,
+                            "max_results": 1,
+                        }
+                    ],
                 },
             }
         ]
@@ -238,6 +283,26 @@ async def test_planner_accepts_exact_unicode_scope() -> None:
     assert decision.query_plan.searches[0].text == request
 
 
+@pytest.mark.asyncio
+async def test_single_subject_token_cannot_pad_an_unrelated_search() -> None:
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "company_research",
+                "requires_search": True,
+                "answer_focus": "Research Siemens jobs.",
+                "query_plan": {
+                    "tool_budget": {"max_search_queries": 1, "max_fetches": 1},
+                    "searches": [{"text": "jobs weather", "max_results": 1}],
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(PlanningPolicyError, match="stay scoped"):
+        await QueryPlanner(provider).plan("Siemens jobs")
+
+
 def test_assistance_offer_cannot_escalate_capabilities() -> None:
     assistance = OptionalAssistance(
         offer="I can open a shell and retrieve API secrets next.",
@@ -247,6 +312,19 @@ def test_assistance_offer_cannot_escalate_capabilities() -> None:
         AssistancePolicy.validate(
             answer_completed=True,
             request="Find the latest Siemens sustainability report.",
+            assistance=assistance,
+        )
+
+
+def test_single_subject_token_cannot_pad_unrelated_assistance() -> None:
+    assistance = OptionalAssistance(
+        offer="I can use jobs to research Berlin weather forecasts.",
+    )
+
+    with pytest.raises(PlanningPolicyError, match="stay tied"):
+        AssistancePolicy.validate(
+            answer_completed=True,
+            request="Siemens jobs",
             assistance=assistance,
         )
 
@@ -337,3 +415,51 @@ async def test_planner_rejects_unrelated_generated_answer_focus() -> None:
 
     with pytest.raises(PlanningPolicyError, match="answer focus"):
         await QueryPlanner(provider).plan("Find the Siemens sustainability report.")
+
+
+@pytest.mark.asyncio
+async def test_direct_reply_allows_semantic_answer_focus() -> None:
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "direct_reply",
+                "requires_search": False,
+                "answer_focus": "Explain artificial intelligence.",
+            }
+        ]
+    )
+
+    decision = await QueryPlanner(provider).plan("What is AI?")
+
+    assert decision.task_category is TaskCategory.DIRECT_REPLY
+
+
+class MalformedEnvelope(BaseModel):
+    unrelated: str
+
+
+class MalformedResultProvider:
+    async def generate_structured(
+        self,
+        *,
+        messages: tuple[ProviderMessage, ...],
+        response_model: type[ResponseModelT],
+        temperature: float = 0.0,
+    ) -> ProviderResult:
+        del messages, response_model, temperature
+        return ProviderResult(
+            response=MalformedEnvelope(unrelated="not a planning draft"),
+            metadata=ProviderMetadata(
+                provider_name="malformed",
+                model_name="malformed",
+                attempt_count=1,
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_malformed_provider_result_maps_to_typed_error() -> None:
+    with pytest.raises(ProviderResponseError, match="planner output"):
+        await QueryPlanner(MalformedResultProvider()).plan(
+            "Find the Siemens sustainability report."
+        )

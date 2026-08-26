@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 import httpx
 import pytest
@@ -234,6 +235,25 @@ async def test_ollama_provider_rejects_non_object_response() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ollama_provider_maps_invalid_utf8_to_typed_error() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"\xff",
+            headers={"content-type": "application/json"},
+        )
+
+    provider = OllamaStructuredChatProvider(
+        model_name="llama3.1", transport=httpx.MockTransport(handler)
+    )
+
+    with pytest.raises(ProviderResponseError, match="invalid structured content"):
+        await provider.generate_structured(
+            messages=_messages(), response_model=PlanEnvelope
+        )
+
+
+@pytest.mark.asyncio
 async def test_ollama_provider_does_not_echo_error_body() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, text="sensitive prompt and model reasoning")
@@ -250,7 +270,16 @@ async def test_ollama_provider_does_not_echo_error_body() -> None:
     assert "sensitive prompt" not in str(error.value)
 
 
-@pytest.mark.parametrize("kwargs", [{"timeout_seconds": 0.0}, {"max_retries": -1}])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"timeout_seconds": 0.0},
+        {"timeout_seconds": float("nan")},
+        {"max_retries": -1},
+        {"max_retries": math.inf},
+        {"max_retries": 6},
+    ],
+)
 def test_ollama_provider_rejects_invalid_retry_configuration(
     kwargs: dict[str, float | int],
 ) -> None:

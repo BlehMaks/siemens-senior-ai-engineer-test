@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 
 import httpx
@@ -28,10 +29,19 @@ class OllamaStructuredChatProvider:
     transport: httpx.AsyncBaseTransport | None = None
 
     def __post_init__(self) -> None:
-        if self.timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be positive")
-        if self.max_retries < 0:
-            raise ValueError("max_retries cannot be negative")
+        if (
+            isinstance(self.timeout_seconds, bool)
+            or not isinstance(self.timeout_seconds, (int, float))
+            or not math.isfinite(self.timeout_seconds)
+            or self.timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be finite and positive")
+        if (
+            isinstance(self.max_retries, bool)
+            or not isinstance(self.max_retries, int)
+            or not 0 <= self.max_retries <= 5
+        ):
+            raise ValueError("max_retries must be an integer between 0 and 5")
 
     async def generate_structured(
         self,
@@ -61,7 +71,7 @@ class OllamaStructuredChatProvider:
             except httpx.RequestError as exc:
                 if attempts > self.max_retries:
                     raise ProviderTransportError("ollama request failed") from exc
-            except (json.JSONDecodeError, ValidationError) as exc:
+            except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:
                 raise ProviderResponseError(
                     "ollama returned invalid structured content"
                 ) from exc
