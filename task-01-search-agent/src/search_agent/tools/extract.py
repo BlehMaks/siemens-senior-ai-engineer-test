@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+import base64
+import json
+import sys
+from contextlib import suppress
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from trafilatura import bare_extraction
@@ -165,3 +170,128 @@ class LocalExtractor:
             title=None,
             text=text,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class AsyncLocalExtractor:
+    """Run bounded local parsing in a process that cancellation can terminate."""
+
+    extractor: LocalExtractor = field(default_factory=LocalExtractor)
+
+    async def extract(self, document: FetchedDocument) -> ExtractedDocument:
+        if len(document.body) > self.extractor.max_input_bytes:
+            raise ExtractionError(
+                ExtractionFailureReason.INPUT_TOO_LARGE,
+                "fetched content exceeds the extraction input limit",
+            )
+        payload = json.dumps(
+            {
+                "body": base64.b64encode(document.body).decode("ascii"),
+                "canonical_url": document.canonical_url,
+                "content_type": document.content_type,
+                "max_input_bytes": self.extractor.max_input_bytes,
+                "max_output_chars": self.extractor.max_output_chars,
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode()
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "search_agent.tools.extract",
+            "--worker",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            stdout, _ = await process.communicate(payload)
+        except BaseException:
+            if process.returncode is None:
+                with suppress(ProcessLookupError):
+                    process.kill()
+                await process.wait()
+            raise
+        if process.returncode != 0:
+            raise ExtractionError(
+                ExtractionFailureReason.MALFORMED_CONTENT,
+                "content extraction process failed",
+            )
+        return _decode_worker_result(stdout)
+
+
+def _decode_worker_result(payload: bytes) -> ExtractedDocument:
+    try:
+        result = json.loads(payload)
+        if not isinstance(result, dict) or set(result) not in (
+            {"ok", "reason"},
+            {"ok", "canonical_url", "title", "text"},
+        ):
+            raise ValueError
+        if result["ok"] is not True:
+            reason = ExtractionFailureReason(result["reason"])
+            raise ExtractionError(reason, "content extraction failed")
+        canonical_url = result["canonical_url"]
+        title = result["title"]
+        text = result["text"]
+        if (
+            type(canonical_url) is not str
+            or (title is not None and type(title) is not str)
+            or type(text) is not str
+        ):
+            raise ValueError
+        return ExtractedDocument(
+            canonical_url=canonical_url,
+            title=title,
+            text=text,
+        )
+    except ExtractionError:
+        raise
+    except Exception:
+        raise ExtractionError(
+            ExtractionFailureReason.MALFORMED_CONTENT,
+            "content extraction process returned an invalid result",
+        ) from None
+
+
+def _worker_main() -> int:
+    try:
+        payload = json.loads(sys.stdin.buffer.read())
+        if not isinstance(payload, dict) or set(payload) != {
+            "body",
+            "canonical_url",
+            "content_type",
+            "max_input_bytes",
+            "max_output_chars",
+        }:
+            raise ValueError
+        document = FetchedDocument(
+            canonical_url=payload["canonical_url"],
+            content_type=payload["content_type"],
+            body=base64.b64decode(payload["body"], validate=True),
+        )
+        extracted = LocalExtractor(
+            max_input_bytes=payload["max_input_bytes"],
+            max_output_chars=payload["max_output_chars"],
+        ).extract(document)
+        result = {
+            "ok": True,
+            "canonical_url": extracted.canonical_url,
+            "title": extracted.title,
+            "text": extracted.text,
+        }
+    except ExtractionError as exc:
+        result = {"ok": False, "reason": exc.reason.value}
+    except Exception:
+        result = {
+            "ok": False,
+            "reason": ExtractionFailureReason.MALFORMED_CONTENT.value,
+        }
+    sys.stdout.write(json.dumps(result, ensure_ascii=True, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] != ["--worker"]:
+        raise SystemExit(2)
+    raise SystemExit(_worker_main())

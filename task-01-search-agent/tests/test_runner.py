@@ -14,6 +14,7 @@ from search_agent import (
     Citation,
     EventType,
     ExtractedDocument,
+    ExtractionPort,
     FailureReason,
     FetchedDocument,
     FetchError,
@@ -21,6 +22,7 @@ from search_agent import (
     OptionalAssistance,
     PlanningDecision,
     PlanningOutcome,
+    PlanningPort,
     ProviderMessage,
     ProviderMetadata,
     ProviderResponseError,
@@ -37,6 +39,7 @@ from search_agent import (
     ToolBudget,
     build_evidence,
 )
+from search_agent.planning import PLANNING_SYSTEM_PROMPT
 
 URL_ADAPTER = TypeAdapter(AnyHttpUrl)
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -176,7 +179,7 @@ class _Extractor:
     documents: dict[str, ExtractedDocument | Exception]
     hook: Callable[[], None] | None = None
 
-    def extract(self, document: FetchedDocument) -> ExtractedDocument:
+    async def extract(self, document: FetchedDocument) -> ExtractedDocument:
         if self.hook is not None:
             self.hook()
         value = self.documents[document.canonical_url]
@@ -221,10 +224,10 @@ class _Provider:
 
 def _runner(
     *,
-    planner: _Planner | None = None,
+    planner: PlanningPort | None = None,
     searcher: _Searcher | None = None,
     fetcher: _Fetcher | None = None,
-    extractor: _Extractor | None = None,
+    extractor: ExtractionPort | None = None,
     provider: _Provider | None = None,
     cancel_requested: Callable[[], bool] | None = None,
     clock: Callable[[], float] | None = None,
@@ -521,6 +524,24 @@ async def test_each_count_budget_stops_at_its_boundary(
 
 
 @pytest.mark.asyncio
+async def test_actual_body_bytes_are_charged_beyond_the_page_reservation() -> None:
+    body = SOURCE_TEXT.encode() + (b" " * 1024)
+    fetched = FetchedDocument(
+        canonical_url=SOURCE_URL,
+        content_type="text/html",
+        body=body,
+    )
+
+    result = await _run(
+        _runner(fetcher=_Fetcher({SOURCE_URL: fetched}), reservation=64),
+        _budget(max_raw_bytes=64, max_decoded_bytes=len(body)),
+    )
+
+    assert result.snapshot.failure_reason is FailureReason.BUDGET_EXHAUSTED
+    assert result.usage.raw_bytes_reserved == 64
+
+
+@pytest.mark.asyncio
 async def test_wall_time_budget_is_checked_after_await() -> None:
     current = [0.0]
     planner = _Planner(hook=lambda: current.__setitem__(0, 2.0))
@@ -544,18 +565,46 @@ async def test_wall_time_interrupts_a_hanging_await() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wall_time_interrupts_sync_extraction_off_the_event_loop() -> None:
+async def test_wall_time_cancels_extraction_without_background_work() -> None:
+    started = asyncio.Event()
+    finished = asyncio.Event()
+
+    class BlockingExtractor:
+        async def extract(self, document: FetchedDocument) -> ExtractedDocument:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                finished.set()
+            raise AssertionError("unreachable")
+
     result = await _run(
         _runner(
-            extractor=_Extractor(
-                {SOURCE_URL: _document()}, hook=lambda: time.sleep(0.1)
-            ),
+            extractor=BlockingExtractor(),
             clock=time.monotonic,
         ),
         _budget(max_seconds=0.02),
     )
 
     assert result.snapshot.failure_reason is FailureReason.BUDGET_EXHAUSTED
+    assert started.is_set()
+    assert finished.is_set()
+
+
+@pytest.mark.asyncio
+async def test_sync_extractor_is_rejected_before_unbounded_work_starts() -> None:
+    called = False
+
+    class SyncExtractor:
+        def extract(self, document: FetchedDocument) -> ExtractedDocument:
+            nonlocal called
+            called = True
+            return _document()
+
+    result = await _run(_runner(extractor=cast(ExtractionPort, SyncExtractor())))
+
+    assert result.snapshot.failure_reason is FailureReason.VALIDATION_FAILED
+    assert called is False
 
 
 class _CountingClock:
@@ -596,6 +645,43 @@ async def test_clock_failure_during_run_becomes_a_safe_terminal_result() -> None
     assert "private clock failure" not in result.model_dump_json()
 
 
+class _HostileClockValue:
+    def __float__(self) -> float:
+        raise RuntimeError("clock-private-secret")
+
+
+@pytest.mark.asyncio
+async def test_clock_rejects_non_real_values_without_coercing_them() -> None:
+    result = await _run(_runner(clock=lambda: cast(float, _HostileClockValue())))
+
+    assert result.snapshot.failure_reason is FailureReason.VALIDATION_FAILED
+    assert "clock-private-secret" not in result.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_one_clock_sample_cannot_regress_to_extend_timeout() -> None:
+    calls = 0
+
+    def clock() -> float:
+        nonlocal calls
+        calls += 1
+        return -1.0 if calls == 4 else 0.0
+
+    class SlowPlanner:
+        async def plan_with_metadata(self, request: str) -> PlanningOutcome:
+            await asyncio.sleep(0.05)
+            return await _Planner().plan_with_metadata(request)
+
+    started = time.monotonic()
+    result = await _run(
+        _runner(planner=SlowPlanner(), searcher=_Searcher(()), clock=clock),
+        _budget(max_seconds=0.01),
+    )
+
+    assert result.snapshot.failure_reason is FailureReason.BUDGET_EXHAUSTED
+    assert time.monotonic() - started < 0.04
+
+
 @pytest.mark.asyncio
 async def test_provider_metadata_counts_retries_and_tokens() -> None:
     provider = _Provider(
@@ -610,6 +696,69 @@ async def test_provider_metadata_counts_retries_and_tokens() -> None:
     assert result.usage.model_calls == 2
     assert result.usage.model_attempts == 3
     assert result.usage.tokens >= 15
+
+
+@pytest.mark.asyncio
+async def test_zero_provider_token_counts_cannot_reduce_conservative_usage() -> None:
+    claim = ("Siemens sustainability report " + "evidence " * 35).strip()
+    document = _document(text=claim)
+    fetched = FetchedDocument(
+        canonical_url=SOURCE_URL,
+        content_type="text/html",
+        body=claim.encode(),
+    )
+
+    def runner() -> tuple[ResearchRunner, _Provider]:
+        provider = _Provider(
+            _answer(_hit(), document, claim=claim),
+            prompt_tokens=0,
+            response_tokens=0,
+        )
+        return _runner(
+            planner=_Planner(prompt_tokens=0, response_tokens=0),
+            fetcher=_Fetcher({SOURCE_URL: fetched}),
+            extractor=_Extractor({SOURCE_URL: document}),
+            provider=provider,
+        ), provider
+
+    baseline_runner, baseline_provider = runner()
+    baseline = await _run(baseline_runner)
+    prompt_only = (
+        len(PLANNING_SYSTEM_PROMPT.encode())
+        + len(b"Find the Siemens sustainability report")
+        + sum(
+            len(message.content.encode()) for message in baseline_provider.messages[0]
+        )
+    )
+    exact_runner, _ = runner()
+    exact = await _run(
+        exact_runner,
+        _budget(max_tokens=baseline.usage.tokens),
+    )
+    short_runner, _ = runner()
+    short = await _run(
+        short_runner,
+        _budget(max_tokens=baseline.usage.tokens - 1),
+    )
+
+    assert baseline.snapshot.status is RunStatus.COMPLETED
+    assert baseline.usage.tokens > prompt_only
+    assert exact.snapshot.status is RunStatus.COMPLETED
+    assert short.snapshot.failure_reason is FailureReason.BUDGET_EXHAUSTED
+
+
+@pytest.mark.asyncio
+async def test_failed_model_call_still_consumes_one_attempt() -> None:
+    provider = _Provider(
+        _answer(_hit(), _document()),
+        error=ProviderResponseError("private provider error"),
+    )
+
+    result = await _run(_runner(provider=provider))
+
+    assert result.snapshot.failure_reason is FailureReason.VALIDATION_FAILED
+    assert result.usage.model_calls == 2
+    assert result.usage.model_attempts == 2
 
 
 @pytest.mark.asyncio

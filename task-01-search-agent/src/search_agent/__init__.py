@@ -69,6 +69,7 @@ from .security import (
 )
 from .state import IllegalTransitionError, RunSnapshot, RunStateGraph, RunStatus
 from .tools import (
+    AsyncLocalExtractor,
     ExtractedDocument,
     ExtractionError,
     ExtractionFailureReason,
@@ -89,6 +90,7 @@ __all__ = [
     "AnswerScopePolicy",
     "AnswerValidator",
     "AssistancePolicy",
+    "AsyncLocalExtractor",
     "Citation",
     "EventType",
     "EvidenceFailureReason",

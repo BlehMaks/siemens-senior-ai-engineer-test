@@ -47,7 +47,7 @@ class _DemoFetcher:
 
 
 class _DemoExtractor:
-    def extract(self, document: FetchedDocument) -> ExtractedDocument:
+    async def extract(self, document: FetchedDocument) -> ExtractedDocument:
         return ExtractedDocument(
             canonical_url=document.canonical_url,
             title=_TITLE,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 
@@ -7,6 +8,7 @@ import pytest
 import trafilatura
 import trafilatura.downloads
 
+from search_agent import AsyncLocalExtractor
 from search_agent.tools import extract as extract_module
 from search_agent.tools.extract import (
     ExtractionError,
@@ -110,6 +112,69 @@ def test_extracts_utf8_plain_text_without_html_parser(
 
     assert extracted.title is None
     assert extracted.text == "Siemens report\nline two"
+
+
+@pytest.mark.asyncio
+async def test_async_local_extractor_runs_in_a_cancellable_process() -> None:
+    extracted = await AsyncLocalExtractor().extract(
+        _document(b"Siemens report\nline two", content_type="text/plain")
+    )
+
+    assert extracted.canonical_url == "https://example.com/report"
+    assert extracted.title is None
+    assert extracted.text == "Siemens report\nline two"
+
+
+@pytest.mark.asyncio
+async def test_async_local_extractor_rejects_oversize_before_spawning() -> None:
+    extractor = AsyncLocalExtractor(LocalExtractor(max_input_bytes=3))
+
+    with pytest.raises(ExtractionError) as error:
+        await extractor.extract(_document(b"four"))
+
+    assert error.value.reason is ExtractionFailureReason.INPUT_TOO_LARGE
+
+
+@pytest.mark.asyncio
+async def test_async_local_extractor_reaps_process_when_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    killed = asyncio.Event()
+    reaped = asyncio.Event()
+
+    class BlockingProcess:
+        returncode: int | None = None
+
+        async def communicate(self, payload: bytes) -> tuple[bytes, bytes]:
+            del payload
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        def kill(self) -> None:
+            self.returncode = -9
+            killed.set()
+
+        async def wait(self) -> int:
+            reaped.set()
+            return -9
+
+    async def create_process(*args: object, **kwargs: object) -> BlockingProcess:
+        del args, kwargs
+        return BlockingProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    task = asyncio.create_task(
+        AsyncLocalExtractor().extract(
+            _document(b"Siemens report", content_type="text/plain")
+        )
+    )
+    await asyncio.sleep(0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert killed.is_set()
+    assert reaped.is_set()
 
 
 def test_plain_text_requires_utf8() -> None:

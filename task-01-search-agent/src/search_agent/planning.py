@@ -322,13 +322,49 @@ class AssistancePolicy:
 class AnswerScopePolicy:
     """Reject cited output that strays from the validated research intent."""
 
-    _INSTRUCTION_MARKERS = (
-        "follow these instructions",
-        "ignore previous instructions",
-        "ignore prior instructions",
-        "reveal the prompt",
-        "send money",
-        "transfer funds",
+    _CONTROL_ACTIONS = frozenset(
+        {
+            "bypass",
+            "disclose",
+            "disregard",
+            "execute",
+            "exfiltrate",
+            "expose",
+            "follow",
+            "ignore",
+            "leak",
+            "override",
+            "reveal",
+            "run",
+            "send",
+            "transfer",
+        }
+    )
+    _CONTROL_TARGETS = frozenset(
+        {
+            "code",
+            "command",
+            "commands",
+            "credential",
+            "credentials",
+            "data",
+            "directive",
+            "directives",
+            "funds",
+            "instruction",
+            "instructions",
+            "money",
+            "policy",
+            "prompt",
+            "restrictions",
+            "rules",
+            "safeguards",
+            "secret",
+            "secrets",
+            "shell",
+            "token",
+            "tokens",
+        }
     )
 
     @classmethod
@@ -347,7 +383,12 @@ class AnswerScopePolicy:
             raise PlanningPolicyError("answer focus must stay scoped to the request")
         _reject_forbidden_request(answer.answer_text)
         normalized_answer = _normalized_policy_text(answer.answer_text)
-        if any(marker in normalized_answer for marker in cls._INSTRUCTION_MARKERS):
+        answer_tokens = frozenset(_POLICY_WORD_PATTERN.findall(normalized_answer))
+        # Topic padding cannot turn control-language found in a page into an answer.
+        if (
+            answer_tokens & cls._CONTROL_ACTIONS
+            and answer_tokens & cls._CONTROL_TARGETS
+        ):
             raise PlanningPolicyError("answer contains unrequested instructions")
         for citation in answer.citations:
             for segment in _CLAIM_SEGMENT_PATTERN.split(citation.claim):

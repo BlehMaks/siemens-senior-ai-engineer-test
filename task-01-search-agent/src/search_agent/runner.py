@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import math
 import time
@@ -10,6 +11,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from numbers import Real
 from typing import Protocol, TypeVar
 
 from pydantic import Field, ValidationError, model_validator
@@ -77,7 +79,7 @@ class FetchPort(Protocol):
 
 
 class ExtractionPort(Protocol):
-    def extract(self, document: FetchedDocument) -> ExtractedDocument: ...
+    async def extract(self, document: FetchedDocument) -> ExtractedDocument: ...
 
 
 class RunBudget(StrictModel):
@@ -148,6 +150,14 @@ class _BudgetExceeded(RuntimeError):
     pass
 
 
+class _InvalidClock(RuntimeError):
+    pass
+
+
+class _InvalidAdapter(RuntimeError):
+    pass
+
+
 class _CooperativeCancellation(RuntimeError):
     pass
 
@@ -160,6 +170,8 @@ class _Ledger:
     fetch_reservation_bytes: int
     started_at: float
     deadline: float
+    last_clock: float
+    clock_valid: bool = True
     iterations: int = 0
     search_queries: int = 0
     pages: int = 0
@@ -180,11 +192,11 @@ class _Ledger:
         fetch_reservation_bytes: int,
     ) -> _Ledger:
         try:
-            started_at = clock()
-        except Exception:
+            started_at = _clock_value(clock)
+            clock_valid = True
+        except _InvalidClock:
             started_at = 0.0
-        if not math.isfinite(started_at):
-            started_at = 0.0
+            clock_valid = False
         return cls(
             budget=budget,
             clock=clock,
@@ -192,9 +204,11 @@ class _Ledger:
             fetch_reservation_bytes=fetch_reservation_bytes,
             started_at=started_at,
             deadline=started_at + budget.max_seconds,
+            last_clock=started_at,
+            clock_valid=clock_valid,
         )
 
-    def check_boundary(self) -> None:
+    def check_boundary(self) -> float:
         if self.cancel_requested is not None:
             try:
                 cancelled = self.cancel_requested()
@@ -203,13 +217,19 @@ class _Ledger:
                 raise _CooperativeCancellation from None
             if cancelled:
                 raise _CooperativeCancellation
-        current = self.clock()
-        if not math.isfinite(current) or current >= self.deadline:
+        if not self.clock_valid:
+            raise _InvalidClock
+        current = _clock_value(self.clock)
+        if current < self.last_clock:
             raise _BudgetExceeded
+        self.last_clock = current
+        if current >= self.deadline:
+            raise _BudgetExceeded
+        return current
 
     def remaining_seconds(self) -> float:
-        self.check_boundary()
-        return max(0.0, self.deadline - self.clock())
+        current = self.check_boundary()
+        return self.deadline - current
 
     def start_iteration(self) -> None:
         self.check_boundary()
@@ -228,6 +248,14 @@ class _Ledger:
             self.budget.max_raw_bytes,
         )
 
+    def account_page_body(self, size: int) -> None:
+        additional = max(size - self.fetch_reservation_bytes, 0)
+        self.raw_bytes_reserved = _consume(
+            self.raw_bytes_reserved,
+            additional,
+            self.budget.max_raw_bytes,
+        )
+
     def consume_decoded(self, size: int) -> None:
         self.decoded_bytes = _consume(
             self.decoded_bytes, size, self.budget.max_decoded_bytes
@@ -238,7 +266,12 @@ class _Ledger:
         reserved_tokens = sum(
             _token_upper_bound(message.content) for message in messages
         )
-        self.tokens = _consume(self.tokens, reserved_tokens, self.budget.max_tokens)
+        self._consume_tokens(reserved_tokens)
+        self.model_attempts = _consume(
+            self.model_attempts,
+            1,
+            self.budget.max_model_calls * self.budget.max_attempts_per_model_call,
+        )
         return reserved_tokens
 
     def finish_model_call(
@@ -253,7 +286,11 @@ class _Ledger:
         attempts = metadata.attempt_count
         if not 1 <= attempts <= self.budget.max_attempts_per_model_call:
             raise _BudgetExceeded
-        self.model_attempts += attempts
+        self.model_attempts = _consume(
+            self.model_attempts,
+            attempts - 1,
+            self.budget.max_model_calls * self.budget.max_attempts_per_model_call,
+        )
         prompt_tokens = metadata.prompt_eval_count
         response_tokens = metadata.eval_count
         if (
@@ -262,12 +299,18 @@ class _Ledger:
             and isinstance(response_tokens, int)
             and response_tokens >= 0
         ):
-            observed_tokens = prompt_tokens + response_tokens
-        additional_tokens = max(observed_tokens - reserved_tokens, 0)
+            observed_tokens = max(
+                observed_tokens,
+                prompt_tokens + response_tokens,
+            )
+        additional_tokens = observed_tokens - reserved_tokens
+        self._consume_tokens(additional_tokens)
+
+    def _consume_tokens(self, amount: int) -> None:
         try:
             self.tokens = _consume(
                 self.tokens,
-                additional_tokens,
+                amount,
                 self.budget.max_tokens,
             )
         except _BudgetExceeded:
@@ -276,12 +319,17 @@ class _Ledger:
             raise
 
     def usage(self) -> RunUsage:
-        try:
-            elapsed = self.clock() - self.started_at
-        except Exception:
+        if not self.clock_valid:
             elapsed = self.budget.max_seconds
-        if not math.isfinite(elapsed):
-            elapsed = self.budget.max_seconds
+        else:
+            try:
+                current = _clock_value(self.clock)
+                if current < self.last_clock:
+                    raise _BudgetExceeded
+                self.last_clock = current
+                elapsed = current - self.started_at
+            except (_BudgetExceeded, _InvalidClock):
+                elapsed = self.budget.max_seconds
         return RunUsage(
             elapsed_seconds=float(min(max(elapsed, 0.0), self.budget.max_seconds)),
             iterations=self.iterations,
@@ -365,7 +413,13 @@ class ResearchRunner:
                 message="Run stopped at a configured budget",
             )
             events.append(event)
-        except (PlanningPolicyError, ProviderError, AnswerAbstained):
+        except (
+            PlanningPolicyError,
+            ProviderError,
+            AnswerAbstained,
+            _InvalidAdapter,
+            _InvalidClock,
+        ):
             snapshot, event = RunStateGraph.fail(
                 snapshot,
                 FailureReason.VALIDATION_FAILED,
@@ -527,9 +581,10 @@ class ResearchRunner:
                 )
                 if not isinstance(fetched, FetchedDocument):
                     raise TypeError("fetch port returned an invalid document")
+                ledger.account_page_body(len(fetched.body))
                 ledger.consume_decoded(len(fetched.body))
                 extracted = await self._await_boundary(
-                    partial(asyncio.to_thread, self.extractor.extract, fetched),
+                    partial(self._extract, fetched),
                     ledger,
                 )
                 if not isinstance(extracted, ExtractedDocument):
@@ -547,11 +602,18 @@ class ResearchRunner:
                 raise
             except _CooperativeCancellation:
                 raise
+            except _InvalidAdapter:
+                raise
             except (FetchError, ExtractionError, EvidenceValidationError):
                 ledger.failed_pages += 1
             except Exception:
                 ledger.failed_pages += 1
         return records
+
+    async def _extract(self, document: FetchedDocument) -> ExtractedDocument:
+        if not inspect.iscoroutinefunction(self.extractor.extract):
+            raise _InvalidAdapter
+        return await self.extractor.extract(document)
 
     async def _synthesize(
         self,
@@ -653,6 +715,21 @@ def _consume(current: int, amount: int, maximum: int) -> int:
     if amount < 0 or current > maximum - amount:
         raise _BudgetExceeded
     return current + amount
+
+
+def _clock_value(clock: Callable[[], float]) -> float:
+    try:
+        value = clock()
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise _InvalidClock
+        converted = float(value)
+    except _InvalidClock:
+        raise
+    except Exception:
+        raise _InvalidClock from None
+    if not math.isfinite(converted):
+        raise _InvalidClock
+    return converted
 
 
 def _token_upper_bound(text: str) -> int:
