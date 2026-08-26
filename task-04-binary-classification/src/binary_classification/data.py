@@ -1,6 +1,7 @@
 """Validated ingestion for the two entity-level training tables."""
 
 import csv
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -74,7 +75,7 @@ def _read_table(path: str | Path, expected_columns: tuple[str, ...]) -> pd.DataF
     invalid_ids: list[int] = []
     for position, raw_value in enumerate(frame["id"].tolist()):
         value = str(raw_value)
-        is_decimal_integer = bool(value) and value.lstrip("+-").isdigit()
+        is_decimal_integer = re.fullmatch(r"[+-]?[0-9]+", value) is not None
         parsed = int(value) if is_decimal_integer else None
         if parsed is None or not -(2**63) <= parsed < 2**63:
             invalid_ids.append(position)

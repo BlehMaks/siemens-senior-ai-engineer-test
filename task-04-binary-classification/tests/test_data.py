@@ -89,7 +89,7 @@ def test_extra_fields_are_rejected_instead_of_becoming_an_index(tmp_path: Path) 
         load_training_data(part1, part2)
 
 
-@pytest.mark.parametrize("invalid_id", ["", "one", "1.5"])
+@pytest.mark.parametrize("invalid_id", ["", "one", "1.5", "--1", "+-1", "²", "①"])
 def test_invalid_ids_are_rejected(tmp_path: Path, invalid_id: str) -> None:
     invalid_row = PART1_ROWS[1].rsplit(";", 1)[0] + f";{invalid_id}\n"
     part1 = _write(tmp_path / "part1.csv", PART1_HEADER, [PART1_ROWS[0], invalid_row])
