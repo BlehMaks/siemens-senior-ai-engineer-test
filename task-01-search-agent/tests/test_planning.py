@@ -539,6 +539,11 @@ async def test_direct_reply_rejects_unrelated_answer_focus() -> None:
     [
         ("What is AI?", "Explain apple inventory."),
         ("What is ML?", "Explain manage logistics."),
+        ("What is AI?", "Explain artificial intelligence weather."),
+        ("What is ML?", "Explain machine learning finance."),
+        ("What is AI?", "Explain intelligence artificial."),
+        ("AI in ML?", "Berlin in winter."),
+        ("AI or ML?", "Stocks or bonds."),
     ],
 )
 async def test_direct_reply_rejects_false_acronym_expansion(

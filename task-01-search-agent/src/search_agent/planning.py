@@ -46,12 +46,15 @@ _SCOPE_GENERIC_TOKENS = {
     "find",
     "http",
     "https",
+    "in",
     "into",
     "is",
     "latest",
     "look",
     "more",
     "next",
+    "of",
+    "or",
     "please",
     "previous",
     "research",
@@ -62,13 +65,15 @@ _SCOPE_GENERIC_TOKENS = {
     "that",
     "the",
     "this",
+    "to",
+    "what",
     "with",
     "www",
     "year",
 }
 _KNOWN_ACRONYM_EXPANSIONS = {
-    "ai": frozenset({"artificial", "intelligence"}),
-    "ml": frozenset({"learning", "machine"}),
+    "ai": ("artificial", "intelligence"),
+    "ml": ("machine", "learning"),
 }
 _FORBIDDEN_REQUEST_MARKERS = (
     "system prompt",
@@ -302,7 +307,11 @@ def _validate_generated_policy(*, request: str, decision: PlanningDecision) -> N
     )
     direct_focus_is_invalid = (
         decision.task_category is TaskCategory.DIRECT_REPLY
-        and not _stays_scoped(request=request, candidate=decision.answer_focus)
+        and not _stays_scoped(
+            request=request,
+            candidate=decision.answer_focus,
+            restrict_expansions=True,
+        )
         and not _expands_request_acronym(
             request=request, candidate=decision.answer_focus
         )
@@ -380,13 +389,17 @@ def _normalized_policy_text(text: str) -> str:
 
 
 def _expands_request_acronym(*, request: str, candidate: str) -> bool:
-    candidate_tokens = _meaningful_tokens(candidate)
+    candidate_tokens = tuple(
+        token
+        for token in _TOKEN_PATTERN.findall(candidate.casefold())
+        if token not in _SCOPE_GENERIC_TOKENS
+    )
     request_acronyms = {
         acronym.casefold() for acronym in _ACRONYM_PATTERN.findall(request)
     }
     # A closed vocabulary is safer than accepting arbitrary same-initial phrases.
     return any(
-        expansion.issubset(candidate_tokens)
+        expansion == candidate_tokens
         for acronym, expansion in _KNOWN_ACRONYM_EXPANSIONS.items()
         if acronym in request_acronyms
     )
