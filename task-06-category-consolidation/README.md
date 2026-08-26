@@ -1,41 +1,63 @@
 # Task 6: Functions for categorical attributes
 
-## Assignment baseline
+## Goal
 
-Implement a function with two inputs:
+This package groups categories whose training frequency is strictly less than a
+percentage threshold into one collision-safe fallback label.
 
-1. a list of categorical values;
-2. a threshold percentage from 0 to 100.
+The assignment wording says "less frequent than the threshold", so categories at
+the exact boundary stay untouched. The threshold is learned on training data once
+and reused for validation, test, and inference so the preprocessing cannot leak
+future label information back into model fitting.
 
-Return a list in which categories occurring less frequently than the threshold are replaced by a generic category. Explain how this helps logistic regression for a binary outcome such as delayed/not delayed. Also describe another method for high-cardinality categorical data and an algorithm that handles categorical attributes without requiring the same preprocessing.
+## Public contract
 
-## Recommended stack and design
+- Input order and output length never change.
+- The threshold accepts finite real numbers from `0` to `100` inclusive.
+- Boolean thresholds are rejected explicitly so `True` and `False` cannot sneak in
+  as `1` and `0`.
+- The denominator includes every validated value, including an explicit missing
+  sentinel such as `None` or `""`.
+- Empty input is valid and returns an empty output.
+- `0` keeps every seen category.
+- `100` keeps only categories that occupy the full training set.
+- Unhashable values fail with an index-aware `TypeError`.
+- The fallback label is made unique at fit time if it would collide with a real
+  category.
+- Unseen inference categories are mapped to the fallback label and reported through
+  transform diagnostics.
 
-Use a small typed Python function backed by `collections.Counter`. No data-frame dependency is required for the core behavior. A thin pandas example may demonstrate pipeline integration without coupling the function to pandas.
+## API shape
 
-The contract must define:
+`RareCategoryConsolidator` is the reusable train/inference object.
 
-- whether the comparison is strictly less than the threshold, matching the assignment wording;
-- how missing values are represented and counted;
-- behavior for empty input and thresholds at 0 and 100;
-- validation for out-of-range thresholds and unhashable values;
-- how to avoid a collision between the generic label and a real category;
-- preservation of input order and length.
+- `fit(values)` records the observed and retained categories from training data.
+- `transform(values)` applies the frozen mapping.
+- `transform_with_diagnostics(values)` also reports unseen indexes and values.
+- `fit_transform(values)` is a convenience for one-shot training preprocessing.
+- `consolidate_rare_categories(values, threshold_percent, ...)` is a thin helper for
+  the assignment's standalone-function framing.
 
-## Modeling explanation
+## Why this helps logistic regression
 
-Grouping rare categories reduces the number of one-hot columns, stabilizes coefficients estimated from very small groups, and lowers the chance that a rare level becomes a brittle proxy for the target. The threshold must be fit on training data and reused unchanged for validation, test, and inference data.
+One-hot encoding turns every distinct category into its own coefficient. Very rare
+levels create sparse columns with weak support, so the fitted coefficients can swing
+hard because of noise instead of stable signal. Grouping rare levels reduces the
+number of fragile columns, makes the design matrix denser, and lowers the chance
+that one accidental category becomes a brittle proxy for the target.
 
-For an alternative, compare leakage-safe target encoding with smoothing and cross-fitting. CatBoost is the recommended example of an algorithm with native categorical handling; its ordered target statistics reduce, but do not eliminate, the need for correct validation and leakage controls.
+This is still a training-time decision. The threshold and retained-category set must
+come only from the training split, then stay frozen for every later split.
 
-## Acceptance checks
+## Alternative approaches
 
-- The function returns the expected values for exact-boundary frequencies.
-- Input order and length do not change.
-- Empty input and 0/100 thresholds have documented results.
-- Invalid thresholds and unsupported values fail with useful messages.
-- Training-derived category mappings are reusable on unseen data.
-- Tests cover generic-label collision, missing values, and unseen inference categories.
-- A 100,000-value fit-and-transform benchmark targets less than one second and 256 MB
-  peak memory on the recorded reference machine; the property-test suite has a
-  30-second ceiling.
+Leakage-safe target encoding is the most relevant alternative when the categorical
+space is large and many levels still matter. The safe version uses smoothing plus
+cross-fitting so each training row only sees target statistics from other folds.
+Without that discipline, target encoding leaks label information directly into the
+features.
+
+CatBoost is a strong example of an algorithm with native categorical handling. Its
+ordered target statistics reduce the need for manual rare-category grouping, but the
+validation split still has to stay honest because incorrect evaluation can leak just
+as badly there.
