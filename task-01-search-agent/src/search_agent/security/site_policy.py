@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from ipaddress import ip_address
 from types import MappingProxyType
 
 
@@ -141,7 +142,13 @@ def _normalize_policy_domain(domain: str) -> str:
     if not isinstance(domain, str):
         raise ValueError("policy domains must be strings")
     candidate = domain.strip().rstrip(".").casefold()
-    if not candidate or any(character in candidate for character in "/:@%\\"):
+    if not candidate:
+        raise ValueError("policy domains must be bare host names")
+    try:
+        return ip_address(candidate).compressed
+    except ValueError:
+        pass
+    if any(character in candidate for character in "/:@%\\"):
         raise ValueError("policy domains must be bare host names")
     try:
         ascii_domain = candidate.encode("idna").decode("ascii")

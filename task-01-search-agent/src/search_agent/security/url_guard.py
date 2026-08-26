@@ -20,6 +20,7 @@ from .site_policy import (
 IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 _NAT64_WELL_KNOWN = ipaddress.IPv6Network("64:ff9b::/96")
 _NAT64_LOCAL = ipaddress.IPv6Network("64:ff9b:1::/48")
+_EXPLICITLY_NON_PUBLIC_NETWORKS = (ipaddress.IPv4Network("192.88.99.0/24"),)
 _LOCAL_HOST_NAMES = frozenset({"home.arpa", "localdomain", "localhost"})
 _LOCAL_HOST_SUFFIXES = (
     ".home.arpa",
@@ -85,11 +86,10 @@ class UrlGuard:
             )
         literal = _parse_ip(host)
         addresses: tuple[IpAddress, ...]
+        site_decision = self.policy.require_allowed(host)
         if literal is not None:
-            site_decision = SiteDecision(True, PolicyReason.ALLOWED)
             addresses = (literal,)
         else:
-            site_decision = self.policy.require_allowed(host)
             if host in _LOCAL_HOST_NAMES or host.endswith(_LOCAL_HOST_SUFFIXES):
                 raise PolicyViolationError(
                     PolicyReason.BLOCKED_ADDRESS, "local host names are not allowed"
@@ -139,19 +139,14 @@ class UrlGuard:
         *,
         redirect_count: int,
     ) -> GuardedUrl:
+        _validate_raw_url_text(location)
         return await self.validate_for_connection(
             urljoin(current_url, location), redirect_count=redirect_count
         )
 
 
 def _normalize_url(raw_url: str) -> tuple[str, str, int, str]:
-    if not isinstance(raw_url, str) or not raw_url or len(raw_url) > 2_048:
-        raise PolicyViolationError(PolicyReason.INVALID_URL, "URL is invalid")
-    if "\\" in raw_url or any(
-        character.isspace() or unicodedata.category(character) in {"Cc", "Cf"}
-        for character in raw_url
-    ):
-        raise PolicyViolationError(PolicyReason.INVALID_URL, "URL is invalid")
+    _validate_raw_url_text(raw_url)
     try:
         parsed = urlsplit(raw_url)
         scheme = parsed.scheme.lower()
@@ -171,7 +166,12 @@ def _normalize_url(raw_url: str) -> tuple[str, str, int, str]:
         if parsed.netloc.endswith(":"):
             raise PolicyViolationError(PolicyReason.INVALID_URL, "URL is invalid")
         raw_host = parsed.hostname
-        port = parsed.port or (443 if scheme == "https" else 80)
+        parsed_port = parsed.port
+        port = (
+            parsed_port
+            if parsed_port is not None
+            else (443 if scheme == "https" else 80)
+        )
     except PolicyViolationError:
         raise
     except (UnicodeError, ValueError) as exc:
@@ -186,6 +186,16 @@ def _normalize_url(raw_url: str) -> tuple[str, str, int, str]:
     netloc = rendered_host if port == default_port else f"{rendered_host}:{port}"
     canonical_url = urlunsplit((scheme, netloc, path, parsed.query, ""))
     return scheme, host, port, canonical_url
+
+
+def _validate_raw_url_text(raw_url: str) -> None:
+    if not isinstance(raw_url, str) or not raw_url or len(raw_url) > 2_048:
+        raise PolicyViolationError(PolicyReason.INVALID_URL, "URL is invalid")
+    if "\\" in raw_url or any(
+        character.isspace() or unicodedata.category(character) in {"Cc", "Cf"}
+        for character in raw_url
+    ):
+        raise PolicyViolationError(PolicyReason.INVALID_URL, "URL is invalid")
 
 
 def _normalize_host(raw_host: str) -> str:
@@ -222,6 +232,8 @@ def _parse_ip(host: str) -> IpAddress | None:
 
 
 def _is_public_address(address: IpAddress) -> bool:
+    if any(address in network for network in _EXPLICITLY_NON_PUBLIC_NETWORKS):
+        return False
     if (
         not address.is_global
         or address.is_link_local
@@ -237,6 +249,9 @@ def _is_public_address(address: IpAddress) -> bool:
         if address.ipv4_mapped is not None or address.sixtofour is not None:
             return False
         if address.teredo is not None:
+            return False
+        interface_prefix = (int(address) >> 32) & 0xFFFFFFFF
+        if interface_prefix in {0x00005EFE, 0x02005EFE}:
             return False
         if address in _NAT64_WELL_KNOWN:
             embedded = ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)

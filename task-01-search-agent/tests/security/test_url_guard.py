@@ -68,6 +68,7 @@ async def test_normalizes_idna_default_port_and_fragment() -> None:
         (" https://example.com/", PolicyReason.INVALID_URL),
         ("https://exam\u200bple.com/", PolicyReason.INVALID_URL),
         ("https://example.com:/", PolicyReason.INVALID_URL),
+        ("https://example.com:0/", PolicyReason.DISALLOWED_PORT),
         ("https://example.com:99999/", PolicyReason.INVALID_URL),
         ("https:///missing-host", PolicyReason.INVALID_HOST),
     ],
@@ -90,6 +91,7 @@ async def test_rejects_malformed_or_disallowed_urls(
         "100.64.0.1",
         "127.0.0.1",
         "169.254.169.254",
+        "192.88.99.2",
         "192.168.1.1",
         "224.0.0.1",
         "255.255.255.255",
@@ -98,6 +100,8 @@ async def test_rejects_malformed_or_disallowed_urls(
         "::ffff:127.0.0.1",
         "64:ff9b::7f00:1",
         "64:ff9b:1::1",
+        "2001:4860:4860::5efe:7f00:1",
+        "2001:4860:4860::5efe:a9fe:a9fe",
         "fc00::1",
         "fe80::1",
         "ff02::1",
@@ -211,6 +215,37 @@ async def test_each_redirect_is_joined_revalidated_and_bounded() -> None:
         )
     assert denied.value.reason is PolicyReason.DENIED_DOMAIN
     assert exhausted.value.reason is PolicyReason.TOO_MANY_REDIRECTS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "location",
+    ["\r\n//redirect.example/path", "https://red\tirect.example/path", "\x00/path"],
+)
+async def test_redirect_controls_are_rejected_before_join(location: str) -> None:
+    with pytest.raises(PolicyViolationError) as error:
+        await _guard(
+            {"example.com": ("93.184.216.34",)}
+        ).validate_redirect_for_connection(
+            "https://example.com/start",
+            location,
+            redirect_count=1,
+        )
+
+    assert error.value.reason is PolicyReason.INVALID_URL
+
+
+@pytest.mark.asyncio
+async def test_public_ip_literal_obeys_explicit_domain_policy() -> None:
+    guard = _guard(
+        {},
+        policy=SitePolicy(denied_domains=frozenset({"8.8.8.8"})),
+    )
+
+    with pytest.raises(PolicyViolationError) as error:
+        await guard.validate_for_connection("https://8.8.8.8/")
+
+    assert error.value.reason is PolicyReason.DENIED_DOMAIN
 
 
 @pytest.mark.asyncio
