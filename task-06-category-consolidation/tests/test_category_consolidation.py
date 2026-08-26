@@ -16,6 +16,17 @@ from category_consolidation import (
 )
 
 
+class _SemanticCategory:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def __hash__(self) -> int:
+        return hash(self.value)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _SemanticCategory) and self.value == other.value
+
+
 def test_strict_less_than_boundary_and_order_are_preserved() -> None:
     values = ["a", "a", "b", "b", "c"]
 
@@ -28,11 +39,22 @@ def test_strict_less_than_boundary_and_order_are_preserved() -> None:
     ]
 
 
+def test_exact_fractional_boundary_is_retained() -> None:
+    values = ["boundary", "major", "major", "major", "major", "major"]
+
+    assert consolidate_rare_categories(values, 100.0 / 6.0)[0] == "boundary"
+
+
 def test_empty_input_returns_empty_output() -> None:
     consolidator = RareCategoryConsolidator(25.0)
 
     assert consolidator.fit_transform([]).values == []
     assert consolidator.transform([]) == []
+
+
+def test_transform_before_fit_fails() -> None:
+    with pytest.raises(RuntimeError, match="fit"):
+        RareCategoryConsolidator(25.0).transform(["value"])
 
 
 def test_zero_threshold_keeps_seen_categories() -> None:
@@ -64,6 +86,17 @@ def test_collision_safe_fallback_label_is_resolved_at_fit_time() -> None:
 
     assert consolidator.resolved_rare_label == "__RARE____rare"
     assert result.values == ["__RARE____rare", "__RARE____rare", "__RARE____rare"]
+
+
+def test_collision_fallback_is_deterministic_for_equal_objects() -> None:
+    first = RareCategoryConsolidator(
+        50.0, rare_label=_SemanticCategory("requested")
+    ).fit([_SemanticCategory("requested"), "other"])
+    second = RareCategoryConsolidator(
+        50.0, rare_label=_SemanticCategory("requested")
+    ).fit([_SemanticCategory("requested"), "other"])
+
+    assert first.resolved_rare_label == second.resolved_rare_label
 
 
 def test_unseen_categories_map_to_rare_label_with_diagnostics() -> None:
@@ -101,6 +134,13 @@ def test_boolean_thresholds_are_rejected(boolean_threshold: bool) -> None:
 def test_unhashable_values_raise_indexed_error() -> None:
     with pytest.raises(UnhashableCategoryError, match="index 1") as exc_info:
         consolidate_rare_categories(["a", ["b"]], 20.0)
+
+    assert exc_info.value.index == 1
+
+
+def test_nested_unhashable_value_raises_indexed_error() -> None:
+    with pytest.raises(UnhashableCategoryError) as exc_info:
+        consolidate_rare_categories(["a", (["nested"],)], 20.0)
 
     assert exc_info.value.index == 1
 

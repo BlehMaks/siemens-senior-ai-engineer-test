@@ -48,6 +48,7 @@ class RareCategoryConsolidator:
         init=False, default_factory=frozenset
     )
     resolved_rare_label: Hashable = field(init=False)
+    _is_fitted: bool = field(init=False, default=False, repr=False)
 
     def __post_init__(self) -> None:
         self.threshold_percent = _validate_threshold(self.threshold_percent)
@@ -57,24 +58,32 @@ class RareCategoryConsolidator:
 
     def fit(self, values: Iterable[object]) -> RareCategoryConsolidator:
         validated_values = _validate_values(values)
-        self.resolved_rare_label = _resolve_rare_label(
+        resolved_rare_label = _resolve_rare_label(
             requested_label=self.rare_label,
             observed_values=validated_values,
             missing_sentinel=self.missing_sentinel,
         )
-        self.observed_categories = frozenset(validated_values)
-        self.retained_categories = frozenset(
+        observed_categories = frozenset(validated_values)
+        retained_categories = frozenset(
             value
             for value, count in Counter(validated_values).items()
             if _frequency_percent(count=count, total=len(validated_values))
             >= self.threshold_percent
         )
+        self.resolved_rare_label = resolved_rare_label
+        self.observed_categories = observed_categories
+        self.retained_categories = retained_categories
+        self._is_fitted = True
         return self
 
     def transform(self, values: Iterable[object]) -> list[Hashable]:
         return self.transform_with_diagnostics(values).values
 
     def transform_with_diagnostics(self, values: Iterable[object]) -> TransformResult:
+        # Empty learned sets are valid, so fitted state cannot be inferred from them.
+        if not self._is_fitted:
+            raise RuntimeError("fit must be called before transform")
+
         validated_values = _validate_values(values)
         unseen_indexes: list[int] = []
         unseen_values: list[Hashable] = []
@@ -140,6 +149,11 @@ def _validate_values(values: Iterable[object]) -> tuple[Hashable, ...]:
     for index, value in enumerate(values):
         if not isinstance(value, Hashable):
             raise UnhashableCategoryError(index=index, value=value)
+        try:
+            # Hashable only checks for __hash__; nested mutable values can still fail.
+            hash(value)
+        except TypeError:
+            raise UnhashableCategoryError(index=index, value=value) from None
         validated.append(value)
     return tuple(validated)
 
@@ -147,12 +161,17 @@ def _validate_values(values: Iterable[object]) -> tuple[Hashable, ...]:
 def _assert_hashable(value: object, *, label: str) -> None:
     if not isinstance(value, Hashable):
         raise TypeError(f"{label} must be hashable")
+    try:
+        hash(value)
+    except TypeError:
+        raise TypeError(f"{label} must be hashable") from None
 
 
 def _frequency_percent(*, count: int, total: int) -> float:
     if total == 0:
         return 0.0
-    return (count / total) * 100.0
+    # Multiplying the exact integer count first preserves float boundary expressions.
+    return (count * 100.0) / total
 
 
 def _resolve_rare_label(
@@ -165,7 +184,8 @@ def _resolve_rare_label(
     if requested_label not in collisions and requested_label != missing_sentinel:
         return requested_label
 
-    base_label = f"{requested_label}__rare"
+    # A fixed base avoids object representations whose default text contains addresses.
+    base_label = "__RARE____rare"
     candidate = base_label
     suffix = 1
 
