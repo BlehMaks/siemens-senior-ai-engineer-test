@@ -36,7 +36,7 @@ def test_clean_index_passes(repository: Path) -> None:
         ("infra/prod.tfstate.1700000000", b"{}\n", "state filename"),
         (
             "config.py",
-            seed("OPEN", 'ROUTER_API_KEY = "not-a-real-key"\n'),
+            seed("OPENROUTER_API_", 'KEY = "not-a-real-key"\n'),
             "OpenRouter",
         ),
         (
@@ -55,6 +55,21 @@ def test_clean_index_passes(repository: Path) -> None:
             "credential",
         ),
         (
+            "punctuation.env",
+            seed("pass", 'word = "P@ssw0rd!VeryLong"\n'),
+            "credential",
+        ),
+        (
+            "config.json",
+            seed('{"api_', 'key": "abcdefghijklmnop"}\n'),
+            "credential",
+        ),
+        (
+            "dsa-key.txt",
+            seed("-----BEGIN DSA ", "PRIVATE KEY-----\n"),
+            "private key",
+        ),
+        (
             "notes.md",
             seed("/Us", "ers/example/private/input.csv\n"),
             "absolute user path",
@@ -69,6 +84,18 @@ def test_clean_index_passes(repository: Path) -> None:
             seed("C:\\Us", "ers\\Alice\\private\\input.csv\n"),
             "absolute user path",
         ),
+        (
+            "root-notes.md",
+            seed("/ro", "ot/private/input.csv\n"),
+            "absolute user path",
+        ),
+        (
+            "windows-lowercase.md",
+            seed("c:\\us", "ers\\alice\\private\\input.csv\n"),
+            "absolute user path",
+        ),
+        (".ENV.PRODUCTION", b"SAFE_VALUE=1\n", "state filename"),
+        ("infra/prod.TFSTATE.BACKUP", b"{}\n", "state filename"),
     ],
 )
 def test_forbidden_staged_artifact_fails(
@@ -102,3 +129,11 @@ def test_tracked_symlink_fails(repository: Path) -> None:
     git(repository, "add", link.name)
 
     assert audit_repository(repository) == ["tracked symlink: public-data.csv"]
+
+
+def test_http_url_is_not_a_machine_path(repository: Path) -> None:
+    link = repository / "links.md"
+    link.write_text("https://example.test/home/alice/report\n", encoding="utf-8")
+    git(repository, "add", link.name)
+
+    assert audit_repository(repository) == []

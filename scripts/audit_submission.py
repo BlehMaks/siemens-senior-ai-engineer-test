@@ -29,13 +29,13 @@ FORBIDDEN_SUFFIXES = {
 CONTENT_RULES = (
     (
         "private key",
-        re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----"),
+        re.compile(rb"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----"),
     ),
     (
         "credential assignment",
         re.compile(
-            rb"(?i)(?:api[_-]?key|password|secret|token)\s*[:=]\s*"
-            rb"[\"']?[A-Za-z0-9_./+=-]{16,}[\"']?"
+            rb"(?i)[\"']?(?:api[_-]?key|password|secret|token)[\"']?\s*[:=]\s*"
+            rb"(?:[\"'][^\"'\r\n]{8,}[\"']|[^\s#,}\]]{16,})"
         ),
     ),
     ("OpenRouter credential", re.compile(rb"OPENROUTER_(?:API_)?KEY")),
@@ -47,8 +47,9 @@ CONTENT_RULES = (
     (
         "absolute user path",
         re.compile(
-            rb"(?:/Users/|/home/)[A-Za-z0-9._-]+/"
-            rb"|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+\\"
+            rb"(?m)(?:^|[\s\"'(=])"
+            rb"(?:(?:/Users/|/home/)[A-Za-z0-9._-]+/|/root/"
+            rb"|(?i:[A-Z]:\\Users\\[A-Za-z0-9._-]+\\))"
         ),
     ),
 )
@@ -84,7 +85,7 @@ def _nul_paths(raw: bytes) -> list[str]:
 
 def _path_findings(path: str) -> list[str]:
     normalized = PurePosixPath(path)
-    name = normalized.name
+    name = normalized.name.lower()
     findings: list[str] = []
     if any(part in FORBIDDEN_PARTS for part in normalized.parts):
         findings.append(f"forbidden path: {path}")
