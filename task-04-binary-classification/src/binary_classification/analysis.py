@@ -12,7 +12,7 @@ from sklearn.impute import SimpleImputer  # type: ignore[import-untyped]
 from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
 from sklearn.metrics import average_precision_score  # type: ignore[import-untyped]
 from sklearn.model_selection import (  # type: ignore[import-untyped]
-    StratifiedKFold,
+    StratifiedGroupKFold,
     cross_val_predict,
 )
 from sklearn.pipeline import Pipeline  # type: ignore[import-untyped]
@@ -35,7 +35,11 @@ class DataProfile:
     class_counts: dict[str, int]
     missing_counts: dict[str, int]
     unique_counts: dict[str, int]
+    feature_group_count: int
     duplicated_feature_rows: int
+    duplicated_feature_groups: int
+    max_feature_group_size: int
+    conflicting_feature_groups: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,8 +78,20 @@ def _is_numeric(series: pd.Series[Any]) -> bool:
     )
 
 
+def feature_group_ids(frame: pd.DataFrame) -> pd.Series[int]:
+    """Assign the same group to rows with the same complete feature vector."""
+
+    features = _feature_columns(frame)
+    group_ids, _ = pd.MultiIndex.from_frame(frame[features]).factorize(sort=False)
+    return pd.Series(group_ids, index=frame.index, name="feature_group")
+
+
 def _single_feature_predictions(
-    frame: pd.DataFrame, column: str, target: pd.Series[bool], seed: int
+    frame: pd.DataFrame,
+    column: str,
+    target: pd.Series[bool],
+    groups: pd.Series[int],
+    seed: int,
 ) -> pd.Series[float]:
     if _is_numeric(frame[column]):
         values = pd.DataFrame(
@@ -88,7 +104,9 @@ def _single_feature_predictions(
             ]
         )
     else:
-        values = frame[[column]]
+        values = (
+            frame[[column]].astype(object).where(frame[[column]].notna(), float("nan"))
+        )
         preprocessing = Pipeline(
             [
                 (
@@ -99,10 +117,13 @@ def _single_feature_predictions(
             ]
         )
 
-    smallest_class = int(target.value_counts().min())
-    if smallest_class < 2:
-        raise ValueError("Leakage screening requires at least two rows per class")
-    folds = min(5, smallest_class)
+    group_targets = pd.DataFrame({"group": groups, "target": target}).drop_duplicates()
+    if group_targets.groupby("group")["target"].nunique().max() != 1:
+        raise ValueError("Identical feature vectors have conflicting targets")
+    smallest_class_groups = int(group_targets["target"].value_counts().min())
+    if smallest_class_groups < 2:
+        raise ValueError("Leakage screening requires at least two groups per class")
+    folds = min(5, smallest_class_groups)
     estimator = Pipeline(
         [
             ("preprocess", preprocessing),
@@ -114,9 +135,15 @@ def _single_feature_predictions(
             ),
         ]
     )
-    splitter = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
+    splitter = StratifiedGroupKFold(n_splits=folds, shuffle=True, random_state=seed)
     probabilities = cross_val_predict(
-        estimator, values, target, cv=splitter, method="predict_proba", n_jobs=1
+        estimator,
+        values,
+        target,
+        groups=groups,
+        cv=splitter,
+        method="predict_proba",
+        n_jobs=1,
     )[:, 1]
     return pd.Series(probabilities, index=frame.index)
 
@@ -127,9 +154,16 @@ def analyze_training_frame(frame: pd.DataFrame, *, seed: int = 42) -> AnalysisRe
     required = {ID_COLUMN, TARGET_COLUMN}
     if not required.issubset(frame.columns):
         raise ValueError(f"Frame must contain {sorted(required)}")
+    if frame.empty:
+        raise ValueError("Frame must contain training rows")
 
     features = _feature_columns(frame)
     target = frame[TARGET_COLUMN].eq(MINORITY_LABEL)
+    groups = feature_group_ids(frame)
+    group_sizes = groups.value_counts()
+    group_targets = pd.DataFrame({"group": groups, "target": target}).groupby("group")[
+        "target"
+    ]
     class_counts = {
         str(label): int(count)
         for label, count in frame[TARGET_COLUMN].value_counts().sort_index().items()
@@ -142,9 +176,13 @@ def analyze_training_frame(frame: pd.DataFrame, *, seed: int = 42) -> AnalysisRe
         unique_counts={
             column: int(frame[column].nunique(dropna=False)) for column in features
         },
+        feature_group_count=int(group_sizes.size),
         duplicated_feature_rows=int(
             frame.duplicated(subset=features, keep=False).sum()
         ),
+        duplicated_feature_groups=int((group_sizes > 1).sum()),
+        max_feature_group_size=int(group_sizes.max()),
+        conflicting_feature_groups=int((group_targets.nunique() > 1).sum()),
     )
 
     identifier_columns = tuple(
@@ -165,7 +203,7 @@ def analyze_training_frame(frame: pd.DataFrame, *, seed: int = 42) -> AnalysisRe
             frame[column].astype(object).where(frame[column].notna(), "__MISSING__")
         )
         mapping = pd.DataFrame({"value": values, "target": target}).groupby(
-            "value", dropna=False
+            "value", dropna=False, sort=False
         )["target"]
         if mapping.nunique().max() == 1 and column not in identifier_columns:
             deterministic_columns.append(column)
@@ -178,7 +216,7 @@ def analyze_training_frame(frame: pd.DataFrame, *, seed: int = 42) -> AnalysisRe
         )
         missingness_gaps[column] = round(gap, 6)
 
-        predictions = _single_feature_predictions(frame, column, target, seed)
+        predictions = _single_feature_predictions(frame, column, target, groups, seed)
         single_feature_scores[column] = round(
             float(average_precision_score(target, predictions)), 6
         )

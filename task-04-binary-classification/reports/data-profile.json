@@ -1,0 +1,100 @@
+{
+  "leakage": {
+    "deterministic_target_columns": [],
+    "identifier_columns": [
+      "id"
+    ],
+    "missingness_rate_gaps": {
+      "BIB": 0.0,
+      "COD": 0.0,
+      "ERG": 0.018692,
+      "FAN": 0.013545,
+      "GJAH": 0.018692,
+      "KAT": 0.016017,
+      "LUK": 0.0,
+      "MYR": 0.011445,
+      "NUS": 0.013545,
+      "PKD": 0.011445,
+      "RAS": 0.05875,
+      "SIS": 0.0,
+      "TOK": 0.0,
+      "UIN": 0.016017,
+      "VOL": 0.0,
+      "WET": 0.0,
+      "XIN": 0.0
+    },
+    "quarantined_columns": [
+      "id"
+    ],
+    "single_feature_pr_auc": {
+      "BIB": 0.0818,
+      "COD": 0.083353,
+      "ERG": 0.096382,
+      "FAN": 0.079414,
+      "GJAH": 0.096382,
+      "KAT": 0.077089,
+      "LUK": 0.105519,
+      "MYR": 0.140255,
+      "NUS": 0.079414,
+      "PKD": 0.108604,
+      "RAS": 0.12133,
+      "SIS": 0.139069,
+      "TOK": 0.075469,
+      "UIN": 0.09185,
+      "VOL": 0.332685,
+      "WET": 0.131859,
+      "XIN": 0.122853
+    }
+  },
+  "profile": {
+    "class_counts": {
+      "n": 276,
+      "y": 3424
+    },
+    "conflicting_feature_groups": 0,
+    "duplicated_feature_groups": 214,
+    "duplicated_feature_rows": 3424,
+    "feature_count": 17,
+    "feature_group_count": 490,
+    "max_feature_group_size": 16,
+    "missing_counts": {
+      "BIB": 0,
+      "COD": 0,
+      "ERG": 64,
+      "FAN": 100,
+      "GJAH": 64,
+      "KAT": 39,
+      "LUK": 0,
+      "MYR": 66,
+      "NUS": 100,
+      "PKD": 66,
+      "RAS": 2145,
+      "SIS": 0,
+      "TOK": 0,
+      "UIN": 39,
+      "VOL": 0,
+      "WET": 0,
+      "XIN": 0
+    },
+    "rows": 3700,
+    "unique_counts": {
+      "BIB": 179,
+      "COD": 3,
+      "ERG": 4,
+      "FAN": 137,
+      "GJAH": 4,
+      "KAT": 3,
+      "LUK": 182,
+      "MYR": 14,
+      "NUS": 137,
+      "PKD": 9,
+      "RAS": 3,
+      "SIS": 118,
+      "TOK": 2,
+      "UIN": 289,
+      "VOL": 2,
+      "WET": 23,
+      "XIN": 2
+    }
+  }
+}

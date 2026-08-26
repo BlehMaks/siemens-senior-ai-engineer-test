@@ -1,10 +1,16 @@
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-from binary_classification.analysis import analyze_training_frame, write_analysis
+from binary_classification.analysis import (
+    analyze_training_frame,
+    feature_group_ids,
+    write_analysis,
+)
+from binary_classification.data import load_training_data
 
 
 def _analysis_frame(rows: int = 100) -> pd.DataFrame:
@@ -34,6 +40,9 @@ def test_profile_captures_class_missingness_cardinality_and_duplicates() -> None
     assert report.profile.missing_counts["missing_signal"] == 50
     assert report.profile.unique_counts["numeric"] == 7
     assert report.profile.duplicated_feature_rows > 0
+    assert report.profile.duplicated_feature_groups > 0
+    assert report.profile.max_feature_group_size > 1
+    assert report.profile.conflicting_feature_groups == 0
 
 
 def test_leakage_screen_quarantines_identifiers_and_deterministic_signals() -> None:
@@ -63,9 +72,26 @@ def test_unique_feature_is_treated_as_identifier_not_target_mapping() -> None:
     assert "serial" not in report.leakage.deterministic_target_columns
 
 
+def test_complete_duplicate_vectors_receive_the_same_split_group() -> None:
+    frame = _analysis_frame(20)
+    frame.loc[19, ["signal", "numeric", "missing_signal"]] = frame.loc[
+        17, ["signal", "numeric", "missing_signal"]
+    ]
+
+    groups = feature_group_ids(frame)
+
+    assert groups[19] == groups[17]
+    assert groups[18] != groups[17]
+
+
 def test_requires_target_and_identifier_columns() -> None:
     with pytest.raises(ValueError, match="must contain"):
         analyze_training_frame(pd.DataFrame({"feature": [1, 2]}))
+
+
+def test_rejects_empty_training_frame() -> None:
+    with pytest.raises(ValueError, match="training rows"):
+        analyze_training_frame(pd.DataFrame(columns=["id", "Class"]))
 
 
 def test_requires_enough_examples_in_each_class() -> None:
@@ -73,7 +99,20 @@ def test_requires_enough_examples_in_each_class() -> None:
         {"id": [1, 2, 3], "feature": [1, 2, 3], "Class": ["n", "y", "y"]}
     )
 
-    with pytest.raises(ValueError, match="at least two rows per class"):
+    with pytest.raises(ValueError, match="at least two groups per class"):
+        analyze_training_frame(frame)
+
+
+def test_rejects_conflicting_targets_for_identical_feature_vectors() -> None:
+    frame = pd.DataFrame(
+        {
+            "id": [1, 2, 3, 4],
+            "feature": ["same", "same", "other", "third"],
+            "Class": ["n", "y", "n", "y"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="conflicting targets"):
         analyze_training_frame(frame)
 
 
@@ -101,3 +140,17 @@ def test_write_analysis_emits_stable_machine_readable_json(tmp_path: Path) -> No
     report = write_analysis(part1, part2, output)
 
     assert json.loads(output.read_text(encoding="utf-8")) == report.to_dict()
+
+
+def test_committed_profile_matches_private_data_when_supplied() -> None:
+    input_dir_value = os.environ.get("SIEMENS_TASK4_INPUT_DIR")
+    if input_dir_value is None:
+        pytest.skip("Set SIEMENS_TASK4_INPUT_DIR to reproduce the committed profile")
+    input_dir = Path(input_dir_value)
+    dataset = load_training_data(
+        input_dir / "Training_part1.csv", input_dir / "Training_part2.csv"
+    )
+    report = analyze_training_frame(dataset.frame)
+    profile_path = Path(__file__).parents[1] / "reports" / "data-profile.json"
+
+    assert json.loads(profile_path.read_text(encoding="utf-8")) == report.to_dict()
