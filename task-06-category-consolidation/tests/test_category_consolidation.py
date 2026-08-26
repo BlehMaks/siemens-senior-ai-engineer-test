@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import tracemalloc
-from math import inf, nan
+from math import inf, nan, nextafter
 from time import perf_counter
 
 import pytest
@@ -27,6 +27,11 @@ class _SemanticCategory:
         return isinstance(other, _SemanticCategory) and self.value == other.value
 
 
+class _UnexpectedHashFailure:
+    def __hash__(self) -> int:
+        raise RuntimeError("unexpected hash failure")
+
+
 def test_strict_less_than_boundary_and_order_are_preserved() -> None:
     values = ["a", "a", "b", "b", "c"]
 
@@ -43,6 +48,21 @@ def test_exact_fractional_boundary_is_retained() -> None:
     values = ["boundary", "major", "major", "major", "major", "major"]
 
     assert consolidate_rare_categories(values, 100.0 / 6.0)[0] == "boundary"
+
+
+def test_equivalent_high_fraction_boundary_is_retained() -> None:
+    values = ["boundary"] * 5 + ["other"]
+
+    assert (
+        consolidate_rare_categories(values, (5.0 / 6.0) * 100.0)[:5] == ["boundary"] * 5
+    )
+
+
+def test_next_float_above_fractional_boundary_is_consolidated() -> None:
+    values = ["boundary"] * 5 + ["other"]
+    threshold = nextafter((5.0 / 6.0) * 100.0, inf)
+
+    assert consolidate_rare_categories(values, threshold)[:5] == ["__RARE__"] * 5
 
 
 def test_empty_input_returns_empty_output() -> None:
@@ -143,6 +163,18 @@ def test_nested_unhashable_value_raises_indexed_error() -> None:
         consolidate_rare_categories(["a", (["nested"],)], 20.0)
 
     assert exc_info.value.index == 1
+
+
+def test_writable_memoryview_raises_indexed_error() -> None:
+    with pytest.raises(UnhashableCategoryError) as exc_info:
+        consolidate_rare_categories(["a", memoryview(bytearray(b"value"))], 20.0)
+
+    assert exc_info.value.index == 1
+
+
+def test_unexpected_hash_exception_is_not_hidden() -> None:
+    with pytest.raises(RuntimeError, match="unexpected hash failure"):
+        consolidate_rare_categories([_UnexpectedHashFailure()], 20.0)
 
 
 def test_custom_missing_sentinel_can_be_retained_when_frequent() -> None:

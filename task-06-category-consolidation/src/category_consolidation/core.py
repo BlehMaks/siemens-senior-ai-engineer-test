@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Hashable, Iterable
 from dataclasses import dataclass, field
-from math import isfinite
+from math import inf, isfinite, nextafter
 from numbers import Real
 
 
@@ -67,8 +67,11 @@ class RareCategoryConsolidator:
         retained_categories = frozenset(
             value
             for value, count in Counter(validated_values).items()
-            if _frequency_percent(count=count, total=len(validated_values))
-            >= self.threshold_percent
+            if _meets_threshold(
+                count=count,
+                total=len(validated_values),
+                threshold_percent=self.threshold_percent,
+            )
         )
         self.resolved_rare_label = resolved_rare_label
         self.observed_categories = observed_categories
@@ -150,9 +153,9 @@ def _validate_values(values: Iterable[object]) -> tuple[Hashable, ...]:
         if not isinstance(value, Hashable):
             raise UnhashableCategoryError(index=index, value=value)
         try:
-            # Hashable only checks for __hash__; nested mutable values can still fail.
+            # Hashable misses nested mutables and writable memoryviews until hash().
             hash(value)
-        except TypeError:
+        except (TypeError, ValueError):
             raise UnhashableCategoryError(index=index, value=value) from None
         validated.append(value)
     return tuple(validated)
@@ -163,15 +166,15 @@ def _assert_hashable(value: object, *, label: str) -> None:
         raise TypeError(f"{label} must be hashable")
     try:
         hash(value)
-    except TypeError:
+    except (TypeError, ValueError):
         raise TypeError(f"{label} must be hashable") from None
 
 
-def _frequency_percent(*, count: int, total: int) -> float:
-    if total == 0:
-        return 0.0
-    # Multiplying the exact integer count first preserves float boundary expressions.
-    return (count * 100.0) / total
+def _meets_threshold(*, count: int, total: int, threshold_percent: float) -> bool:
+    frequency = count / total
+    threshold = threshold_percent / 100.0
+    # Percentage scaling can move an equal rational boundary by one float step.
+    return frequency >= nextafter(threshold, -inf)
 
 
 def _resolve_rare_label(
