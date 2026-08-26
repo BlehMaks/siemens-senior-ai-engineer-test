@@ -19,9 +19,10 @@ The same application contracts should work in both targets. The difference is th
 - Cloud Run for the stateless API and orchestration worker.
 - Cloud Tasks for bounded asynchronous dispatch in the assessment environment;
   Pub/Sub pull consumers for the enterprise event backbone and fan-out.
-- A model-gateway contract with local Ollama for development, GKE-hosted open models
-  for company-controlled production inference, and Vertex AI only when its model,
-  region, data terms, latency, and cost pass the promotion gates.
+- A model-gateway contract with local Ollama for development. Production can use
+  Cloud Run GPU for variable single-GPU demand, GKE for sustained or multi-GPU open
+  model serving, Vertex AI for approved managed inference, or an on-premises backend.
+  Each route must pass model, region, data, latency, quality, and cost gates.
 - Firestore for assessment state. Production evaluates Spanner for strongly
   consistent regional or multi-region control state and AlloyDB/PostgreSQL for a
   regional relational workload. Semantic memory uses a separate evidence and
@@ -33,7 +34,9 @@ The same application contracts should work in both targets. The difference is th
 - Cloud Logging, Monitoring, Trace, Error Reporting, and alerting tied to service-level objectives.
 - GitHub Actions with Workload Identity Federation. CI receives no long-lived Google Cloud service-account key.
 
-This design uses managed services and scale-to-demand paths instead of leaving a GPU virtual machine running. A dedicated GPU deployment is acceptable only if measured traffic, latency, and data constraints make the managed endpoint unsuitable.
+This design uses cloud-native managed services instead of direct Compute Engine
+instances. Compute Engine is an exception for a proven VM-bound operating system,
+driver, appliance, or hardware requirement. It is not a production baseline.
 
 ## Production target for Siemens-wide scale
 
@@ -54,6 +57,11 @@ second, in-flight runs, pages per run, tokens per run, residency, and SLO data. 
 system needs per-tenant budgets, queue backpressure, admission control, and graceful
 degradation before it needs a fleet of always-on GPUs.
 
+A required fake-provider load scenario exercises submission, status, SSE, cancel,
+idempotency, bounded rejection, and recovery without paid cloud. The architecture
+worksheet includes a 100 runs/second burst with 5,000 to 15,000 in-flight runs as a
+stress envelope. It is a design test, not a claim of measured production capacity.
+
 ### Enterprise architecture
 
 ```mermaid
@@ -69,14 +77,20 @@ flowchart LR
         EU_ENTRY --> API
         API[Stateless API service]
         QUEUE[Cloud Tasks for controlled dispatch]
-        EVENTS[Pub/Sub for fan-out events]
+        EVENTS[Pub/Sub command and event backbone]
         WORKER[Research worker]
+        FETCH[Bounded fetch or callback worker]
         POLICY[Guardrail and egress policy service]
         DATA[Run state, events, memory, artifacts]
-        MODEL[Model gateway: local model, Vertex AI, or GKE/vLLM pool]
+        MODEL[Model gateway: Cloud Run GPU, Vertex AI, GKE/vLLM, or on-prem]
         OBS[Logs, metrics, traces, audit]
-        API --> QUEUE
-        QUEUE --> WORKER
+        API --> DATA
+        API --> EVENTS
+        EVENTS --> WORKER
+        WORKER --> QUEUE
+        QUEUE --> FETCH
+        FETCH --> POLICY
+        FETCH --> EVENTS
         WORKER --> POLICY
         WORKER --> MODEL
         WORKER --> DATA
@@ -105,11 +119,38 @@ The assessment deployment keeps Cloud Run, Cloud Tasks, Firestore, Secret Manage
   work. Pub/Sub pull consumers become the high-throughput production event backbone
   for orchestration and fan-out. Application idempotency remains mandatory because
   delivery and publisher retries can still create repeated work.
-- Cloud Run remains a strong API/control-plane runtime. GKE Autopilot becomes the production worker/model-serving option when the workload needs custom networking, sidecars, service mesh, GPU scheduling, high steady throughput, or a long-running model gateway.
-- Local Ollama remains a development and benchmark adapter. Production inference is routed through a model gateway that can select Vertex AI endpoints, GKE-hosted vLLM/TGI, or an approved external model service by tenant, region, sensitivity, latency, and cost.
+- Cloud Run remains the preferred API and lightweight orchestration runtime. Cloud
+  Run services, jobs, or worker pools can also handle bounded background work.
+  Request-triggered services receive Pub/Sub through push or Eventarc; long-running
+  pull consumers use worker pools with an explicit autoscaler or move to GKE.
+- GKE Autopilot is the first Kubernetes choice for sustained workers and model
+  serving that need network policy, sidecars, service mesh, predictable warm
+  capacity, or multi-GPU scheduling. GKE Standard is reserved for node-level or
+  privileged requirements that Autopilot cannot satisfy.
+- Local Ollama remains a development and benchmark adapter. The production model
+  gateway selects Cloud Run GPU, Vertex AI, GKE-hosted vLLM/TGI, an on-premises
+  endpoint, or an approved external service by tenant, region, sensitivity, latency,
+  quality, and cost. Cloud Run GPU is suitable for variable single-GPU inference
+  when its quota and model-load latency pass the load test.
 - The egress guard becomes a governed egress layer: URL policy, SSRF checks, DNS controls, download restrictions, allow/deny categories, private NAT or proxy, and auditable exceptions. Public-web workers run in an isolated egress project with no route to internal or operational-technology networks; ACL-protected internal retrieval uses a separate connector plane.
 - Observability expands from smoke metrics to SLO dashboards, distributed tracing, audit log sinks, anomaly alerts, cost-per-run reporting, synthetic probes, incident runbooks, and restore drills.
 - Deployment changes from one protected dev environment to promotion through dev, staging, canary, production, and regional cells, using immutable image digests, SBOM/provenance, Binary Authorization where applicable, and progressive rollout.
+
+### Compute placement decision
+
+The production design does not use Compute Engine as a default application runtime.
+It places each workload according to measured behavior:
+
+| Workload | Preferred runtime | Promotion or exception trigger |
+|---|---|---|
+| Stateless API, status, SSE, lightweight orchestration | Cloud Run service | Move only when a documented Kubernetes requirement outweighs the simpler managed runtime |
+| Bounded asynchronous command | Cloud Tasks to a Cloud Run service | Use Pub/Sub when several consumers, high throughput, or event fan-out are required |
+| Finite batch or scheduled work | Cloud Run job | Use GKE for long-running consumers or specialized scheduling |
+| Continuous pull consumer | Cloud Run worker pool or GKE Autopilot | Prefer GKE when queue-aware autoscaling, isolation, or predictable warm capacity is required |
+| Variable single-GPU inference | Cloud Run GPU | Promote to GKE when multi-GPU, GPU-aware scheduling, sharing, or steady utilization justifies it |
+| Sustained browser workers or open-model serving | GKE Autopilot | Use GKE Standard only for node control, privileged workloads, or unsupported accelerator topology |
+| Approved managed model | Vertex AI | Route through the model gateway and retain a tested fallback |
+| VM-bound legacy or appliance workload | Compute Engine by exception | Requires a written ADR and evidence that Cloud Run, Vertex AI, and GKE cannot meet the requirement |
 
 ### Zero-trust production controls
 
@@ -140,18 +181,21 @@ enterprise discovery can reverse that choice.
 
 GCP is the recommended implementation cloud for this assignment because it gives the shortest path from a free/low-cost assessment environment to a serious enterprise design without changing the application contract:
 
-- Cloud Run gives fast autoscaling, scale-to-zero by default, revision traffic splitting, authenticated/private service modes, and maximum-instance controls.
+- Cloud Run gives fast autoscaling, scale-to-zero by default, revision traffic
+  splitting, authenticated/private service modes, bounded scaling controls, and a
+  fully managed single-GPU inference path.
 - Cloud Tasks gives explicit queue dispatch rate, concurrency, and retry controls for bounded agent runs.
 - Workload Identity Federation removes long-lived CI service-account keys and supports GitHub OIDC.
 - Firestore gives a serverless state option for the assessment and early pilot.
 - Apigee, IAP, Cloud Armor, VPC Service Controls, Organization Policy, Secret Manager, Artifact Registry, Cloud Logging/Monitoring, Vertex AI, and GKE Autopilot form a credible enterprise upgrade path.
 - The enterprise foundations blueprint gives a recognized landing-zone pattern that can be implemented with Terraform before workloads are deployed.
 
-GCP's additional production advantage for this design is the combination of GKE for
-company-controlled open-model serving, Vertex AI for approved managed inference,
-Spanner for strongly consistent regional/dual-region/multi-region control state, and
-Pub/Sub for the high-throughput event plane. These services are recommendations with
-promotion gates, not dependencies of the low-cost submission.
+GCP's production advantage for this design is the placement range within one
+platform: Cloud Run for serverless CPU and single-GPU workloads, GKE Autopilot or
+Standard for Kubernetes and multi-GPU workloads, and Vertex AI for approved managed
+inference. Spanner provides strongly consistent regional or multi-region control
+state, while Pub/Sub provides the high-throughput event plane. These services have
+promotion gates and are not dependencies of the low-cost submission.
 
 Azure would become the stronger choice if the organization standardizes on Microsoft Entra ID, Azure API Management, Azure OpenAI, Microsoft Defender/Sentinel, and existing Azure landing zones. AWS would become the stronger choice if the organization already operates a mature AWS foundation and wants to lean into API Gateway, Lambda/ECS/EKS, SQS/EventBridge, DynamoDB, and Bedrock/Knowledge Bases. The architecture should remain portable at the application boundary: provider-specific code lives behind identity, queue, repository, observability, and model-gateway adapters.
 
@@ -200,5 +244,9 @@ Tasks 1 to 3 share one logical system but keep independent deployable boundaries
 - Google Cloud enterprise foundations blueprint: https://docs.cloud.google.com/architecture/blueprints/security-foundations
 - Apigee API management: https://docs.cloud.google.com/apigee/docs/api-platform/get-started/what-apigee
 - Firestore scale guidance: https://docs.cloud.google.com/firestore/native/docs/real-time_queries_at_scale
-- GKE Autopilot production workload option: https://docs.cloud.google.com/kubernetes-engine/docs/concepts/autopilot-overview
+- Cloud Run GPU support: https://docs.cloud.google.com/run/docs/configuring/services/gpu
+- Cloud Run GPU scaling guidance: https://docs.cloud.google.com/run/docs/configuring/services/gpu-best-practices
+- GKE Autopilot and Standard selection: https://docs.cloud.google.com/kubernetes-engine/docs/concepts/choose-cluster-mode
+- GKE Autopilot GPU workloads: https://docs.cloud.google.com/kubernetes-engine/docs/how-to/autopilot-gpus
+- Managed container runtime selection: https://docs.cloud.google.com/architecture/select-managed-container-runtime-environment
 - VPC Service Controls overview: https://docs.cloud.google.com/vpc-service-controls/docs/overview
