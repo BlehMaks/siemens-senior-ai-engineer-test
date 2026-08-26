@@ -221,6 +221,15 @@ def test_end_to_end_run_serializes_pipeline_metrics_and_is_reproducible(
     assert first.selected_model in CANDIDATE_NAMES
     assert 0.0 <= first.selected_threshold <= 1.0
     assert len(first.threshold_sensitivity) == 3
+    assert {item.dimension for item in first.error_slices} >= {"missing_features"}
+    assert (
+        sum(
+            item.rows
+            for item in first.error_slices
+            if item.dimension == "missing_features"
+        )
+        == first.holdout_rows
+    )
     metrics_path = tmp_path / "first" / "metrics.json"
     assert json.loads(metrics_path.read_text(encoding="utf-8")) == first.to_dict()
     with (tmp_path / "first" / "selected-model.pkl").open("rb") as model_file:

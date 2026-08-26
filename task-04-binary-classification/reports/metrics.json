@@ -118,6 +118,80 @@
       "std_pr_auc": 0.17866199684328488
     }
   ],
+  "error_slices": [
+    {
+      "dimension": "missing_features",
+      "false_negative": 1,
+      "false_positive": 0,
+      "precision": 1.0,
+      "recall": 0.9565217391304348,
+      "rows": 279,
+      "value": "0"
+    },
+    {
+      "dimension": "missing_features",
+      "false_negative": 7,
+      "false_positive": 64,
+      "precision": 0.2558139534883721,
+      "recall": 0.7586206896551724,
+      "rows": 413,
+      "value": "1"
+    },
+    {
+      "dimension": "missing_features",
+      "false_negative": 0,
+      "false_positive": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "rows": 51,
+      "value": "2+"
+    },
+    {
+      "dimension": "VOL",
+      "false_negative": 0,
+      "false_positive": 48,
+      "precision": 0.49473684210526314,
+      "recall": 1.0,
+      "rows": 127,
+      "value": "f"
+    },
+    {
+      "dimension": "VOL",
+      "false_negative": 8,
+      "false_positive": 16,
+      "precision": 0.0,
+      "recall": 0.0,
+      "rows": 616,
+      "value": "t"
+    },
+    {
+      "dimension": "KAT",
+      "false_negative": 0,
+      "false_positive": 0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "rows": 16,
+      "value": "__MISSING__"
+    },
+    {
+      "dimension": "KAT",
+      "false_negative": 2,
+      "false_positive": 16,
+      "precision": 0.4482758620689655,
+      "recall": 0.8666666666666667,
+      "rows": 367,
+      "value": "ccc"
+    },
+    {
+      "dimension": "KAT",
+      "false_negative": 6,
+      "false_positive": 48,
+      "precision": 0.4146341463414634,
+      "recall": 0.85,
+      "rows": 360,
+      "value": "ddd"
+    }
+  ],
   "holdout_at_0_5": {
     "accuracy": 0.8613728129205922,
     "brier": 0.11939986747206408,

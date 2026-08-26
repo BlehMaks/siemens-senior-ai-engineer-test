@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
+import pandas as pd
 from sklearn.calibration import calibration_curve  # type: ignore[import-untyped]
 
 from binary_classification.analysis import analyze_training_frame
@@ -36,6 +37,17 @@ class CalibrationPoint:
 
 
 @dataclass(frozen=True, slots=True)
+class ErrorSlice:
+    dimension: str
+    value: str
+    rows: int
+    false_positive: int
+    false_negative: int
+    precision: float
+    recall: float
+
+
+@dataclass(frozen=True, slots=True)
 class ExperimentResult:
     seed: int
     join_audit: JoinAudit
@@ -48,9 +60,72 @@ class ExperimentResult:
     holdout_at_0_5: BinaryMetrics
     holdout_at_selected_threshold: BinaryMetrics
     calibration: tuple[CalibrationPoint, ...]
+    error_slices: tuple[ErrorSlice, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return cast(dict[str, Any], json.loads(json.dumps(asdict(self))))
+
+
+def _error_slices(
+    training: pd.DataFrame,
+    holdout: pd.DataFrame,
+    target: pd.Series[bool],
+    probabilities: np.ndarray[Any, Any],
+    threshold: float,
+    categorical_columns: tuple[str, ...],
+) -> tuple[ErrorSlice, ...]:
+    predicted = probabilities >= threshold
+    truth = target.to_numpy(dtype=bool)
+    dimensions: dict[str, pd.Series[str]] = {}
+    missing_counts = holdout.drop(columns=["id", "Class"]).isna().sum(axis=1)
+    dimensions["missing_features"] = pd.Series(
+        np.select(
+            [missing_counts.eq(0), missing_counts.eq(1)],
+            ["0", "1"],
+            default="2+",
+        ),
+        index=holdout.index,
+    )
+
+    preferred = [column for column in ("VOL", "KAT") if column in categorical_columns]
+    slice_columns = preferred or list(categorical_columns[:2])
+    for column in slice_columns:
+        training_values = training[column].fillna("__MISSING__").astype(str)
+        major_values = set(training_values.value_counts().head(5).index)
+        holdout_values = holdout[column].fillna("__MISSING__").astype(str)
+        dimensions[column] = holdout_values.where(
+            holdout_values.isin(major_values), "__OTHER__"
+        )
+
+    slices: list[ErrorSlice] = []
+    for dimension, values in dimensions.items():
+        for value in sorted(values.unique()):
+            mask = values.eq(value).to_numpy()
+            false_positive = int(np.sum(mask & ~truth & predicted))
+            false_negative = int(np.sum(mask & truth & ~predicted))
+            true_positive = int(np.sum(mask & truth & predicted))
+            precision_denominator = true_positive + false_positive
+            recall_denominator = true_positive + false_negative
+            slices.append(
+                ErrorSlice(
+                    dimension=dimension,
+                    value=value,
+                    rows=int(mask.sum()),
+                    false_positive=false_positive,
+                    false_negative=false_negative,
+                    precision=(
+                        true_positive / precision_denominator
+                        if precision_denominator
+                        else 0.0
+                    ),
+                    recall=(
+                        true_positive / recall_denominator
+                        if recall_denominator
+                        else 0.0
+                    ),
+                )
+            )
+    return tuple(slices)
 
 
 def run_experiment(
@@ -121,6 +196,14 @@ def run_experiment(
         calibration=tuple(
             CalibrationPoint(float(mean), float(observed))
             for mean, observed in zip(mean_probability, observed_rate, strict=True)
+        ),
+        error_slices=_error_slices(
+            split.train,
+            split.holdout,
+            holdout_target,
+            holdout_probabilities,
+            selected_threshold,
+            schema.categorical,
         ),
     )
     (output / "metrics.json").write_text(
