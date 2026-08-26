@@ -21,7 +21,7 @@ from sklearn.preprocessing import (  # type: ignore[import-untyped]
     StandardScaler,
 )
 
-from binary_classification.data import load_training_data
+from binary_classification.data import TARGET_VALUES, load_training_data
 
 TARGET_COLUMN = "Class"
 ID_COLUMN = "id"
@@ -86,6 +86,26 @@ def feature_group_ids(frame: pd.DataFrame) -> pd.Series[int]:
     return pd.Series(group_ids, index=frame.index, name="feature_group")
 
 
+def binary_target(frame: pd.DataFrame) -> pd.Series[bool]:
+    """Return the declared minority target after validating the public boundary."""
+
+    if TARGET_COLUMN not in frame:
+        raise ValueError(f"Frame must contain {TARGET_COLUMN!r}")
+    target = frame[TARGET_COLUMN]
+    observed = target.dropna().tolist()
+    labels_are_strings = all(isinstance(value, str) for value in observed)
+    if (
+        target.isna().any()
+        or not labels_are_strings
+        or (labels_are_strings and frozenset(observed) != TARGET_VALUES)
+    ):
+        rendered = sorted({str(value) for value in observed})
+        raise ValueError(
+            f"Class must contain exactly {sorted(TARGET_VALUES)}, got {rendered}"
+        )
+    return target.eq(MINORITY_LABEL)
+
+
 def _single_feature_predictions(
     frame: pd.DataFrame,
     column: str,
@@ -111,7 +131,11 @@ def _single_feature_predictions(
             [
                 (
                     "impute",
-                    SimpleImputer(strategy="constant", fill_value="__MISSING__"),
+                    SimpleImputer(
+                        strategy="most_frequent",
+                        add_indicator=True,
+                        keep_empty_features=True,
+                    ),
                 ),
                 ("encode", OneHotEncoder(handle_unknown="ignore")),
             ]
@@ -158,7 +182,7 @@ def analyze_training_frame(frame: pd.DataFrame, *, seed: int = 42) -> AnalysisRe
         raise ValueError("Frame must contain training rows")
 
     features = _feature_columns(frame)
-    target = frame[TARGET_COLUMN].eq(MINORITY_LABEL)
+    target = binary_target(frame)
     groups = feature_group_ids(frame)
     group_sizes = groups.value_counts()
     group_targets = pd.DataFrame({"group": groups, "target": target}).groupby("group")[
@@ -199,9 +223,8 @@ def analyze_training_frame(frame: pd.DataFrame, *, seed: int = 42) -> AnalysisRe
     missingness_gaps: dict[str, float] = {}
     single_feature_scores: dict[str, float] = {}
     for column in features:
-        values = (
-            frame[column].astype(object).where(frame[column].notna(), "__MISSING__")
-        )
+        missing = object()
+        values = frame[column].astype(object).where(frame[column].notna(), missing)
         mapping = pd.DataFrame({"value": values, "target": target}).groupby(
             "value", dropna=False, sort=False
         )["target"]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import pickle
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +125,30 @@ def test_preprocessing_is_fitted_only_on_training_categories() -> None:
     assert pipeline.predict_proba(validation).shape == (1, 2)
 
 
+def test_categorical_preprocessing_handles_empty_folds_and_literal_sentinel() -> None:
+    schema = FeatureSchema(numeric=("numeric",), categorical=("category",))
+    all_missing = pd.DataFrame({"numeric": range(10), "category": [None] * 10})
+    target = pd.Series([False, True] * 5)
+    pipeline = build_pipeline("logistic", schema)
+
+    pipeline.fit(prepare_features(all_missing, schema), target)
+    unseen = prepare_features(
+        pd.DataFrame({"numeric": [5], "category": ["unseen"]}), schema
+    )
+    assert np.isfinite(pipeline.predict_proba(unseen)).all()
+
+    distinct = pd.DataFrame(
+        {
+            "numeric": range(8),
+            "category": [None] * 4 + ["__MISSING__"] * 4,
+        }
+    )
+    distinct_target = pd.Series([False] * 4 + [True] * 4)
+    pipeline.fit(prepare_features(distinct, schema), distinct_target)
+    probabilities = pipeline.predict_proba(prepare_features(distinct, schema))[:, 1]
+    assert float(probabilities[:4].mean()) < float(probabilities[4:].mean())
+
+
 def test_all_baselines_run_with_deterministic_grouped_cross_validation() -> None:
     frame = _joined_frame()
     split = split_train_holdout(frame, seed=11)
@@ -146,6 +171,15 @@ def test_all_baselines_run_with_deterministic_grouped_cross_validation() -> None
     assert select_candidate(first) in CANDIDATE_NAMES
 
 
+def test_cross_validation_rejects_groups_that_split_identical_vectors() -> None:
+    frame = _joined_frame(20)
+    schema = infer_feature_schema(frame)
+    row_groups = pd.Series(range(len(frame)), dtype="int64")
+
+    with pytest.raises(ValueError, match="complete feature groups"):
+        cross_validate_candidates(frame, row_groups, schema)
+
+
 def test_model_selection_rejects_an_incomplete_baseline_set() -> None:
     frame = _joined_frame()
     split = split_train_holdout(frame)
@@ -154,6 +188,17 @@ def test_model_selection_rejects_an_incomplete_baseline_set() -> None:
 
     with pytest.raises(ValueError, match="all declared baseline candidates"):
         select_candidate(candidates[1:])
+    with pytest.raises(ValueError, match="all declared baseline candidates"):
+        select_candidate((candidates[0], candidates[0], *candidates[1:]))
+    with pytest.raises(ValueError, match="finite"):
+        select_candidate(
+            (replace(candidates[0], mean_pr_auc=float("nan")), *candidates[1:])
+        )
+
+    tied = tuple(
+        replace(candidate, mean_pr_auc=0.5) for candidate in reversed(candidates)
+    )
+    assert select_candidate(tied) == CANDIDATE_NAMES[0]
 
 
 def test_threshold_minimizes_declared_business_cost() -> None:
@@ -173,12 +218,20 @@ def test_threshold_minimizes_declared_business_cost() -> None:
 
 
 @pytest.mark.parametrize(
-    ("false_negative_cost", "false_positive_cost"), [(0.0, 1.0), (1.0, -1.0)]
+    ("false_negative_cost", "false_positive_cost"),
+    [
+        (0.0, 1.0),
+        (1.0, -1.0),
+        (float("nan"), 1.0),
+        (float("inf"), 1.0),
+        (1.0, float("nan")),
+        (1.0, float("inf")),
+    ],
 )
-def test_threshold_rejects_non_positive_costs(
+def test_threshold_rejects_invalid_costs(
     false_negative_cost: float, false_positive_cost: float
 ) -> None:
-    with pytest.raises(ValueError, match="costs must be positive"):
+    with pytest.raises(ValueError, match="costs must be finite and positive"):
         choose_threshold(
             pd.Series([True, False]),
             np.array([0.8, 0.2]),

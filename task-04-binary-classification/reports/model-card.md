@@ -4,7 +4,7 @@
 
 The selected model is class-weighted logistic regression. It predicts the minority
 label `n`; `y` is the majority label. Selection used mean grouped-CV PR-AUC, not
-accuracy. The operating threshold is `0.670003`, chosen from out-of-fold training
+accuracy. The operating threshold is `0.671291`, chosen from out-of-fold training
 predictions under an illustrative 5:1 false-negative to false-positive cost ratio.
 
 This is a reproducible baseline, not a production approval. The anonymized features
@@ -24,9 +24,10 @@ and 743 holdout rows. The holdout is evaluated only after candidate and threshol
 selection.
 
 `id` is quarantined. Numeric columns use fold-fitted median imputation, missingness
-indicators, and scaling. Categorical columns use a fold-fitted missing sentinel and
-one-hot encoding with unseen-category tolerance. No imputer, encoder, scaler, model,
-or threshold is fitted on validation or holdout rows.
+indicators, and scaling. Categorical columns use fold-fitted most-frequent imputation,
+an explicit missingness indicator, and one-hot encoding with unseen-category tolerance;
+all-missing training folds remain valid. No imputer, encoder, scaler, model, or threshold
+is fitted on validation or holdout rows.
 
 ## Candidate comparison
 
@@ -35,8 +36,8 @@ Five-fold `StratifiedGroupKFold` results on the training partition:
 | Candidate | Mean PR-AUC | Fold SD | OOF PR-AUC | OOF recall at 0.5 | OOF precision at 0.5 |
 |---|---:|---:|---:|---:|---:|
 | Stratified dummy | 0.0773 | 0.0028 | 0.0770 | 0.1131 | 0.0943 |
-| Logistic | 0.5183 | 0.1665 | 0.4173 | 0.6290 | 0.3829 |
-| Weighted logistic | **0.5792** | 0.1787 | **0.4373** | **0.8507** | 0.3381 |
+| Logistic | 0.5161 | 0.1658 | 0.4099 | 0.6290 | 0.4006 |
+| Weighted logistic | **0.5626** | 0.1885 | **0.4194** | **0.8507** | 0.3381 |
 
 The weighted model clears the dummy baseline and improves mean PR-AUC and minority
 recall over unweighted logistic regression. Its large fold dispersion is a warning:
@@ -49,16 +50,16 @@ predictions. Costs are relative units, not estimated currency values.
 
 | FN:FP cost | Threshold | Training FN | Training FP | Relative cost |
 |---:|---:|---:|---:|---:|
-| 2:1 | 0.9645 | 133 | 64 | 330 |
-| 5:1 | **0.6700** | 41 | 288 | 493 |
-| 10:1 | 0.5284 | 33 | 352 | 682 |
+| 2:1 | 0.9642 | 131 | 80 | 342 |
+| 5:1 | **0.6713** | 42 | 288 | 498 |
+| 10:1 | 0.5290 | 33 | 352 | 682 |
 
 The untouched holdout was evaluated once:
 
 | Threshold | PR-AUC | ROC-AUC | Recall | Precision | F1 | FN | FP | Accuracy |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | 0.5000 | 0.4230 | 0.9142 | 0.8727 | 0.3333 | 0.4824 | 7 | 96 | 0.8614 |
-| 0.6700 | 0.4230 | 0.9142 | 0.8545 | 0.4234 | 0.5663 | 8 | 64 | 0.9031 |
+| 0.6713 | 0.4230 | 0.9142 | 0.8545 | 0.4234 | 0.5663 | 8 | 64 | 0.9031 |
 
 Accuracy is included for context only. A majority-only rule would already appear
 strong on this target, so PR-AUC and minority errors drive the decision.

@@ -94,6 +94,47 @@ def test_rejects_empty_training_frame() -> None:
         analyze_training_frame(pd.DataFrame(columns=["id", "Class"]))
 
 
+@pytest.mark.parametrize(
+    "labels",
+    [
+        ["n", "y", "maybe", "n"],
+        ["n", "y", None, "n"],
+        ["n", "n", "n", "n"],
+    ],
+)
+def test_rejects_target_values_outside_declared_binary_contract(
+    labels: list[object],
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "id": range(4),
+            "feature": range(4),
+            "Class": labels,
+        }
+    )
+
+    with pytest.raises(ValueError, match="Class must contain exactly"):
+        analyze_training_frame(frame)
+
+
+def test_literal_missing_category_remains_distinct_from_null() -> None:
+    rows = 40
+    labels = ["n" if index < rows // 2 else "y" for index in range(rows)]
+    frame = pd.DataFrame(
+        {
+            "id": range(rows),
+            "feature": [None if label == "n" else "__MISSING__" for label in labels],
+            "group_anchor": [index % 5 for index in range(rows)],
+            "Class": labels,
+        }
+    )
+
+    report = analyze_training_frame(frame)
+
+    assert "feature" in report.leakage.deterministic_target_columns
+    assert report.leakage.single_feature_pr_auc["feature"] == pytest.approx(1.0)
+
+
 def test_requires_enough_examples_in_each_class() -> None:
     frame = pd.DataFrame(
         {"id": [1, 2, 3], "feature": [1, 2, 3], "Class": ["n", "y", "y"]}

@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from sklearn.calibration import calibration_curve  # type: ignore[import-untyped]
 
-from binary_classification.analysis import analyze_training_frame
+from binary_classification.analysis import analyze_training_frame, binary_target
 from binary_classification.data import JoinAudit, load_training_data
 from binary_classification.modeling import (
     BinaryMetrics,
@@ -66,6 +66,12 @@ class ExperimentResult:
         return cast(dict[str, Any], json.loads(json.dumps(asdict(self))))
 
 
+def _category_slice_value(value: Any, major_values: set[str]) -> str:
+    if pd.isna(value):
+        return "bucket:missing"
+    return f"value:{value}" if str(value) in major_values else "bucket:other"
+
+
 def _error_slices(
     training: pd.DataFrame,
     holdout: pd.DataFrame,
@@ -90,11 +96,13 @@ def _error_slices(
     preferred = [column for column in ("VOL", "KAT") if column in categorical_columns]
     slice_columns = preferred or list(categorical_columns[:2])
     for column in slice_columns:
-        training_values = training[column].fillna("__MISSING__").astype(str)
+        training_values = training[column].dropna().astype(str)
         major_values = set(training_values.value_counts().head(5).index)
-        holdout_values = holdout[column].fillna("__MISSING__").astype(str)
-        dimensions[column] = holdout_values.where(
-            holdout_values.isin(major_values), "__OTHER__"
+        # Tagged display values keep literal categories distinct from report buckets.
+        dimensions[column] = holdout[column].map(
+            lambda value, categories=major_values: _category_slice_value(
+                value, categories
+            )
         )
 
     slices: list[ErrorSlice] = []
@@ -145,7 +153,7 @@ def run_experiment(
         split.train, split.train_groups, schema, seed=seed
     )
     selected_model = select_candidate(candidates)
-    training_target = split.train["Class"].eq("n").reset_index(drop=True)
+    training_target = binary_target(split.train).reset_index(drop=True)
     sensitivity = tuple(
         choose_threshold(
             training_target,
@@ -161,7 +169,7 @@ def run_experiment(
     holdout_features = prepare_features(split.holdout, schema)
     pipeline.fit(training_features, training_target)
     holdout_probabilities = pipeline.predict_proba(holdout_features)[:, 1]
-    holdout_target = split.holdout["Class"].eq("n").reset_index(drop=True)
+    holdout_target = binary_target(split.holdout).reset_index(drop=True)
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)

@@ -29,11 +29,10 @@ from sklearn.preprocessing import (  # type: ignore[import-untyped]
     StandardScaler,
 )
 
-from binary_classification.analysis import feature_group_ids
+from binary_classification.analysis import binary_target, feature_group_ids
 
 TARGET_COLUMN = "Class"
 ID_COLUMN = "id"
-MINORITY_LABEL = "n"
 CANDIDATE_NAMES = ("dummy", "logistic", "weighted_logistic")
 
 
@@ -135,7 +134,14 @@ def build_pipeline(name: str, schema: FeatureSchema, *, seed: int = 42) -> Pipel
     )
     categorical = Pipeline(
         [
-            ("impute", SimpleImputer(strategy="constant", fill_value="__MISSING__")),
+            (
+                "impute",
+                SimpleImputer(
+                    strategy="most_frequent",
+                    add_indicator=True,
+                    keep_empty_features=True,
+                ),
+            ),
             ("encode", OneHotEncoder(handle_unknown="ignore")),
         ]
     )
@@ -165,12 +171,27 @@ def _validate_grouped_folds(
         raise ValueError("fold count must be at least 2")
     if len(target) != len(groups):
         raise ValueError("target and groups must have equal length")
+    if groups.isna().any():
+        raise ValueError("groups cannot contain missing values")
     group_targets = pd.DataFrame({"group": groups, "target": target}).drop_duplicates()
     if group_targets.groupby("group")["target"].nunique().max() != 1:
         raise ValueError("Identical feature vectors have conflicting targets")
     class_group_counts = group_targets["target"].value_counts()
     if len(class_group_counts) != 2 or int(class_group_counts.min()) < folds:
         raise ValueError(f"Each class needs at least {folds} distinct feature groups")
+
+
+def _validate_feature_groups(frame: pd.DataFrame, groups: pd.Series[int]) -> None:
+    if len(frame) != len(groups):
+        raise ValueError("frame and groups must have equal length")
+    expected = feature_group_ids(frame).reset_index(drop=True)
+    supplied = groups.reset_index(drop=True)
+    partitions = pd.DataFrame({"expected": expected, "supplied": supplied})
+    if (
+        partitions.groupby("expected", dropna=False)["supplied"].nunique().max() != 1
+        or partitions.groupby("supplied", dropna=False)["expected"].nunique().max() != 1
+    ):
+        raise ValueError("supplied groups must match complete feature groups")
 
 
 def _validate_probabilities(
@@ -191,7 +212,7 @@ def _validate_probabilities(
 def split_train_holdout(
     frame: pd.DataFrame, *, seed: int = 42, holdout_folds: int = 5
 ) -> DataSplit:
-    target = frame[TARGET_COLUMN].eq(MINORITY_LABEL)
+    target = binary_target(frame)
     groups = feature_group_ids(frame)
     _validate_grouped_folds(target, groups, holdout_folds)
     splitter = StratifiedGroupKFold(
@@ -244,8 +265,9 @@ def cross_validate_candidates(
     folds: int = 5,
 ) -> tuple[tuple[CandidateMetrics, ...], dict[str, NDArray[np.float64]]]:
     features = prepare_features(frame, schema)
-    target = frame[TARGET_COLUMN].eq(MINORITY_LABEL).reset_index(drop=True)
+    target = binary_target(frame).reset_index(drop=True)
     groups = groups.reset_index(drop=True)
+    _validate_feature_groups(frame, groups)
     _validate_grouped_folds(target, groups, folds)
     splitter = StratifiedGroupKFold(n_splits=folds, shuffle=True, random_state=seed)
     split_indices = list(splitter.split(features, target, groups))
@@ -282,9 +304,18 @@ def cross_validate_candidates(
 
 
 def select_candidate(candidates: tuple[CandidateMetrics, ...]) -> str:
-    if {candidate.name for candidate in candidates} != set(CANDIDATE_NAMES):
+    if len(candidates) != len(CANDIDATE_NAMES) or {
+        candidate.name for candidate in candidates
+    } != set(CANDIDATE_NAMES):
         raise ValueError("Model selection requires all declared baseline candidates")
-    return max(candidates, key=lambda candidate: candidate.mean_pr_auc).name
+    by_name = {candidate.name: candidate for candidate in candidates}
+    if any(
+        not np.isfinite(candidate.mean_pr_auc)
+        or not 0.0 <= candidate.mean_pr_auc <= 1.0
+        for candidate in candidates
+    ):
+        raise ValueError("Model selection scores must be finite values between 0 and 1")
+    return max(CANDIDATE_NAMES, key=lambda name: by_name[name].mean_pr_auc)
 
 
 def choose_threshold(
@@ -294,8 +325,13 @@ def choose_threshold(
     false_negative_cost: float,
     false_positive_cost: float = 1.0,
 ) -> ThresholdChoice:
-    if false_negative_cost <= 0 or false_positive_cost <= 0:
-        raise ValueError("misclassification costs must be positive")
+    if (
+        not np.isfinite(false_negative_cost)
+        or not np.isfinite(false_positive_cost)
+        or false_negative_cost <= 0
+        or false_positive_cost <= 0
+    ):
+        raise ValueError("misclassification costs must be finite and positive")
     truth, scores = _validate_probabilities(target, probabilities)
     candidates = np.unique(np.concatenate(([0.0], scores, [1.0])))
     choices: list[ThresholdChoice] = []
