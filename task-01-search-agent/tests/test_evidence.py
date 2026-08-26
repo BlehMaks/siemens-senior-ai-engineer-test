@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -16,6 +17,11 @@ from search_agent.tools import ExtractedDocument
 
 _URL = TypeAdapter(AnyHttpUrl)
 _NOW = datetime(2026, 8, 27, 12, tzinfo=UTC)
+
+
+class _HostileQuotes(tuple[str, ...]):
+    def __iter__(self) -> Iterator[str]:
+        raise RuntimeError("hostile quote iteration")
 
 
 def _hit(
@@ -59,6 +65,7 @@ def test_builds_deterministic_immutable_evidence_from_exact_provenance() -> None
     assert first.evidence_id == second.evidence_id
     assert first.evidence_id.startswith("ev-")
     assert len(first.content_hash) == 64
+    assert len(first.title_provenance_hash) == 64
     assert first.source_url == "https://example.com/report"
     assert first.source_text == "Siemens reduced emissions in 2025."
     assert first.public.summary == first.source_text
@@ -171,8 +178,19 @@ def test_requires_document_title_and_rejects_public_title_tamper() -> None:
     with pytest.raises(EvidenceValidationError) as tampered:
         validate_record(record)
 
+    jointly_tampered = build_evidence(_hit(), _document(), retrieved_at=_NOW, now=_NOW)
+    object.__setattr__(jointly_tampered, "source_title", "Tampered title")
+    object.__setattr__(
+        jointly_tampered,
+        "public",
+        jointly_tampered.public.model_copy(update={"source_title": "Tampered title"}),
+    )
+    with pytest.raises(EvidenceValidationError) as joint_tamper:
+        validate_record(jointly_tampered)
+
     assert missing.value.reason is EvidenceFailureReason.INVALID_DATA
     assert tampered.value.reason is EvidenceFailureReason.INVALID_DATA
+    assert joint_tamper.value.reason is EvidenceFailureReason.INVALID_DATA
 
 
 def test_rejects_malformed_quotes_and_constructed_public_fields() -> None:
@@ -202,3 +220,16 @@ def test_rejects_malformed_quotes_and_constructed_public_fields() -> None:
 
     assert malformed_quotes.value.reason is EvidenceFailureReason.INVALID_DATA
     assert malformed_public.value.reason is EvidenceFailureReason.INVALID_DATA
+
+
+def test_hostile_quote_container_becomes_typed_invalid_data() -> None:
+    with pytest.raises(EvidenceValidationError) as error:
+        build_evidence(
+            _hit(),
+            _document(),
+            retrieved_at=_NOW,
+            quotes=_HostileQuotes(("supported",)),
+            now=_NOW,
+        )
+
+    assert error.value.reason is EvidenceFailureReason.INVALID_DATA

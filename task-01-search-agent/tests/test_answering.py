@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -12,6 +13,16 @@ from search_agent.tools import ExtractedDocument
 
 _URL = TypeAdapter(AnyHttpUrl)
 _NOW = datetime(2026, 8, 27, 12, tzinfo=UTC)
+
+
+class _HostileTuple(tuple[object, ...]):
+    def __iter__(self) -> Iterator[object]:
+        raise RuntimeError("hostile citation iteration")
+
+
+class _HostileEvidence:
+    def __iter__(self) -> Iterator[EvidenceRecord]:
+        raise RuntimeError("hostile evidence iteration")
 
 
 def _record(
@@ -143,7 +154,17 @@ def test_rejects_uncited_answer_content_and_partial_word_support() -> None:
     assert partial_error.value.reason is AbstentionReason.UNSUPPORTED_CLAIM
 
 
-@pytest.mark.parametrize("word", ["net\u0301work", "net_work"])
+@pytest.mark.parametrize(
+    "word",
+    [
+        "net\u0301work",
+        "work\u0301net",
+        "net_work",
+        "work_net",
+        "net\u203fwork",
+        "work\u203fnet",
+    ],
+)
 def test_unicode_word_continuations_do_not_create_a_boundary(word: str) -> None:
     record = _record(text=f"The {word} remains active.")
 
@@ -185,6 +206,53 @@ def test_revalidates_constructed_nested_citation_contract() -> None:
         AnswerValidator().validate(malformed, (record,), now=_NOW)
 
     assert error.value.reason is AbstentionReason.INVALID_ANSWER
+
+
+def test_rejects_answer_changed_by_validation_and_hostile_containers() -> None:
+    record = _record()
+    normalized_only = ScopedAnswer.model_construct(
+        answer_text=f" {record.source_text} ",
+        citations=_answer(record).citations,
+        assistance=None,
+    )
+    hostile_citations = ScopedAnswer.model_construct(
+        answer_text=record.source_text,
+        citations=_HostileTuple(_answer(record).citations),
+        assistance=None,
+    )
+
+    for malformed in (normalized_only, hostile_citations):
+        with pytest.raises(AnswerAbstained) as error:
+            AnswerValidator().validate(malformed, (record,), now=_NOW)
+        assert error.value.reason is AbstentionReason.INVALID_ANSWER
+
+    with pytest.raises(AnswerAbstained) as hostile_evidence:
+        AnswerValidator().validate(
+            _answer(record),
+            _HostileEvidence(),  # type: ignore[arg-type]
+            now=_NOW,
+        )
+    assert hostile_evidence.value.reason is AbstentionReason.INVALID_EVIDENCE
+
+
+def test_unhashable_constructed_id_becomes_typed_abstention() -> None:
+    record = _record()
+    object.__setattr__(
+        record,
+        "public",
+        record.public.model_construct(
+            evidence_id=[],
+            source_url=record.public.source_url,
+            source_title=record.public.source_title,
+            summary=record.public.summary,
+            quotes=record.public.quotes,
+        ),
+    )
+
+    with pytest.raises(AnswerAbstained) as error:
+        AnswerValidator().validate(_answer(_record()), (record,), now=_NOW)
+
+    assert error.value.reason is AbstentionReason.INVALID_EVIDENCE
 
 
 def test_rejects_duplicate_citation_ids_even_if_contract_was_bypassed() -> None:
@@ -288,17 +356,9 @@ def test_rejects_future_retrieval_time_if_record_is_tampered() -> None:
     assert error.value.reason is AbstentionReason.INVALID_EVIDENCE
 
 
-def test_rejects_conflicting_duplicate_ids_and_hashes() -> None:
+def test_rejects_duplicate_records_and_tampered_hashes() -> None:
     first = _record()
-    duplicate_id = _record(
-        url="https://second.example/report",
-        text="Different source text.",
-    )
-    object.__setattr__(
-        duplicate_id,
-        "public",
-        duplicate_id.public.model_copy(update={"evidence_id": first.evidence_id}),
-    )
+    duplicate_id = _record()
 
     with pytest.raises(AnswerAbstained) as id_error:
         AnswerValidator().validate(_answer(first), (first, duplicate_id), now=_NOW)
@@ -309,4 +369,4 @@ def test_rejects_conflicting_duplicate_ids_and_hashes() -> None:
         AnswerValidator().validate(_answer(first), (first, hash_conflict), now=_NOW)
 
     assert id_error.value.reason is AbstentionReason.CONFLICTING_EVIDENCE
-    assert hash_error.value.reason is AbstentionReason.CONFLICTING_EVIDENCE
+    assert hash_error.value.reason is AbstentionReason.INVALID_EVIDENCE

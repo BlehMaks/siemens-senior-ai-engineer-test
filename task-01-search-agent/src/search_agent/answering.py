@@ -8,8 +8,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
-from .contracts import ScopedAnswer
+from pydantic import TypeAdapter, ValidationError
+
+from .contracts import Citation, OptionalAssistance, ScopedAnswer
 from .evidence import EvidenceRecord, EvidenceValidationError, validate_record
+
+_CITATIONS_ADAPTER = TypeAdapter(tuple[Citation, ...])
 
 
 class AbstentionReason(StrEnum):
@@ -63,13 +67,20 @@ class AnswerValidator:
         now: datetime | None = None,
     ) -> ScopedAnswer:
         checked_answer = self._validate_answer_contract(answer)
-        if not evidence:
+        try:
+            checked_evidence = tuple(evidence)
+        except Exception:
+            raise AnswerAbstained(
+                AbstentionReason.INVALID_EVIDENCE,
+                "evidence collection is invalid",
+            ) from None
+        if not checked_evidence:
             raise AnswerAbstained(
                 AbstentionReason.NO_EVIDENCE,
                 "an answer cannot be rendered without evidence",
             )
         checked_now = _utc_now(now)
-        records = self._index_records(evidence)
+        records = self._index_records(checked_evidence)
 
         answer_text = _normalize(checked_answer.answer_text)
         cited_urls: list[str] = []
@@ -147,20 +158,44 @@ class AnswerValidator:
     @staticmethod
     def _validate_answer_contract(answer: ScopedAnswer) -> ScopedAnswer:
         try:
-            if isinstance(answer.citations, tuple):
-                citation_ids = [citation.evidence_id for citation in answer.citations]
+            if type(answer) is not ScopedAnswer or type(answer.citations) is not tuple:
+                raise ValueError("answer containers must use their exact public types")
+            if any(type(citation) is not Citation for citation in answer.citations):
+                raise ValueError("citations must use their exact public type")
+            if (
+                answer.assistance is not None
+                and type(answer.assistance) is not OptionalAssistance
+            ):
+                raise ValueError("assistance must use its exact public type")
+            payload = answer.model_dump(mode="python", warnings="error")
+            checked = ScopedAnswer.model_validate(payload, strict=True)
+            if checked != answer:
+                raise ValueError("answer changed during strict validation")
+            return answer
+        except ValidationError:
+            try:
+                citations = _CITATIONS_ADAPTER.validate_python(
+                    payload["citations"], strict=True
+                )
+                if type(citations) is not tuple:
+                    raise TypeError("validated citations are not a builtin tuple")
+                citation_ids = tuple(citation.evidence_id for citation in citations)
                 if len(citation_ids) != len(set(citation_ids)):
                     raise AnswerAbstained(
                         AbstentionReason.DUPLICATE_CITATION,
                         "citation evidence ids must be unique",
                     )
-            return ScopedAnswer.model_validate(
-                answer.model_dump(mode="python", warnings="error"),
-                strict=True,
-            )
+            except AnswerAbstained:
+                raise
+            except Exception:
+                pass
+            raise AnswerAbstained(
+                AbstentionReason.INVALID_ANSWER,
+                "answer failed strict contract validation",
+            ) from None
         except AnswerAbstained:
             raise
-        except (AttributeError, TypeError, ValueError):
+        except Exception:
             raise AnswerAbstained(
                 AbstentionReason.INVALID_ANSWER,
                 "answer failed strict contract validation",
@@ -179,14 +214,15 @@ class AnswerValidator:
                     "evidence collection contains an invalid record",
                 )
             try:
-                evidence_id = record.evidence_id
-                content_hash = record.content_hash
-                source_text = record.source_text
-            except (AttributeError, TypeError, ValueError):
+                validate_record(record)
+            except EvidenceValidationError:
                 raise AnswerAbstained(
                     AbstentionReason.INVALID_EVIDENCE,
                     "evidence collection contains an invalid record",
                 ) from None
+            evidence_id = record.evidence_id
+            content_hash = record.content_hash
+            source_text = record.source_text
             existing = records.get(evidence_id)
             if existing is not None:
                 raise AnswerAbstained(
@@ -199,13 +235,6 @@ class AnswerValidator:
                     AbstentionReason.CONFLICTING_EVIDENCE,
                     "evidence collection contains a conflicting content hash",
                 )
-            try:
-                validate_record(record)
-            except EvidenceValidationError:
-                raise AnswerAbstained(
-                    AbstentionReason.INVALID_EVIDENCE,
-                    "evidence collection contains an invalid record",
-                ) from None
             records[evidence_id] = record
             hashes[content_hash] = source_text
         return records

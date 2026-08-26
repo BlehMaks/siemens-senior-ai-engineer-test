@@ -45,6 +45,7 @@ class EvidenceRecord:
     source_text: str
     content_hash: str
     source_title: str
+    title_provenance_hash: str
 
     @property
     def evidence_id(self) -> str:
@@ -113,6 +114,7 @@ def build_evidence(
         source_text=source_text,
         content_hash=content_hash,
         source_title=title,
+        title_provenance_hash=_title_provenance_hash(hit_url, title),
     )
 
 
@@ -144,6 +146,12 @@ def validate_record(record: EvidenceRecord) -> None:
         source_url = _canonical_url(str(public.source_url))
         if record.content_hash != content_hash:
             raise ValueError("content hash does not match source text")
+        # This builder-derived checksum enforces record consistency. It is not
+        # authentication against an attacker who can reconstruct every field.
+        if record.title_provenance_hash != _title_provenance_hash(
+            source_url, source_title
+        ):
+            raise ValueError("source title provenance does not match")
         if public.evidence_id != _evidence_id(source_url, content_hash):
             raise ValueError("evidence id does not match source provenance")
         expected_summary = source_text[:_MAX_PUBLIC_TEXT_CHARS].rstrip()
@@ -160,17 +168,25 @@ def validate_record(record: EvidenceRecord) -> None:
 
 
 def _validated_quotes(quotes: object, source_text: str) -> tuple[str, ...]:
-    if (
-        isinstance(quotes, (str, bytes))
-        or not isinstance(quotes, Sequence)
-        or len(quotes) > _MAX_QUOTES
-    ):
+    if isinstance(quotes, (str, bytes)) or not isinstance(quotes, Sequence):
+        raise EvidenceValidationError(
+            EvidenceFailureReason.INVALID_DATA,
+            "quotes must be a bounded sequence",
+        )
+    try:
+        materialized_quotes = tuple(quotes)
+    except Exception:
+        raise EvidenceValidationError(
+            EvidenceFailureReason.INVALID_DATA,
+            "quotes must be a bounded sequence",
+        ) from None
+    if len(materialized_quotes) > _MAX_QUOTES:
         raise EvidenceValidationError(
             EvidenceFailureReason.INVALID_DATA,
             "quotes must be a bounded sequence",
         )
     normalized: list[str] = []
-    for quote in quotes:
+    for quote in materialized_quotes:
         candidate = _normalize_text(
             quote,
             field="quote",
@@ -228,6 +244,10 @@ def _canonical_url(value: str) -> str:
 def _evidence_id(source_url: str, content_hash: str) -> str:
     digest = hashlib.sha256(f"{source_url}\n{content_hash}".encode()).hexdigest()
     return f"ev-{digest[:24]}"
+
+
+def _title_provenance_hash(source_url: str, source_title: str) -> str:
+    return hashlib.sha256(f"{source_url}\n{source_title}".encode()).hexdigest()
 
 
 def _utc_time(value: datetime, *, field: str) -> datetime:
