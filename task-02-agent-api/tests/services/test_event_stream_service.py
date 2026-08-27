@@ -32,6 +32,16 @@ class RunReader:
         return SimpleNamespace(state=self.state)
 
 
+class MutableRunReader(RunReader):
+    def __init__(self) -> None:
+        super().__init__({("tenant-one", "run-one")})
+        self.get_calls = 0
+
+    async def get(self, *, tenant_id: str, run_id: str) -> object | None:
+        self.get_calls += 1
+        return await super().get(tenant_id=tenant_id, run_id=run_id)
+
+
 class EventReader:
     def __init__(self, events: tuple[RunEvent, ...]) -> None:
         self.events = events
@@ -150,6 +160,39 @@ async def test_resume_at_terminal_sequence_closes_without_heartbeat() -> None:
 
     assert await collect(stream) == ()
     assert reader.calls == [("tenant-one", "run-one", 2, 100)]
+
+
+@pytest.mark.asyncio
+async def test_future_cursor_closes_after_run_becomes_terminal() -> None:
+    runs = MutableRunReader()
+    sleeps = 0
+
+    async def sleep(_: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 1:
+            runs.state = RunState.CANCELLED
+            return
+        raise AssertionError("stream kept polling after terminal state")
+
+    subject = EventStreamService(
+        cast(RunRepository, runs),
+        EventReader(()),
+        clock=lambda: NOW,
+        sleep=sleep,
+        poll_seconds=0.01,
+        heartbeat_seconds=1.0,
+    )
+    stream = await subject.open_stream(
+        tenant_id="tenant-one",
+        run_id="run-one",
+        after_sequence=99,
+        disconnected=connected,
+    )
+
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
+    assert runs.get_calls >= 2
 
 
 @pytest.mark.asyncio

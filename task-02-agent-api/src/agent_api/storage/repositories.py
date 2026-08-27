@@ -845,6 +845,20 @@ class SQLiteEventRepository(_PathRepository):
                 if row[0] != payload:
                     raise StorageConflictError("event sequence already exists")
                 return False
+            latest_row = await (
+                await connection.execute(
+                    "SELECT tenant_id, run_id, sequence, occurred_at, payload "
+                    "FROM run_events WHERE tenant_id = ? AND run_id = ? "
+                    "ORDER BY sequence DESC LIMIT 1",
+                    (checked_tenant, checked.run_id),
+                )
+            ).fetchone()
+            if latest_row is not None:
+                latest = _decode_event(latest_row)
+                if checked.sequence <= latest.sequence:
+                    raise StorageConflictError("event sequence must increase")
+                if latest.event_type is not RunEventType.STATUS:
+                    raise StorageConflictError("terminal event must remain final")
             if await _get_run(connection, checked_tenant, checked.run_id) is None:
                 raise StorageConflictError("event run does not exist")
             await connection.execute(

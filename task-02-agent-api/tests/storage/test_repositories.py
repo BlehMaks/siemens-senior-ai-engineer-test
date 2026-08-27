@@ -28,6 +28,7 @@ from agent_api.storage import (
     SQLiteSessionRepository,
     SQLiteTenantRepository,
     SQLiteWorkQueue,
+    StorageConflictError,
     StorageError,
     TenantRecord,
     reflection_repository,
@@ -153,7 +154,7 @@ async def test_run_and_event_order_survive_reopen(migrated_path: Path) -> None:
         await runs.create(run)
 
     events = SQLiteEventRepository(migrated_path)
-    for sequence in (4, 2, 3):
+    for sequence in (2, 3, 4):
         await events.append(
             tenant_id="tenant-one",
             event=RunEvent(
@@ -206,6 +207,18 @@ async def test_run_and_event_order_survive_reopen(migrated_path: Path) -> None:
             tenant_id="tenant-one", run_id="run-alpha", after_sequence=4
         )
     ) == (completed,)
+    with pytest.raises(StorageConflictError, match="terminal event must remain final"):
+        await reopened_events.append(
+            tenant_id="tenant-one",
+            event=RunEvent(
+                sequence=6,
+                run_id="run-alpha",
+                event_type=RunEventType.STATUS,
+                state=RunState.RUNNING,
+                occurred_at=NOW + timedelta(seconds=6),
+                message="Run execution is in progress.",
+            ),
+        )
 
 
 @pytest.mark.asyncio
@@ -237,6 +250,39 @@ async def test_idempotent_create_and_cancel_emit_one_event_per_change(
         (1, RunEventType.STATUS, RunState.QUEUED),
         (2, RunEventType.CANCELLED, RunState.CANCELLED),
     )
+
+
+@pytest.mark.asyncio
+async def test_event_append_rejects_a_new_out_of_order_sequence(
+    migrated_path: Path,
+) -> None:
+    await seed_session(migrated_path)
+    await SQLiteRunRepository(migrated_path).create(submission())
+    events = SQLiteEventRepository(migrated_path)
+    assert await events.append(
+        tenant_id="tenant-one",
+        event=RunEvent(
+            sequence=3,
+            run_id="run-one",
+            event_type=RunEventType.STATUS,
+            state=RunState.RUNNING,
+            occurred_at=NOW + timedelta(seconds=3),
+            message="Run execution is in progress.",
+        ),
+    )
+
+    with pytest.raises(StorageConflictError, match="event sequence must increase"):
+        await events.append(
+            tenant_id="tenant-one",
+            event=RunEvent(
+                sequence=2,
+                run_id="run-one",
+                event_type=RunEventType.STATUS,
+                state=RunState.RUNNING,
+                occurred_at=NOW + timedelta(seconds=2),
+                message="Run execution is in progress.",
+            ),
+        )
 
 
 @pytest.mark.asyncio

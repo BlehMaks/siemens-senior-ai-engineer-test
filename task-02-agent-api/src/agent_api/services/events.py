@@ -144,6 +144,24 @@ class EventStreamService:
                 # Headers may already be sent, so terminate without exposing a
                 # corrupted payload or private storage diagnostic in the SSE body.
                 return
+            if not batch:
+                try:
+                    run = await self._runs.get(tenant_id=tenant_id, run_id=run_id)
+                except StorageError:
+                    return
+                if run is None:
+                    return
+                if run.state in TERMINAL_RUN_STATES:
+                    try:
+                        batch = await self._read_batch(
+                            tenant_id=tenant_id,
+                            run_id=run_id,
+                            after_sequence=cursor,
+                        )
+                    except StorageError:
+                        return
+                    if not batch:
+                        return
 
     async def _read_batch(
         self,
