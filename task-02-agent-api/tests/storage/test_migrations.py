@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from agent_api.storage import MigrationError, migrate, schema
+from search_agent.memory import SQLiteReflectionRepository
 
 
 @pytest.mark.asyncio
@@ -51,6 +52,30 @@ async def test_empty_and_repeated_migration_are_stable(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_migration_adopts_an_existing_task1_memory_database(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "task1.sqlite3"
+    SQLiteReflectionRepository(path).close()
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO run_reflections "
+            "(tenant_id, session_id, run_id, payload) VALUES (?, ?, ?, ?)",
+            ("tenant-one", "session-one", "run-one", "{}"),
+        )
+
+    await migrate(path)
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT tenant_id, session_id, run_id, payload FROM run_reflections"
+        ).fetchall() == [("tenant-one", "session-one", "run-one", "{}")]
+        assert connection.execute("SELECT tenant_id FROM tenants").fetchall() == [
+            ("tenant-one",)
+        ]
+
+
+@pytest.mark.asyncio
 async def test_tampered_and_future_migration_history_is_rejected(
     tmp_path: Path,
 ) -> None:
@@ -74,6 +99,19 @@ async def test_tampered_and_future_migration_history_is_rejected(
         )
     with pytest.raises(MigrationError, match="newer"):
         await migrate(future)
+
+
+@pytest.mark.asyncio
+async def test_migration_ledger_cannot_conceal_physical_schema_drift(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "drift.sqlite3"
+    await migrate(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE run_events")
+
+    with pytest.raises(MigrationError, match="physical schema"):
+        await migrate(path)
 
 
 @pytest.mark.asyncio

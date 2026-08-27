@@ -19,11 +19,17 @@ from agent_api.storage import (
     SQLiteRunRepository,
     SQLiteSessionRepository,
     SQLiteTenantRepository,
+    StorageError,
     TenantRecord,
     reflection_repository,
 )
 from search_agent.contracts import Citation, ScopedAnswer, TerminalState
-from search_agent.memory import CompletionEvidence, ReflectionUsage, RunReflection
+from search_agent.memory import (
+    CompletionEvidence,
+    ReflectionStorageError,
+    ReflectionUsage,
+    RunReflection,
+)
 
 NOW = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
 
@@ -247,6 +253,59 @@ async def test_plaintext_api_keys_have_no_schema_or_storage_path(
         )
     assert "plaintext_key" not in columns
     assert private_key.encode() not in migrated_path.read_bytes()
+
+
+@pytest.mark.asyncio
+async def test_corrupt_key_hash_fails_safe_without_echoing_storage(
+    migrated_path: Path,
+) -> None:
+    await SQLiteTenantRepository(migrated_path).put(
+        TenantRecord(tenant_id="tenant-one", created_at=NOW)
+    )
+    keys = SQLiteKeyHashRepository(migrated_path)
+    await keys.put(
+        ApiKeyHashRecord(
+            tenant_id="tenant-one",
+            key_id="key-one",
+            key_hash=b"h" * 32,
+            created_at=NOW,
+        )
+    )
+    sentinel = "credential-private-sentinel".ljust(32, "x")
+    with sqlite3.connect(migrated_path) as connection:
+        connection.execute(
+            "UPDATE api_key_hashes SET key_hash = ? WHERE tenant_id = ? AND key_id = ?",
+            (sentinel, "tenant-one", "key-one"),
+        )
+
+    with pytest.raises(StorageError) as error:
+        await keys.get(tenant_id="tenant-one", key_id="key-one")
+    assert sentinel not in str(error.value)
+
+
+def test_repositories_reject_symlink_database_paths(migrated_path: Path) -> None:
+    link = migrated_path.with_name("storage-link.sqlite3")
+    try:
+        link.symlink_to(migrated_path)
+    except OSError:
+        pytest.skip("filesystem does not support symlinks")
+
+    with pytest.raises(StorageError, match="regular file"):
+        SQLiteTenantRepository(link)
+
+
+@pytest.mark.asyncio
+async def test_deleted_tenant_cannot_acquire_new_memory(migrated_path: Path) -> None:
+    tenants = SQLiteTenantRepository(migrated_path)
+    await tenants.put(TenantRecord(tenant_id="tenant-one", created_at=NOW))
+    assert await tenants.delete(tenant_id="tenant-one")
+
+    memory = reflection_repository(migrated_path)
+    try:
+        with pytest.raises(ReflectionStorageError):
+            memory.put(reflection(tenant_id="tenant-one", run_id="run-one"))
+    finally:
+        memory.close()
 
 
 @pytest.mark.asyncio

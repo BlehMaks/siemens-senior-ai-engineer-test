@@ -42,6 +42,38 @@ _CREATE_LEDGER = """
         applied_at TEXT NOT NULL
     )
 """
+_REQUIRED_COLUMNS = {
+    "schema_migrations": ("version", "name", "checksum", "applied_at"),
+    "tenants": ("tenant_id", "display_name", "created_at"),
+    "api_key_hashes": (
+        "tenant_id",
+        "key_id",
+        "key_hash",
+        "created_at",
+        "expires_at",
+        "revoked_at",
+    ),
+    "sessions": ("tenant_id", "session_id", "label", "created_at", "updated_at"),
+    "runs": (
+        "tenant_id",
+        "run_id",
+        "session_id",
+        "state",
+        "version",
+        "created_at",
+        "payload",
+    ),
+    "idempotency_records": (
+        "tenant_id",
+        "idempotency_key",
+        "request_hash",
+        "run_id",
+        "created_at",
+    ),
+    "run_events": ("tenant_id", "run_id", "sequence", "occurred_at", "payload"),
+    "run_reflections": ("tenant_id", "session_id", "run_id", "payload"),
+    "audit_entries": ("tenant_id", "entry_id", "action", "occurred_at"),
+}
 
 
 async def migrate(path: Path) -> None:
@@ -78,6 +110,7 @@ async def migrate(path: Path) -> None:
                             datetime.now(UTC).isoformat(timespec="microseconds"),
                         ),
                     )
+                await _validate_physical_schema(connection)
                 await connection.commit()
             except Exception:
                 await connection.rollback()
@@ -119,6 +152,39 @@ def _statements(script: str) -> tuple[str, ...]:
     if pending.strip():
         raise MigrationError("bundled migration is incomplete")
     return tuple(statements)
+
+
+async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
+    """Ensure the checksum ledger still describes the database it guards."""
+
+    tables = {
+        row[0]
+        for row in await (
+            await connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        ).fetchall()
+    }
+    if not set(_REQUIRED_COLUMNS) <= tables:
+        raise MigrationError("database physical schema is incompatible")
+    for table, required in _REQUIRED_COLUMNS.items():
+        rows = await (
+            await connection.execute(f'PRAGMA table_info("{table}")')
+        ).fetchall()
+        if not set(required) <= {row[1] for row in rows}:
+            raise MigrationError("database physical schema is incompatible")
+
+    foreign_keys = await (
+        await connection.execute('PRAGMA foreign_key_list("run_reflections")')
+    ).fetchall()
+    if not any(
+        row[2] == "tenants"
+        and row[3] == "tenant_id"
+        and row[4] == "tenant_id"
+        and row[6].upper() == "CASCADE"
+        for row in foreign_keys
+    ):
+        raise MigrationError("database reflection schema is incompatible")
 
 
 __all__ = ["MigrationError", "migrate"]

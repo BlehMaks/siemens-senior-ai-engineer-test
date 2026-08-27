@@ -132,6 +132,8 @@ class _PathRepository:
     def __init__(self, path: Path) -> None:
         if not isinstance(path, Path):
             raise StorageError("SQLite path must be a filesystem path")
+        if path.is_symlink() or not path.is_file():
+            raise StorageError("SQLite path must be a regular file")
         self._path = path
 
 
@@ -292,18 +294,7 @@ class SQLiteKeyHashRepository(_PathRepository):
                     scope,
                 )
             ).fetchone()
-        return (
-            None
-            if row is None
-            else ApiKeyHashRecord(
-                tenant_id=row[0],
-                key_id=row[1],
-                key_hash=row[2],
-                created_at=_parse_timestamp(row[3]),
-                expires_at=None if row[4] is None else _parse_timestamp(row[4]),
-                revoked_at=None if row[5] is None else _parse_timestamp(row[5]),
-            )
-        )
+        return None if row is None else _decode_key_hash(row)
 
     async def revoke(
         self, *, tenant_id: OpaqueId, key_id: OpaqueId, at: datetime
@@ -907,6 +898,22 @@ def _key_values(record: ApiKeyHashRecord) -> tuple[object, ...]:
         None if record.expires_at is None else _timestamp(record.expires_at),
         None if record.revoked_at is None else _timestamp(record.revoked_at),
     )
+
+
+def _decode_key_hash(row: Sequence[object]) -> ApiKeyHashRecord:
+    try:
+        return ApiKeyHashRecord.model_validate(
+            {
+                "tenant_id": row[0],
+                "key_id": row[1],
+                "key_hash": row[2],
+                "created_at": _parse_timestamp(row[3]),
+                "expires_at": None if row[4] is None else _parse_timestamp(row[4]),
+                "revoked_at": None if row[5] is None else _parse_timestamp(row[5]),
+            }
+        )
+    except (TypeError, ValueError):
+        raise StorageError("stored key verifier failed validation") from None
 
 
 def _decode_session(row: Sequence[object]) -> SessionRecord:

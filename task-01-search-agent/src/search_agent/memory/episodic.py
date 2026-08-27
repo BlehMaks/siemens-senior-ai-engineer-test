@@ -219,6 +219,9 @@ class SQLiteReflectionRepository:
         self._closed = False
         try:
             self._connection = sqlite3.connect(path)
+            # The standalone table has no parent key; the API-owned compatible table
+            # does, so every adapter connection must enforce it when present.
+            self._connection.execute("PRAGMA foreign_keys = ON")
             self._connection.execute(self._CREATE)
             self._connection.commit()
             self._validate_schema()
