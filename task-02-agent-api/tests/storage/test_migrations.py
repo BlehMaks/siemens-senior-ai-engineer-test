@@ -127,6 +127,48 @@ async def test_migration_preserves_unknown_reflection_table_variants(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("extra_object", ["constraint", "index", "trigger"])
+async def test_migration_rejects_unknown_legacy_schema_objects(
+    tmp_path: Path, extra_object: str
+) -> None:
+    path = tmp_path / f"unknown-{extra_object}.sqlite3"
+    unique = ", UNIQUE(payload)" if extra_object == "constraint" else ""
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE run_reflections ("
+            "tenant_id TEXT NOT NULL, session_id TEXT NOT NULL, "
+            "run_id TEXT NOT NULL, "
+            "payload TEXT NOT NULL CHECK(length(payload) <= 65536), "
+            "PRIMARY KEY (tenant_id, session_id, run_id)"
+            f"{unique}) WITHOUT ROWID"
+        )
+        if extra_object == "index":
+            connection.execute(
+                "CREATE UNIQUE INDEX unexpected_reflection_payload "
+                "ON run_reflections(payload)"
+            )
+        elif extra_object == "trigger":
+            connection.execute(
+                "CREATE TRIGGER unexpected_reflection_insert "
+                "BEFORE INSERT ON run_reflections BEGIN SELECT 1; END"
+            )
+
+    with pytest.raises(MigrationError, match="reflection schema is incompatible"):
+        await migrate(path)
+
+    with sqlite3.connect(path) as connection:
+        ledger = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'schema_migrations'"
+        ).fetchone()
+        objects = connection.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE tbl_name = 'run_reflections' ORDER BY name"
+        ).fetchall()
+    assert ledger is None
+    assert len(objects) == 2
+
+
+@pytest.mark.asyncio
 async def test_tampered_and_future_migration_history_is_rejected(
     tmp_path: Path,
 ) -> None:
