@@ -109,10 +109,16 @@ def load_benchmark(
     path: Path,
     materials: Sequence[Mapping[str, str]],
     *,
-    catalog_sha256: str | None = None,
+    catalog_sha256: str = "",
 ) -> Benchmark:
     """Load JSON-compatible YAML and validate every label against the catalog."""
 
+    if len(catalog_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in catalog_sha256
+    ):
+        raise BenchmarkError(
+            "catalog SHA-256 must be 64 lowercase hexadecimal characters"
+        )
     profile_materials(materials)
     try:
         root = _object(json.loads(path.read_text(encoding="utf-8")), "benchmark")
@@ -126,7 +132,7 @@ def load_benchmark(
     expected_rows = _integer(catalog.get("row_count"), "catalog.row_count")
     if expected_rows != len(materials):
         raise BenchmarkError("benchmark catalog row count does not match input")
-    if catalog_sha256 is not None and expected_sha256 != catalog_sha256:
+    if expected_sha256 != catalog_sha256:
         raise BenchmarkError("benchmark catalog SHA-256 does not match input")
 
     rows_by_id = {material[PART_ID_COLUMN].strip(): material for material in materials}
@@ -211,13 +217,15 @@ def evaluate_benchmark(
 
 
 def select_weight(evaluations: Sequence[WeightEvaluation]) -> WeightEvaluation:
-    """Choose graded relevance first, then precision, then the neutral prior."""
+    """Choose usable retrieval first, then relevance and the neutral prior."""
 
     if not evaluations:
         raise ValueError("at least one weight evaluation is required")
     return min(
         evaluations,
         key=lambda item: (
+            -item.metrics.expected_status_rate,
+            -item.metrics.coverage,
             -item.metrics.ndcg_at_5,
             -item.metrics.precision_at_5,
             abs(item.word_weight - 0.5),
@@ -295,7 +303,7 @@ def _query(
         raise BenchmarkError(f"{location} expects ranking for blank text")
     if expected_status == "ok" and not judgments:
         raise BenchmarkError(f"{location} has no reviewed candidates")
-    if expected_status != "ok" and judgments:
+    if expected_status == "insufficient_description" and judgments:
         raise BenchmarkError(f"{location} abstention must not invent judgments")
     return BenchmarkQuery(
         part_id=part_id,
@@ -342,12 +350,22 @@ def _score_queries(
         if result is None:
             raise BenchmarkError(f"retrieval omitted benchmark query {query.part_id}")
         status_matches += result.status == query.expected_status
-        if result.status != "ok":
-            continue
-        if len(result.alternatives) != TOP_K:
-            raise BenchmarkError(f"{query.part_id} did not return exactly five results")
         candidate_ids = [candidate.part_id for candidate in result.alternatives]
-        if query.part_id in candidate_ids or len(set(candidate_ids)) != TOP_K:
+        if result.status not in _EXPECTED_STATUSES:
+            raise BenchmarkError(f"{query.part_id} has an invalid retrieval status")
+        if result.status == "ok" and len(candidate_ids) != TOP_K:
+            raise BenchmarkError(f"{query.part_id} did not return exactly five results")
+        if result.status == "insufficient_candidates" and len(candidate_ids) >= TOP_K:
+            raise BenchmarkError(
+                f"{query.part_id} insufficient result returned five or more candidates"
+            )
+        if result.status == "insufficient_description" and candidate_ids:
+            raise BenchmarkError(
+                f"{query.part_id} description abstention returned alternatives"
+            )
+        if query.part_id in candidate_ids or len(set(candidate_ids)) != len(
+            candidate_ids
+        ):
             raise BenchmarkError(f"{query.part_id} ranking contains self or duplicates")
         grades_by_id = {
             judgment.part_id: judgment.grade for judgment in query.judgments
@@ -359,8 +377,10 @@ def _score_queries(
         ]
         if unreviewed:
             raise BenchmarkError(
-                f"{query.part_id} has unreviewed top-five candidates: {unreviewed}"
+                f"{query.part_id} has unreviewed candidates: {unreviewed}"
             )
+        if result.status != "ok":
+            continue
         grades = [grades_by_id[candidate_id] for candidate_id in candidate_ids]
         precisions.append(sum(grade >= RELEVANT_GRADE for grade in grades) / TOP_K)
         ndcgs.append(_ndcg(grades, [item.grade for item in query.judgments]))

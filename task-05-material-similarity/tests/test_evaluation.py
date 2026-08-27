@@ -36,6 +36,7 @@ from material_similarity.retrieval import (
 _DEFAULT_CATALOG = Path(__file__).parents[2] / "input" / "IT DA AI Tasks" / "Fuse.csv"
 _CATALOG = Path(os.environ.get("SIEMENS_FUSE_CSV", _DEFAULT_CATALOG))
 _BENCHMARK = Path(__file__).parents[1] / "evals" / "relevance.yaml"
+_FIXTURE_DIGEST = "0" * 64
 
 
 def _material(part_id: str, description: str) -> dict[str, str]:
@@ -48,7 +49,7 @@ def _material(part_id: str, description: str) -> dict[str, str]:
 def _benchmark_payload() -> dict[str, object]:
     return {
         "version": 1,
-        "catalog": {"sha256": "fixture", "row_count": 6},
+        "catalog": {"sha256": _FIXTURE_DIGEST, "row_count": 6},
         "queries": [
             {
                 "part_id": "Q",
@@ -84,7 +85,9 @@ def test_benchmark_validation_blocks_self_duplicates_and_catalog_drift(
     payload = _benchmark_payload()
     _write_benchmark(path, payload)
     assert (
-        load_benchmark(path, materials, catalog_sha256="fixture").queries[0].part_id
+        load_benchmark(path, materials, catalog_sha256=_FIXTURE_DIGEST)
+        .queries[0]
+        .part_id
         == "Q"
     )
 
@@ -97,7 +100,7 @@ def test_benchmark_validation_blocks_self_duplicates_and_catalog_drift(
     judgments.append({"part_id": "Q", "grade": 3, "rationale": "self"})
     _write_benchmark(path, payload)
     with pytest.raises(BenchmarkError, match="leaks the query"):
-        load_benchmark(path, materials)
+        load_benchmark(path, materials, catalog_sha256=_FIXTURE_DIGEST)
 
     payload = _benchmark_payload()
     queries = payload["queries"]
@@ -109,7 +112,7 @@ def test_benchmark_validation_blocks_self_duplicates_and_catalog_drift(
     judgments.append(judgments[0])
     _write_benchmark(path, payload)
     with pytest.raises(BenchmarkError, match="duplicate candidate judgments"):
-        load_benchmark(path, materials)
+        load_benchmark(path, materials, catalog_sha256=_FIXTURE_DIGEST)
 
     payload = _benchmark_payload()
     queries = payload["queries"]
@@ -117,12 +120,28 @@ def test_benchmark_validation_blocks_self_duplicates_and_catalog_drift(
     queries.append(queries[0])
     _write_benchmark(path, payload)
     with pytest.raises(BenchmarkError, match="duplicate query IDs"):
-        load_benchmark(path, materials)
+        load_benchmark(path, materials, catalog_sha256=_FIXTURE_DIGEST)
 
     payload = _benchmark_payload()
     _write_benchmark(path, payload)
     with pytest.raises(BenchmarkError, match="SHA-256"):
-        load_benchmark(path, materials, catalog_sha256="changed")
+        load_benchmark(path, materials, catalog_sha256="1" * 64)
+
+
+@pytest.mark.parametrize(
+    "digest",
+    ["", "0" * 63, "0" * 65, "G" * 64, "A" * 64],
+)
+def test_benchmark_requires_a_lowercase_sha256(digest: str, tmp_path: Path) -> None:
+    materials = tuple(_material(part_id, "shared fuse") for part_id in "QABCDE")
+    path = tmp_path / "relevance.yaml"
+    _write_benchmark(path, _benchmark_payload())
+
+    with pytest.raises(BenchmarkError, match="64 lowercase hexadecimal"):
+        load_benchmark(path, materials, catalog_sha256=digest)
+    if not digest:
+        with pytest.raises(BenchmarkError, match="64 lowercase hexadecimal"):
+            load_benchmark(path, materials)
 
 
 def test_metrics_detect_a_deliberately_permuted_ranking() -> None:
@@ -170,6 +189,63 @@ def test_weight_selection_prefers_graded_relevance_then_the_neutral_prior() -> N
 
     improved = replace(evaluations[0], metrics=replace(base, ndcg_at_5=0.81))
     assert select_weight((improved, *evaluations[1:])).word_weight == 0.25
+
+
+def test_weight_selection_prioritizes_expected_status_and_coverage() -> None:
+    reliable = WeightEvaluation(
+        0.5,
+        0.5,
+        Metrics(0.1, 0.1, 1.0, 1.0, 10, 10),
+        (),
+    )
+    wrong_status = replace(
+        reliable,
+        word_weight=0.25,
+        character_weight=0.75,
+        metrics=Metrics(1.0, 1.0, 1.0, 0.9, 10, 10),
+    )
+    lower_coverage = replace(
+        reliable,
+        word_weight=0.75,
+        character_weight=0.25,
+        metrics=Metrics(1.0, 1.0, 0.9, 1.0, 10, 9),
+    )
+
+    assert select_weight((wrong_status, lower_coverage, reliable)) == reliable
+
+
+@pytest.mark.parametrize(
+    ("status", "candidate_ids", "message"),
+    [
+        ("ok", "ABCD", "exactly five"),
+        ("insufficient_candidates", "ABCDE", "five or more"),
+        ("insufficient_description", "A", "abstention returned alternatives"),
+        ("insufficient_candidates", "Q", "self or duplicates"),
+        ("insufficient_candidates", "AA", "self or duplicates"),
+        ("insufficient_candidates", "Z", "unreviewed"),
+        ("invalid", "", "invalid retrieval status"),
+    ],
+)
+def test_metrics_validate_every_status_before_skipping_relevance(
+    status: str,
+    candidate_ids: str,
+    message: str,
+) -> None:
+    query = BenchmarkQuery(
+        "Q",
+        "insufficient_candidates",
+        ("fixture",),
+        "fixture",
+        tuple(Judgment(part_id, 2, "fixture") for part_id in "ABCDE"),
+    )
+    result = RetrievalResult(
+        "Q",
+        status,  # type: ignore[arg-type] - invalid runtime combinations are the target.
+        tuple(_alternative(part_id) for part_id in candidate_ids),
+    )
+
+    with pytest.raises(BenchmarkError, match=message):
+        score_results(Benchmark(_FIXTURE_DIGEST, 6, (query,)), (result,))
 
 
 @pytest.mark.parametrize("weight", [-0.1, 1.1, float("nan"), float("inf")])
