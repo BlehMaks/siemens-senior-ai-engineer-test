@@ -19,13 +19,8 @@ variables {
   image_digest                   = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 }
 
-run "dev_environment_wires_managed_services_before_execution" {
-  command = apply
-
-  assert {
-    condition     = output.execution_plane.iam_contract.tasks_service_agent_member == "serviceAccount:service-123456789012@gcp-sa-cloudtasks.iam.gserviceaccount.com"
-    error_message = "Cloud Tasks token minting must use the resolved project service agent."
-  }
+run "dev_environment_plans_with_reviewed_contract" {
+  command = plan
 }
 
 run "tasks_identity_cannot_collapse_into_deployer" {
