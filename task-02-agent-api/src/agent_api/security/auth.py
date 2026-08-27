@@ -10,11 +10,10 @@ import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Annotated, Protocol
+from typing import Protocol
 
 from pydantic import (
     Field,
-    StringConstraints,
     TypeAdapter,
     ValidationError,
     field_validator,
@@ -22,16 +21,7 @@ from pydantic import (
 
 from search_agent.contracts import OpaqueId, StrictModel
 
-from ..storage import ApiKeyHashRecord, SQLiteKeyHashRepository
-
-ApiKeyScope = Annotated[
-    str,
-    StringConstraints(
-        min_length=3,
-        max_length=64,
-        pattern=r"^[a-z][a-z0-9]*(?::[a-z][a-z0-9]*)*$",
-    ),
-]
+from ..storage import ApiKeyHashRecord, ApiKeyScope, SQLiteKeyHashRepository
 
 _OPAQUE_ID = TypeAdapter(OpaqueId)
 _SCOPE = TypeAdapter(ApiKeyScope)
@@ -91,8 +81,8 @@ class ApiKeyAuthError(RuntimeError):
 
 
 class ApiKeyCredentials(StrictModel):
-    tenant_id: OpaqueId
-    key_id: OpaqueId
+    tenant_id: OpaqueId = Field(repr=False)
+    key_id: OpaqueId = Field(repr=False)
     secret: bytes = Field(
         min_length=_SECRET_BYTES, max_length=_SECRET_BYTES, repr=False
     )
@@ -106,16 +96,16 @@ class ApiKeyCredentials(StrictModel):
 
 
 class AuthenticatedApiKey(StrictModel):
-    tenant_id: OpaqueId
-    key_id: OpaqueId
-    scopes: tuple[ApiKeyScope, ...]
+    tenant_id: OpaqueId = Field(repr=False)
+    key_id: OpaqueId = Field(repr=False)
+    scopes: tuple[ApiKeyScope, ...] = Field(repr=False)
     expires_at: datetime | None = None
 
 
 @dataclass(frozen=True)
 class GeneratedApiKey:
     plaintext: str = field(repr=False)
-    record: ApiKeyHashRecord
+    record: ApiKeyHashRecord = field(repr=False)
 
 
 class ApiKeyManager:
@@ -158,7 +148,7 @@ class ApiKeyManager:
             tenant_id=old.tenant_id,
             scopes=new_scopes,
             now=now,
-            expires_at=expires_at,
+            expires_at=record.expires_at if expires_at is None else expires_at,
             pepper=self._pepper_provider.pepper(),
             rotated_from_key_id=old.key_id,
         )

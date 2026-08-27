@@ -157,14 +157,14 @@ class TenantRecord(StrictModel):
 class ApiKeyHashRecord(StrictModel):
     """Only a derived hash crosses this boundary; plaintext keys have no field."""
 
-    tenant_id: OpaqueId
-    key_id: OpaqueId
+    tenant_id: OpaqueId = Field(repr=False)
+    key_id: OpaqueId = Field(repr=False)
     key_hash: KeyHash
-    scopes: tuple[ApiKeyScope, ...] = ()
+    scopes: tuple[ApiKeyScope, ...] = Field(default=(), repr=False)
     created_at: datetime
     expires_at: datetime | None = None
     revoked_at: datetime | None = None
-    rotated_from_key_id: OpaqueId | None = None
+    rotated_from_key_id: OpaqueId | None = Field(default=None, repr=False)
 
     _created_at_is_utc = field_validator("created_at")(_utc)
     _optional_timestamps_are_utc = field_validator("expires_at", "revoked_at")(
@@ -1062,6 +1062,7 @@ def _parse_timestamp(value: object) -> datetime:
 
 __all__ = [
     "ApiKeyHashRecord",
+    "ApiKeyScope",
     "AuditEntry",
     "SQLiteAuditRepository",
     "SQLiteEventRepository",

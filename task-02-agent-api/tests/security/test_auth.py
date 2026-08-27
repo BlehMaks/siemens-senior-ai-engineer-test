@@ -60,7 +60,7 @@ def _noncanonical_secret(plaintext: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_create_verify_format_entropy_and_digest_only_at_rest(
+async def test_create_verify_format_and_digest_only_at_rest(
     migrated_path: Path,
 ) -> None:
     await _tenant(migrated_path)
@@ -79,22 +79,10 @@ async def test_create_verify_format_entropy_and_digest_only_at_rest(
     assert generated.plaintext not in repr(generated)
     assert "secret=" not in repr(credentials)
     assert "key_hash=" not in repr(generated.record)
-    assert (
-        len(
-            {
-                generated.plaintext,
-                (
-                    await manager.create(
-                        tenant_id="tenant-one",
-                        scopes=("runs:read",),
-                        now=NOW,
-                    )
-                ).plaintext,
-            }
-        )
-        == 2
-    )
-
+    assert credentials.tenant_id not in repr(credentials)
+    assert credentials.key_id not in repr(credentials)
+    assert credentials.tenant_id not in repr(generated.record)
+    assert credentials.key_id not in repr(generated.record)
     authenticated = await manager.authenticate(
         authorization=f"Bearer {generated.plaintext}",
         required_scope="runs:read",
@@ -102,6 +90,8 @@ async def test_create_verify_format_entropy_and_digest_only_at_rest(
     )
     assert authenticated.tenant_id == "tenant-one"
     assert authenticated.scopes == ("runs:read", "runs:write")
+    assert authenticated.tenant_id not in repr(authenticated)
+    assert authenticated.key_id not in repr(authenticated)
 
     raw = migrated_path.read_bytes()
     assert generated.plaintext.encode() not in raw
@@ -221,6 +211,33 @@ async def test_rotate_is_atomic_and_revoke_requires_matching_secret(
     assert not await manager.revoke(
         authorization=f"Bearer {new.plaintext}", now=NOW + timedelta(seconds=4)
     )
+
+
+@pytest.mark.asyncio
+async def test_rotation_preserves_expiry_unless_replaced(migrated_path: Path) -> None:
+    await _tenant(migrated_path)
+    manager = ApiKeyManager(SQLiteKeyHashRepository(migrated_path), FixedPepper())
+    expiry = NOW + timedelta(minutes=10)
+    old = await manager.create(
+        tenant_id="tenant-one",
+        scopes=("runs:read",),
+        now=NOW,
+        expires_at=expiry,
+    )
+
+    new = await manager.rotate(
+        old_authorization=f"Bearer {old.plaintext}",
+        scopes=None,
+        now=NOW + timedelta(seconds=1),
+    )
+
+    assert new.record.expires_at == expiry
+    with pytest.raises(ApiKeyAuthError):
+        await manager.authenticate(
+            authorization=f"Bearer {new.plaintext}",
+            required_scope="runs:read",
+            now=expiry,
+        )
 
 
 @pytest.mark.asyncio

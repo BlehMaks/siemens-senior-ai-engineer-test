@@ -2,6 +2,7 @@
 
 from .repositories import (
     ApiKeyHashRecord,
+    ApiKeyScope,
     AuditEntry,
     SessionRecord,
     SQLiteAuditRepository,
@@ -19,6 +20,7 @@ from .schema import MigrationError, migrate
 
 __all__ = [
     "ApiKeyHashRecord",
+    "ApiKeyScope",
     "AuditEntry",
     "MigrationError",
     "SQLiteAuditRepository",
