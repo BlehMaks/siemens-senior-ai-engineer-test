@@ -9,7 +9,7 @@ from typing import Never
 
 import pytest
 from contract_fakes import FakeRunRepository, FakeWorkQueue
-from pydantic import ValidationError
+from pydantic import AnyHttpUrl, ValidationError
 
 from agent_api.ports import (
     ClaimDisposition,
@@ -18,6 +18,7 @@ from agent_api.ports import (
     LeaseDisposition,
     LeaseRenewal,
     QueueConflictError,
+    RunFailureCode,
     RunRepository,
     RunState,
     RunSubmission,
@@ -26,8 +27,22 @@ from agent_api.ports import (
     WorkQueue,
     WriteDisposition,
 )
+from search_agent.contracts import Citation, ScopedAnswer
 
 NOW = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
+
+
+def _public_answer() -> ScopedAnswer:
+    return ScopedAnswer(
+        answer_text="The public answer.",
+        citations=(
+            Citation(
+                claim="The public claim.",
+                evidence_id="ev-public",
+                source_url=AnyHttpUrl("https://example.com/report"),
+            ),
+        ),
+    )
 
 
 def submission(
@@ -206,6 +221,7 @@ class RunRepositoryContract:
                 lease_id="lease-one",
                 worker_id="worker-one",
                 at=reclaimed_at + timedelta(seconds=1),
+                answer=_public_answer(),
             )
         )
         assert old_owner.disposition is WriteDisposition.LEASE_LOST
@@ -235,6 +251,7 @@ class RunRepositoryContract:
                 lease_id="lease-shared",
                 worker_id="worker-one",
                 at=NOW + timedelta(seconds=2),
+                answer=_public_answer(),
             )
         )
 
@@ -342,6 +359,7 @@ class RunRepositoryContract:
                 lease_id="lease-one",
                 worker_id="worker-one",
                 at=NOW + timedelta(seconds=2),
+                answer=_public_answer(),
             )
         )
         cancelled = await repository.compare_and_set(
@@ -377,6 +395,7 @@ class RunRepositoryContract:
                 lease_id="lease-one",
                 worker_id="worker-one",
                 at=NOW + timedelta(seconds=1),
+                answer=_public_answer(),
             )
         )
         cancellation = await repository.request_cancellation(
@@ -489,6 +508,7 @@ class RunRepositoryContract:
                 expected_state=RunState.QUEUED,
                 next_state=RunState.FAILED,
                 at=NOW,
+                failure_code=RunFailureCode.EXECUTION_FAILED,
             )
         )
         assert hidden_update.disposition is WriteDisposition.NOT_FOUND

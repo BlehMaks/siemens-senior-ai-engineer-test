@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -7,7 +8,14 @@ from pathlib import Path
 import pytest
 from pydantic import AnyHttpUrl
 
-from agent_api.ports import RunState, RunSubmission
+from agent_api.ports import (
+    ClaimRequest,
+    RunFailureCode,
+    RunState,
+    RunSubmission,
+    StateUpdate,
+    WorkItem,
+)
 from agent_api.schemas import RunEvent, RunEventType
 from agent_api.storage import (
     ApiKeyHashRecord,
@@ -19,6 +27,7 @@ from agent_api.storage import (
     SQLiteRunRepository,
     SQLiteSessionRepository,
     SQLiteTenantRepository,
+    SQLiteWorkQueue,
     StorageError,
     TenantRecord,
     reflection_repository,
@@ -29,6 +38,7 @@ from search_agent.memory import (
     ReflectionStorageError,
     ReflectionUsage,
     RunReflection,
+    UnresolvedItem,
 )
 
 NOW = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
@@ -84,8 +94,52 @@ def reflection(*, tenant_id: str, run_id: str) -> RunReflection:
     )
 
 
+def failed_reflection(*, tenant_id: str, run_id: str) -> RunReflection:
+    return RunReflection(
+        tenant_id=tenant_id,
+        session_id="session-one",
+        run_id=run_id,
+        requested_outcome="Find the public Siemens report.",
+        actions=(),
+        failures=(),
+        recovery_steps=(),
+        completion_evidence=(),
+        unresolved_items=(UnresolvedItem.NO_EVIDENCE,),
+        outcome=TerminalState.FAILED,
+        usage=ReflectionUsage(
+            elapsed_seconds=0,
+            iterations=0,
+            search_queries=0,
+            pages=0,
+            failed_pages=0,
+            raw_bytes_reserved=0,
+            decoded_bytes=0,
+            model_calls=0,
+            model_attempts=0,
+            tokens=0,
+        ),
+    )
+
+
+async def seed_session(
+    path: Path, *, tenant_id: str = "tenant-one", session_id: str = "session-one"
+) -> None:
+    await SQLiteTenantRepository(path).put(
+        TenantRecord(tenant_id=tenant_id, created_at=NOW)
+    )
+    await SQLiteSessionRepository(path).put(
+        SessionRecord(
+            tenant_id=tenant_id,
+            session_id=session_id,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_and_event_order_survive_reopen(migrated_path: Path) -> None:
+    await seed_session(migrated_path)
     runs = SQLiteRunRepository(migrated_path)
     for run in (
         submission(run_id="run-zed", key="request-key-zed"),
@@ -388,6 +442,7 @@ async def test_deleted_tenant_cannot_acquire_new_memory(migrated_path: Path) -> 
 async def test_session_deletion_cascades_runs_events_and_memory(
     migrated_path: Path,
 ) -> None:
+    await seed_session(migrated_path)
     runs = SQLiteRunRepository(migrated_path)
     await runs.create(submission())
     events = SQLiteEventRepository(migrated_path)
@@ -419,3 +474,274 @@ async def test_session_deletion_cascades_runs_events_and_memory(
         )
     finally:
         reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_run_creation_requires_an_existing_tenant_owned_session(
+    migrated_path: Path,
+) -> None:
+    runs = SQLiteRunRepository(migrated_path)
+
+    with pytest.raises(ValueError, match="parent object does not exist"):
+        await runs.create(submission())
+
+    await seed_session(migrated_path, tenant_id="tenant-two")
+    with pytest.raises(ValueError, match="parent object does not exist"):
+        await runs.create(submission())
+
+
+@pytest.mark.asyncio
+async def test_run_creation_does_not_resurrect_a_deleted_session(
+    migrated_path: Path,
+) -> None:
+    await seed_session(migrated_path)
+    sessions = SQLiteSessionRepository(migrated_path)
+    assert await sessions.delete(tenant_id="tenant-one", session_id="session-one")
+
+    with pytest.raises(ValueError, match="parent object does not exist"):
+        await SQLiteRunRepository(migrated_path).create(submission())
+
+    assert await sessions.get(tenant_id="tenant-one", session_id="session-one") is None
+
+
+@pytest.mark.asyncio
+async def test_completed_outcome_and_reflection_survive_reopen(
+    migrated_path: Path,
+) -> None:
+    await seed_session(migrated_path)
+    runs = SQLiteRunRepository(migrated_path)
+    await runs.create(submission())
+    claimed = await runs.claim(
+        ClaimRequest(
+            tenant_id="tenant-one",
+            run_id="run-one",
+            worker_id="worker-one",
+            lease_id="lease-one",
+            now=NOW,
+            lease_seconds=30,
+        )
+    )
+    assert claimed.run is not None
+    answer = ScopedAnswer(
+        answer_text="The public answer.",
+        citations=(
+            Citation(
+                claim="The public claim.",
+                evidence_id="ev-public",
+                source_url=AnyHttpUrl("https://example.com/report"),
+            ),
+        ),
+    )
+
+    completed = await runs.compare_and_set(
+        StateUpdate(
+            tenant_id="tenant-one",
+            run_id="run-one",
+            expected_version=claimed.run.version,
+            expected_state=RunState.RUNNING,
+            next_state=RunState.COMPLETED,
+            lease_id="lease-one",
+            worker_id="worker-one",
+            at=NOW + timedelta(seconds=1),
+            answer=answer,
+            reflection=reflection(tenant_id="tenant-one", run_id="run-one"),
+        )
+    )
+
+    stored = await SQLiteRunRepository(migrated_path).get(
+        tenant_id="tenant-one",
+        run_id="run-one",
+    )
+    reopened_memory = reflection_repository(migrated_path)
+    try:
+        assert completed.run is not None
+        assert stored == completed.run
+        assert stored is not None and stored.answer == answer
+        assert stored.failure_code is None
+        assert reopened_memory.get(
+            tenant_id="tenant-one",
+            session_id="session-one",
+            run_id="run-one",
+        ) == reflection(tenant_id="tenant-one", run_id="run-one")
+    finally:
+        reopened_memory.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_outcome_and_reflection_survive_reopen(
+    migrated_path: Path,
+) -> None:
+    await seed_session(migrated_path)
+    runs = SQLiteRunRepository(migrated_path)
+    await runs.create(submission())
+    claimed = await runs.claim(
+        ClaimRequest(
+            tenant_id="tenant-one",
+            run_id="run-one",
+            worker_id="worker-one",
+            lease_id="lease-one",
+            now=NOW,
+            lease_seconds=30,
+        )
+    )
+    assert claimed.run is not None
+
+    failed = await runs.compare_and_set(
+        StateUpdate(
+            tenant_id="tenant-one",
+            run_id="run-one",
+            expected_version=claimed.run.version,
+            expected_state=RunState.RUNNING,
+            next_state=RunState.FAILED,
+            lease_id="lease-one",
+            worker_id="worker-one",
+            at=NOW + timedelta(seconds=1),
+            failure_code=RunFailureCode.EXECUTION_FAILED,
+            reflection=failed_reflection(tenant_id="tenant-one", run_id="run-one"),
+        )
+    )
+
+    stored = await SQLiteRunRepository(migrated_path).get(
+        tenant_id="tenant-one",
+        run_id="run-one",
+    )
+    reopened_memory = reflection_repository(migrated_path)
+    try:
+        assert failed.run is not None
+        assert stored == failed.run
+        assert stored is not None
+        assert stored.failure_code is RunFailureCode.EXECUTION_FAILED
+        assert stored.answer is None
+        assert reopened_memory.get(
+            tenant_id="tenant-one",
+            session_id="session-one",
+            run_id="run-one",
+        ) == failed_reflection(tenant_id="tenant-one", run_id="run-one")
+    finally:
+        reopened_memory.close()
+
+
+@pytest.mark.asyncio
+async def test_work_queue_receive_is_durable_and_recovers_visibility(
+    migrated_path: Path,
+) -> None:
+    await seed_session(migrated_path)
+    await SQLiteRunRepository(migrated_path).create(submission())
+    queue = SQLiteWorkQueue(migrated_path)
+    item = WorkItem(
+        work_id="work-one",
+        tenant_id="tenant-one",
+        run_id="run-one",
+        enqueued_at=NOW,
+        not_before=NOW,
+    )
+
+    assert (await queue.enqueue(item)).created is True
+    claimed = await queue.receive(now=NOW, visibility_seconds=10)
+    reopened = SQLiteWorkQueue(migrated_path)
+    hidden = await reopened.receive(
+        now=NOW + timedelta(seconds=5), visibility_seconds=10
+    )
+    recovered = await reopened.receive(
+        now=NOW + timedelta(seconds=10), visibility_seconds=10
+    )
+
+    assert claimed == item
+    assert hidden is None
+    assert recovered is not None
+    assert recovered.work_id == item.work_id
+    assert recovered.tenant_id == item.tenant_id
+    assert recovered.run_id == item.run_id
+    assert recovered.enqueued_at == item.enqueued_at
+    assert recovered.not_before == NOW + timedelta(seconds=10)
+
+
+@pytest.mark.asyncio
+async def test_work_queue_receive_is_claimed_once_across_two_consumers(
+    migrated_path: Path,
+) -> None:
+    await seed_session(migrated_path)
+    await SQLiteRunRepository(migrated_path).create(submission())
+    queue = SQLiteWorkQueue(migrated_path)
+    item = WorkItem(
+        work_id="work-one",
+        tenant_id="tenant-one",
+        run_id="run-one",
+        enqueued_at=NOW,
+        not_before=NOW,
+    )
+    await queue.enqueue(item)
+
+    first, second = await asyncio.gather(
+        queue.receive(now=NOW, visibility_seconds=10),
+        SQLiteWorkQueue(migrated_path).receive(now=NOW, visibility_seconds=10),
+    )
+
+    assert {first, second} == {item, None}
+
+
+@pytest.mark.asyncio
+async def test_work_queue_cancel_is_tenant_scoped_after_enqueue(
+    migrated_path: Path,
+) -> None:
+    await seed_session(migrated_path)
+    await seed_session(migrated_path, tenant_id="tenant-two")
+    runs = SQLiteRunRepository(migrated_path)
+    await runs.create(submission())
+    await runs.create(
+        submission(tenant_id="tenant-two", run_id="run-two", key="request-key-two")
+    )
+    queue = SQLiteWorkQueue(migrated_path)
+    await queue.enqueue(
+        WorkItem(
+            work_id="work-one",
+            tenant_id="tenant-one",
+            run_id="run-one",
+            enqueued_at=NOW,
+            not_before=NOW,
+        )
+    )
+    await queue.enqueue(
+        WorkItem(
+            work_id="work-two",
+            tenant_id="tenant-two",
+            run_id="run-two",
+            enqueued_at=NOW,
+            not_before=NOW,
+        )
+    )
+
+    assert await queue.cancel(tenant_id="tenant-one", run_id="run-one") == 1
+    assert await queue.receive(now=NOW, visibility_seconds=10) == WorkItem(
+        work_id="work-two",
+        tenant_id="tenant-two",
+        run_id="run-two",
+        enqueued_at=NOW,
+        not_before=NOW,
+    )
+
+
+@pytest.mark.asyncio
+async def test_work_queue_rejects_corrupted_stored_items(
+    migrated_path: Path,
+) -> None:
+    await seed_session(migrated_path)
+    await SQLiteRunRepository(migrated_path).create(submission())
+    queue = SQLiteWorkQueue(migrated_path)
+    await queue.enqueue(
+        WorkItem(
+            work_id="work-one",
+            tenant_id="tenant-one",
+            run_id="run-one",
+            enqueued_at=NOW,
+            not_before=NOW,
+        )
+    )
+    with sqlite3.connect(migrated_path) as connection:
+        connection.execute(
+            "UPDATE work_items SET enqueued_at = ? WHERE work_id = ?",
+            ("not-a-timestamp", "work-one"),
+        )
+
+    with pytest.raises(StorageError, match="stored work item"):
+        await queue.receive(now=NOW, visibility_seconds=10)

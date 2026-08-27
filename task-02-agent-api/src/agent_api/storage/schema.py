@@ -36,6 +36,7 @@ def _bundled_migration(version: int, name: str, filename: str) -> _Migration:
 _MIGRATIONS = (
     _bundled_migration(1, "initial", "001_initial.sql"),
     _bundled_migration(2, "api-key-lifecycle", "002_api_key_lifecycle.sql"),
+    _bundled_migration(3, "local-work-queue", "003_local_work_queue.sql"),
 )
 _CREATE_LEDGER = """
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -78,6 +79,13 @@ _REQUIRED_COLUMNS = {
     "run_events": ("tenant_id", "run_id", "sequence", "occurred_at", "payload"),
     "run_reflections": ("tenant_id", "session_id", "run_id", "payload"),
     "audit_entries": ("tenant_id", "entry_id", "action", "occurred_at"),
+    "work_items": (
+        "work_id",
+        "tenant_id",
+        "run_id",
+        "enqueued_at",
+        "not_before",
+    ),
 }
 _LEGACY_REFLECTION_SQL = (
     "CREATE TABLE run_reflections ( tenant_id TEXT NOT NULL, "
@@ -230,6 +238,40 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
         for row in reflection_foreign_keys
     ):
         raise MigrationError("database reflection schema is incompatible")
+
+    queue_foreign_keys = await (
+        await connection.execute('PRAGMA foreign_key_list("work_items")')
+    ).fetchall()
+    run_reference = {
+        (row[3], row[4])
+        for row in queue_foreign_keys
+        if row[2] == "runs" and row[6].upper() == "CASCADE"
+    }
+    if run_reference != {("tenant_id", "tenant_id"), ("run_id", "run_id")}:
+        raise MigrationError("database physical schema is incompatible")
+
+    queue_indexes = {
+        "work_items_by_due": ("not_before", "enqueued_at", "work_id"),
+        "work_items_by_run": ("tenant_id", "run_id", "work_id"),
+    }
+    for name, expected_columns in queue_indexes.items():
+        index_columns = tuple(
+            row[2]
+            for row in await (
+                await connection.execute(f'PRAGMA index_info("{name}")')
+            ).fetchall()
+        )
+        if index_columns != expected_columns:
+            raise MigrationError("database physical schema is incompatible")
+
+    work_columns = tuple(
+        row[1]
+        for row in await (
+            await connection.execute('PRAGMA table_info("work_items")')
+        ).fetchall()
+    )
+    if work_columns != _REQUIRED_COLUMNS["work_items"]:
+        raise MigrationError("database physical schema is incompatible")
 
 
 __all__ = ["MigrationError", "migrate"]

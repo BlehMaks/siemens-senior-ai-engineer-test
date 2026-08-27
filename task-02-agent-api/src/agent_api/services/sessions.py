@@ -25,7 +25,11 @@ class SessionNotFound(LookupError):
     """The session is absent from the authenticated tenant boundary."""
 
 
-class InvalidCursor(ValueError):
+class InvalidRequest(ValueError):
+    """The client supplied a semantically invalid request value."""
+
+
+class InvalidCursor(InvalidRequest):
     """The client supplied an invalid opaque page cursor."""
 
 

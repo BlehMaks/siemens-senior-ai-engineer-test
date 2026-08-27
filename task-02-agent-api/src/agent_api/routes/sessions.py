@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, cast
+from typing import Annotated, cast
 
 from fastapi import APIRouter, Body, Depends, Path, Query, Request, Response
 
@@ -11,19 +11,14 @@ from search_agent.contracts import OpaqueId
 from ..schemas import (
     CreateSessionRequest,
     DeletionResponse,
-    ErrorEnvelope,
     PageCursor,
     SessionListResponse,
     SessionResponse,
 )
-from ..security import ApiKeyManager, AuthenticatedApiKey
+from ..security import AuthenticatedApiKey
 from ..services import SessionService
 from ..storage import SessionRecord
-
-ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
-    code: {"model": ErrorEnvelope}
-    for code in (400, 401, 403, 404, 409, 422, 429, 500, 503)
-}
+from .common import ERROR_RESPONSES, authenticate_request
 
 
 def build_session_router() -> APIRouter:
@@ -126,11 +121,8 @@ def build_session_router() -> APIRouter:
 
 
 async def _authenticate(request: Request, required_scope: str) -> AuthenticatedApiKey:
-    values = request.headers.getlist("authorization")
-    authorization = values[0] if len(values) == 1 else None
-    manager = cast(ApiKeyManager, request.app.state.auth_manager)
-    return await manager.authenticate(
-        authorization=authorization,
+    return await authenticate_request(
+        request,
         required_scope=required_scope,
         now=_service(request).now(),
     )

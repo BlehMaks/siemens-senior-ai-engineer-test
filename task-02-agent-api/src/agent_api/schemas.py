@@ -22,7 +22,7 @@ from pydantic import (
 from search_agent.contracts import OpaqueId, QueryText, ScopedAnswer, StrictModel
 from search_agent.memory.contracts import contains_sensitive_memory_text
 
-from .ports import TERMINAL_RUN_STATES, RunState
+from .ports import TERMINAL_RUN_STATES, RunFailureCode, RunState
 
 SessionLabel = Annotated[
     str, StringConstraints(min_length=1, max_length=80, strip_whitespace=True)
@@ -238,15 +238,6 @@ class RunAcceptedResponse(StrictModel):
     created_at: datetime
 
     _created_at_is_utc = field_validator("created_at")(_require_utc)
-
-
-class RunFailureCode(StrEnum):
-    BUDGET_EXHAUSTED = "budget_exhausted"
-    NO_EVIDENCE = "no_evidence"
-    SEARCH_FAILED = "search_failed"
-    VALIDATION_FAILED = "validation_failed"
-    EXECUTION_FAILED = "execution_failed"
-    EXPIRED = "expired"
 
 
 class RunFailure(StrictModel):

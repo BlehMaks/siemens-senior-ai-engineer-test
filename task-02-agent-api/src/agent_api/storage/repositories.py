@@ -21,7 +21,7 @@ from pydantic import (
 )
 
 from search_agent.contracts import OpaqueId, ScopedAnswer, StrictModel
-from search_agent.memory import SQLiteReflectionRepository
+from search_agent.memory import RunReflection, SQLiteReflectionRepository
 
 from ..ports import (
     TERMINAL_RUN_STATES,
@@ -30,16 +30,21 @@ from ..ports import (
     ClaimRequest,
     ClaimResult,
     CreateRunResult,
+    EnqueueResult,
     ExecutionLease,
     IdempotencyConflictError,
     LeaseDisposition,
     LeaseRenewal,
     LeaseResult,
+    QueueConflictError,
+    RunFailureCode,
+    RunParentNotFoundError,
     RunRecord,
     RunState,
     RunSubmission,
     StateUpdate,
     StateUpdateResult,
+    WorkItem,
     WriteDisposition,
 )
 from ..schemas import RunEvent, RunFailure, SessionLabel
@@ -541,19 +546,12 @@ class SQLiteRunRepository(_PathRepository):
                 return CreateRunResult(run=run, created=False)
             if await _get_run(connection, checked.tenant_id, checked.run_id):
                 raise IdempotencyConflictError("run id already exists")
+            if not await _session_exists(
+                connection, checked.tenant_id, checked.session_id
+            ):
+                raise RunParentNotFoundError("referenced parent object does not exist")
 
             timestamp = _timestamp(checked.created_at)
-            await connection.execute(
-                "INSERT OR IGNORE INTO tenants (tenant_id, display_name, created_at) "
-                "VALUES (?, NULL, ?)",
-                (checked.tenant_id, timestamp),
-            )
-            await connection.execute(
-                "INSERT OR IGNORE INTO sessions "
-                "(tenant_id, session_id, label, created_at, updated_at) "
-                "VALUES (?, ?, NULL, ?, ?)",
-                (checked.tenant_id, checked.session_id, timestamp, timestamp),
-            )
             run = RunRecord(
                 **checked.model_dump(mode="python", exclude={"created_at"}),
                 state=RunState.QUEUED,
@@ -561,6 +559,8 @@ class SQLiteRunRepository(_PathRepository):
                 delivery_attempts=0,
                 created_at=checked.created_at,
                 updated_at=checked.created_at,
+                answer=None,
+                failure_code=None,
             )
             await _insert_run(connection, run)
             await connection.execute(
@@ -727,19 +727,38 @@ class SQLiteRunRepository(_PathRepository):
                 return StateUpdateResult(
                     disposition=WriteDisposition.CANCELLATION_REQUESTED, run=run
                 )
+            if (
+                checked.reflection is not None
+                and checked.reflection.session_id != run.session_id
+            ):
+                raise ValueError("reflection must match the run scope")
             terminal = checked.next_state in TERMINAL_RUN_STATES
             changed = _changed_run(
                 run,
                 state=checked.next_state,
                 updated_at=checked.at,
+                cancellation_requested_at=(
+                    (run.cancellation_requested_at or checked.at)
+                    if checked.next_state is RunState.CANCELLED
+                    else run.cancellation_requested_at
+                ),
                 terminal_at=checked.at if terminal else None,
                 lease=None if terminal else run.lease,
+                answer=checked.answer,
+                failure_code=checked.failure_code,
             )
             if not await _save_run(connection, run, changed):
                 current = await _get_run(connection, checked.tenant_id, checked.run_id)
                 return StateUpdateResult(
                     disposition=WriteDisposition.CONFLICT, run=current
                 )
+            await _write_reflection(
+                connection,
+                reflection=checked.reflection,
+                tenant_id=run.tenant_id,
+                session_id=run.session_id,
+                run_id=run.run_id,
+            )
             return StateUpdateResult(disposition=WriteDisposition.APPLIED, run=changed)
 
     async def request_cancellation(
@@ -899,6 +918,82 @@ class SQLiteAuditRepository(_PathRepository):
         )
 
 
+class SQLiteWorkQueue(_PathRepository):
+    """Local workers may read the global due set because claims reapply tenant scope."""
+
+    async def enqueue(self, item: WorkItem) -> EnqueueResult:
+        checked = _checked(WorkItem, item)
+        async with _connection(self._path, write=True) as connection:
+            row = await (
+                await connection.execute(
+                    "SELECT work_id, tenant_id, run_id, enqueued_at, not_before "
+                    "FROM work_items WHERE work_id = ?",
+                    (checked.work_id,),
+                )
+            ).fetchone()
+            if row is not None:
+                existing = _decode_work_item(row)
+                if (existing.tenant_id, existing.run_id) != (
+                    checked.tenant_id,
+                    checked.run_id,
+                ):
+                    raise QueueConflictError("work id already identifies another run")
+                return EnqueueResult(item=existing, created=False)
+            if await _get_run(connection, checked.tenant_id, checked.run_id) is None:
+                raise RunParentNotFoundError("work item run does not exist")
+            await connection.execute(
+                "INSERT INTO work_items "
+                "(work_id, tenant_id, run_id, enqueued_at, not_before) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    checked.work_id,
+                    checked.tenant_id,
+                    checked.run_id,
+                    _timestamp(checked.enqueued_at),
+                    _timestamp(checked.not_before),
+                ),
+            )
+            return EnqueueResult(item=checked, created=True)
+
+    async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int:
+        scope = (_scope_id(tenant_id), _scope_id(run_id))
+        async with _connection(self._path, write=True) as connection:
+            cursor = await connection.execute(
+                "DELETE FROM work_items WHERE tenant_id = ? AND run_id = ?",
+                scope,
+            )
+            return cursor.rowcount
+
+    async def receive(
+        self, *, now: datetime, visibility_seconds: int
+    ) -> WorkItem | None:
+        checked_now = _utc(now)
+        if type(visibility_seconds) is not int or not 1 <= visibility_seconds <= 900:
+            raise ValueError("visibility timeout must be between 1 and 900 seconds")
+        next_due = _lease_expiry(checked_now, visibility_seconds)
+        if next_due is None:
+            raise ValueError("visibility timeout exceeds the datetime range")
+        async with _connection(self._path, write=True) as connection:
+            row = await (
+                await connection.execute(
+                    "SELECT work_id, tenant_id, run_id, enqueued_at, not_before "
+                    "FROM work_items WHERE not_before <= ? "
+                    "ORDER BY not_before, enqueued_at, work_id LIMIT 1",
+                    (_timestamp(checked_now),),
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            cursor = await connection.execute(
+                "UPDATE work_items SET not_before = ? "
+                "WHERE work_id = ? AND not_before = ?",
+                (_timestamp(next_due), row[0], row[4]),
+            )
+            if cursor.rowcount != 1:
+                return None
+            return _decode_work_item(row)
+
+
 def reflection_repository(path: Path) -> SQLiteReflectionRepository:
     """Return Task 1's exact adapter after :func:`migrate` created its table."""
 
@@ -923,6 +1018,18 @@ async def _get_run(
     return None if row is None else _decode_run(row)
 
 
+async def _session_exists(
+    connection: aiosqlite.Connection, tenant_id: str, session_id: str
+) -> bool:
+    row = await (
+        await connection.execute(
+            "SELECT 1 FROM sessions WHERE tenant_id = ? AND session_id = ?",
+            (tenant_id, session_id),
+        )
+    ).fetchone()
+    return row is not None
+
+
 def _decode_run(row: Sequence[object]) -> RunRecord:
     try:
         payload_text = row[6]
@@ -939,6 +1046,12 @@ def _decode_run(row: Sequence[object]) -> RunRecord:
         ):
             if payload.get(field) is not None:
                 payload[field] = _parse_timestamp(payload[field])
+        if payload.get("answer") is not None:
+            payload["answer"] = ScopedAnswer.model_validate_json(
+                json.dumps(payload["answer"], ensure_ascii=False)
+            )
+        if payload.get("failure_code") is not None:
+            payload["failure_code"] = RunFailureCode(payload["failure_code"])
         lease = payload.get("lease")
         if lease is not None:
             if type(lease) is not dict:
@@ -975,6 +1088,35 @@ async def _insert_run(connection: aiosqlite.Connection, run: RunRecord) -> None:
             str(run.version),
             _timestamp(run.created_at),
             run.model_dump_json(),
+        ),
+    )
+
+
+async def _write_reflection(
+    connection: aiosqlite.Connection,
+    *,
+    reflection: RunReflection | None,
+    tenant_id: str,
+    session_id: str,
+    run_id: str,
+) -> None:
+    if reflection is None:
+        return
+    if (
+        reflection.tenant_id != tenant_id
+        or reflection.session_id != session_id
+        or reflection.run_id != run_id
+    ):
+        raise ValueError("reflection must match the run scope")
+    await connection.execute(
+        "INSERT INTO run_reflections (tenant_id, session_id, run_id, payload) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(tenant_id, session_id, run_id) DO UPDATE SET payload = excluded.payload",
+        (
+            tenant_id,
+            session_id,
+            run_id,
+            reflection.model_dump_json(),
         ),
     )
 
@@ -1086,6 +1228,21 @@ def _decode_event(row: Sequence[object]) -> RunEvent:
         raise StorageError("stored event failed validation") from exc
 
 
+def _decode_work_item(row: Sequence[object]) -> WorkItem:
+    try:
+        return WorkItem.model_validate(
+            {
+                "work_id": row[0],
+                "tenant_id": row[1],
+                "run_id": row[2],
+                "enqueued_at": _parse_timestamp(row[3]),
+                "not_before": _parse_timestamp(row[4]),
+            }
+        )
+    except (TypeError, ValueError) as exc:
+        raise StorageError("stored work item failed validation") from exc
+
+
 def _parse_timestamp(value: object) -> datetime:
     if type(value) is not str:
         raise ValueError("stored timestamp is not text")
@@ -1102,6 +1259,7 @@ __all__ = [
     "SQLiteRunRepository",
     "SQLiteSessionRepository",
     "SQLiteTenantRepository",
+    "SQLiteWorkQueue",
     "SessionRecord",
     "StorageConflictError",
     "StorageError",

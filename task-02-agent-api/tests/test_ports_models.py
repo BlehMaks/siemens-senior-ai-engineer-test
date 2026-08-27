@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from typing import Never
 
 import pytest
-from pydantic import ValidationError
+from pydantic import AnyHttpUrl, ValidationError
 
 from agent_api.ports import (
     CancellationResult,
@@ -18,6 +18,7 @@ from agent_api.ports import (
     ExecutionLease,
     LeaseDisposition,
     LeaseResult,
+    RunFailureCode,
     RunRecord,
     RunState,
     RunSubmission,
@@ -26,7 +27,13 @@ from agent_api.ports import (
     WorkItem,
     WriteDisposition,
 )
-from search_agent.memory import ReflectionRepository, RunReflection
+from search_agent.contracts import Citation, ScopedAnswer, TerminalState
+from search_agent.memory import (
+    ReflectionRepository,
+    ReflectionUsage,
+    RunReflection,
+    UnresolvedItem,
+)
 
 NOW = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
 
@@ -43,6 +50,46 @@ def queued_run() -> RunRecord:
         delivery_attempts=0,
         created_at=NOW,
         updated_at=NOW,
+    )
+
+
+def public_answer() -> ScopedAnswer:
+    return ScopedAnswer(
+        answer_text="The public answer.",
+        citations=(
+            Citation(
+                claim="The public claim.",
+                evidence_id="ev-public",
+                source_url=AnyHttpUrl("https://example.com/report"),
+            ),
+        ),
+    )
+
+
+def failed_reflection() -> RunReflection:
+    return RunReflection(
+        tenant_id="tenant-one",
+        session_id="session-one",
+        run_id="run-one",
+        requested_outcome="Find the public Siemens report.",
+        actions=(),
+        failures=(),
+        recovery_steps=(),
+        completion_evidence=(),
+        unresolved_items=(UnresolvedItem.NO_EVIDENCE,),
+        outcome=TerminalState.FAILED,
+        usage=ReflectionUsage(
+            elapsed_seconds=0,
+            iterations=0,
+            search_queries=0,
+            pages=0,
+            failed_pages=0,
+            raw_bytes_reserved=0,
+            decoded_bytes=0,
+            model_calls=0,
+            model_attempts=0,
+            tokens=0,
+        ),
     )
 
 
@@ -172,6 +219,7 @@ def test_requested_cancellation_cannot_construct_a_completed_record() -> None:
             updated_at=NOW + timedelta(seconds=2),
             cancellation_requested_at=NOW + timedelta(seconds=1),
             terminal_at=NOW + timedelta(seconds=2),
+            answer=public_answer(),
         )
 
 
@@ -235,6 +283,7 @@ def test_state_update_requires_both_ownership_ids(
             at=NOW,
             lease_id=lease_id,
             worker_id=worker_id,
+            answer=public_answer(),
         )
 
 
@@ -297,4 +346,66 @@ def test_datetime_subclasses_are_rejected_before_arithmetic() -> None:
             lease_id="lease-one",
             now=ExplodingDateTime(2026, 8, 27, 10, 0, tzinfo=UTC),
             lease_seconds=1,
+        )
+
+
+def test_terminal_payload_requires_matching_answer_or_failure_code() -> None:
+    with pytest.raises(ValidationError, match="public answer"):
+        RunRecord(
+            tenant_id="tenant-one",
+            session_id="session-one",
+            run_id="run-one",
+            idempotency_key="request-key-one",
+            query="find the documented answer",
+            state=RunState.COMPLETED,
+            version=1,
+            delivery_attempts=1,
+            created_at=NOW,
+            updated_at=NOW,
+            terminal_at=NOW,
+        )
+    with pytest.raises(ValidationError, match="failure code"):
+        StateUpdate(
+            tenant_id="tenant-one",
+            run_id="run-one",
+            expected_version=1,
+            expected_state=RunState.RUNNING,
+            next_state=RunState.FAILED,
+            lease_id="lease-one",
+            worker_id="worker-one",
+            at=NOW,
+        )
+
+
+def test_cancelled_runs_require_a_cancellation_timestamp() -> None:
+    with pytest.raises(ValidationError, match="cancellation request"):
+        RunRecord(
+            tenant_id="tenant-one",
+            session_id="session-one",
+            run_id="run-one",
+            idempotency_key="request-key-one",
+            query="find the documented answer",
+            state=RunState.CANCELLED,
+            version=1,
+            delivery_attempts=1,
+            created_at=NOW,
+            updated_at=NOW,
+            terminal_at=NOW,
+        )
+
+
+def test_state_update_reflection_must_match_terminal_scope() -> None:
+    wrong_scope = failed_reflection().model_copy(update={"tenant_id": "tenant-two"})
+    with pytest.raises(ValidationError, match="run scope"):
+        StateUpdate(
+            tenant_id="tenant-one",
+            run_id="run-one",
+            expected_version=1,
+            expected_state=RunState.RUNNING,
+            next_state=RunState.FAILED,
+            lease_id="lease-one",
+            worker_id="worker-one",
+            at=NOW,
+            failure_code=RunFailureCode.NO_EVIDENCE,
+            reflection=wrong_scope,
         )

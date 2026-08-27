@@ -275,8 +275,15 @@ class FakeRunRepository:
                     "state": checked.next_state,
                     "version": run.version + 1,
                     "updated_at": checked.at,
+                    "cancellation_requested_at": (
+                        (run.cancellation_requested_at or checked.at)
+                        if checked.next_state is RunState.CANCELLED
+                        else run.cancellation_requested_at
+                    ),
                     "terminal_at": checked.at if terminal else None,
                     "lease": None if terminal else run.lease,
+                    "answer": checked.answer,
+                    "failure_code": checked.failure_code,
                 }
             )
             next_run = RunRecord.model_validate(next_run.model_dump(mode="python"))

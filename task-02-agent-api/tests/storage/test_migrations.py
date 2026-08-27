@@ -48,6 +48,7 @@ async def test_empty_and_repeated_migration_are_stable(tmp_path: Path) -> None:
         "runs",
         "sessions",
         "tenants",
+        "work_items",
     } < set(first_tables)
 
 
@@ -188,7 +189,7 @@ async def test_tampered_and_future_migration_history_is_rejected(
         connection.execute(
             "INSERT INTO schema_migrations "
             "(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
-            (3, "future", "1" * 64, "2026-08-27T10:00:00+00:00"),
+            (4, "future", "1" * 64, "2026-08-27T10:00:00+00:00"),
         )
     with pytest.raises(MigrationError, match="newer"):
         await migrate(future)
@@ -214,7 +215,7 @@ async def test_failed_migration_rolls_back_schema_and_ledger(
     path = tmp_path / "rollback.sqlite3"
     await migrate(path)
     broken = schema._Migration(
-        3,
+        4,
         "broken",
         "CREATE TABLE rollback_probe (value TEXT);\n"
         "INSERT INTO table_that_does_not_exist VALUES (1);\n",
@@ -231,7 +232,7 @@ async def test_failed_migration_rolls_back_schema_and_ledger(
         probe = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'rollback_probe'"
         ).fetchone()
-    assert versions == [(1,), (2,)]
+    assert versions == [(1,), (2,), (3,)]
     assert probe is None
 
 
@@ -269,12 +270,59 @@ async def test_api_key_lifecycle_migration_keeps_old_rows_non_authorizing(
     with sqlite3.connect(path) as connection:
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,)]
+        ).fetchall() == [(1,), (2,), (3,)]
         assert connection.execute(
             "SELECT scopes, rotated_from_key_id FROM api_key_hashes "
             "WHERE tenant_id = ? AND key_id = ?",
             ("tenant-one", "key-one"),
         ).fetchone() == ("[]", None)
+
+
+@pytest.mark.asyncio
+async def test_local_work_queue_migration_adds_due_indexes_on_reopen(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "queue.sqlite3"
+
+    await migrate(path)
+    await migrate(path)
+
+    with sqlite3.connect(path) as connection:
+        versions = connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall()
+        indexes = {
+            row[1] for row in connection.execute('PRAGMA index_list("work_items")')
+        }
+        columns = tuple(
+            row[1] for row in connection.execute('PRAGMA table_info("work_items")')
+        )
+
+    assert versions == [(1,), (2,), (3,)]
+    assert "work_items_by_due" in indexes
+    assert columns == (
+        "work_id",
+        "tenant_id",
+        "run_id",
+        "enqueued_at",
+        "not_before",
+    )
+
+
+@pytest.mark.asyncio
+async def test_queue_schema_drift_cannot_hide_behind_the_migration_ledger(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "queue-drift.sqlite3"
+    await migrate(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP INDEX work_items_by_due")
+        connection.execute(
+            "CREATE INDEX work_items_by_due ON work_items(enqueued_at, not_before)"
+        )
+
+    with pytest.raises(MigrationError, match="physical schema"):
+        await migrate(path)
 
 
 @pytest.mark.asyncio

@@ -97,6 +97,17 @@ Run submission accepts one bounded query:
 {"query":"Which documented evidence supports the proposed answer?"}
 ```
 
+The API persists both the queued run and its durable local work item before it
+returns `202`. Repeating the same tenant-scoped `Idempotency-Key`, session, and
+query returns the original accepted run; reusing the key for different request
+content returns `409`. A temporary queue failure returns `503`, and retrying the
+same request repairs dispatch without creating another run.
+
+Local workers use expiring ownership leases and compare-and-set terminal writes.
+After a restart, an unacknowledged work item becomes visible again; stale workers
+cannot overwrite a newer owner or a requested cancellation. Only validated public
+answers and stable failure codes are persisted for status responses.
+
 The `202` response contains an opaque session ID, opaque run ID, `queued`
 state, and UTC creation time. A status response exposes lifecycle timestamps,
 a cancellation flag, and exactly one public terminal result where applicable.

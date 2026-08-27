@@ -8,7 +8,7 @@ from typing import Annotated, Protocol
 
 from pydantic import Field, StringConstraints, field_validator, model_validator
 
-from search_agent.contracts import OpaqueId, QueryText, StrictModel
+from search_agent.contracts import OpaqueId, QueryText, ScopedAnswer, StrictModel
 from search_agent.memory import ReflectionRepository, RunReflection
 
 IdempotencyKey = Annotated[
@@ -31,6 +31,15 @@ class RunState(StrEnum):
     EXPIRED = "expired"
 
 
+class RunFailureCode(StrEnum):
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    NO_EVIDENCE = "no_evidence"
+    SEARCH_FAILED = "search_failed"
+    VALIDATION_FAILED = "validation_failed"
+    EXECUTION_FAILED = "execution_failed"
+    EXPIRED = "expired"
+
+
 TERMINAL_RUN_STATES = frozenset(
     {RunState.COMPLETED, RunState.FAILED, RunState.CANCELLED, RunState.EXPIRED}
 )
@@ -47,6 +56,73 @@ def _require_utc(value: datetime) -> datetime:
 
 def _require_optional_utc(value: datetime | None) -> datetime | None:
     return None if value is None else _require_utc(value)
+
+
+def _revalidate_answer(value: object) -> ScopedAnswer:
+    if isinstance(value, dict):
+        return ScopedAnswer.model_validate(value)
+    if type(value) is not ScopedAnswer:
+        raise ValueError("answer has the wrong concrete type")
+    return ScopedAnswer.model_validate(value.model_dump(mode="python"))
+
+
+def _revalidate_failure_code(value: object) -> RunFailureCode:
+    if type(value) is not RunFailureCode:
+        raise ValueError("failure code has the wrong concrete type")
+    return RunFailureCode(value)
+
+
+def _revalidate_reflection(value: object) -> RunReflection:
+    if isinstance(value, dict):
+        return RunReflection.model_validate(value)
+    if type(value) is not RunReflection:
+        raise ValueError("reflection has the wrong concrete type")
+    return RunReflection.model_validate(value.model_dump(mode="python"))
+
+
+def _validate_state_update_reflection(
+    *, tenant_id: str, run_id: str, state: RunState, reflection: RunReflection | None
+) -> None:
+    if reflection is None:
+        return
+    if reflection.tenant_id != tenant_id or reflection.run_id != run_id:
+        raise ValueError("reflection must match the run scope")
+    if state is RunState.EXPIRED:
+        raise ValueError("expired runs cannot persist a reflection")
+    if state not in TERMINAL_RUN_STATES:
+        raise ValueError("non-terminal runs cannot persist a reflection")
+    if reflection.outcome.value != state.value:
+        raise ValueError("reflection must match the terminal state")
+
+
+def _validate_terminal_payload(
+    *,
+    state: RunState,
+    answer: ScopedAnswer | None,
+    failure_code: RunFailureCode | None,
+) -> None:
+    if state is RunState.COMPLETED:
+        if answer is None or failure_code is not None:
+            raise ValueError("completed runs require only a public answer")
+        return
+    if state is RunState.FAILED:
+        if failure_code is None or answer is not None:
+            raise ValueError("failed runs require only a failure code")
+        if failure_code is RunFailureCode.EXPIRED:
+            raise ValueError("expired failure code must match the terminal state")
+        return
+    if state is RunState.EXPIRED:
+        if failure_code is None or answer is not None:
+            raise ValueError("expired runs require only the expired failure code")
+        if failure_code is not RunFailureCode.EXPIRED:
+            raise ValueError("expired failure code must match the terminal state")
+        return
+    if state is RunState.CANCELLED:
+        if answer is not None or failure_code is not None:
+            raise ValueError("cancelled runs cannot persist answer or failure")
+        return
+    if answer is not None or failure_code is not None:
+        raise ValueError("non-terminal runs cannot persist terminal payload")
 
 
 class RunSubmission(StrictModel):
@@ -93,6 +169,8 @@ class RunRecord(StrictModel):
     cancellation_requested_at: datetime | None = None
     terminal_at: datetime | None = None
     lease: ExecutionLease | None = None
+    answer: ScopedAnswer | None = None
+    failure_code: RunFailureCode | None = None
 
     _required_timestamps_are_utc = field_validator("created_at", "updated_at")(
         _require_utc
@@ -109,6 +187,16 @@ class RunRecord(StrictModel):
         if type(value) is not ExecutionLease:
             raise ValueError("lease has the wrong concrete type")
         return ExecutionLease.model_validate(value.model_dump(mode="python"))
+
+    @field_validator("answer", mode="before")
+    @classmethod
+    def revalidate_answer(cls, value: object) -> ScopedAnswer | None:
+        return None if value is None else _revalidate_answer(value)
+
+    @field_validator("failure_code", mode="before")
+    @classmethod
+    def revalidate_failure_code(cls, value: object) -> RunFailureCode | None:
+        return None if value is None else _revalidate_failure_code(value)
 
     @model_validator(mode="after")
     def validate_lifecycle(self) -> RunRecord:
@@ -133,6 +221,8 @@ class RunRecord(StrictModel):
             and self.state is not RunState.CANCELLED
         ):
             raise ValueError("a requested cancellation cannot end in another state")
+        if self.state is RunState.CANCELLED and self.cancellation_requested_at is None:
+            raise ValueError("cancelled runs require a cancellation request")
         if self.state is RunState.QUEUED and self.lease is not None:
             raise ValueError("queued runs cannot have an execution lease")
         if self.state is RunState.QUEUED and (
@@ -153,6 +243,11 @@ class RunRecord(StrictModel):
             self.created_at <= self.lease.acquired_at <= self.updated_at
         ):
             raise ValueError("lease acquisition must be within the run lifetime")
+        _validate_terminal_payload(
+            state=self.state,
+            answer=self.answer,
+            failure_code=self.failure_code,
+        )
         return self
 
 
@@ -332,8 +427,26 @@ class StateUpdate(StrictModel):
     at: datetime
     lease_id: OpaqueId | None = None
     worker_id: OpaqueId | None = None
+    answer: ScopedAnswer | None = None
+    failure_code: RunFailureCode | None = None
+    reflection: RunReflection | None = None
 
     _at_is_utc = field_validator("at")(_require_utc)
+
+    @field_validator("answer", mode="before")
+    @classmethod
+    def revalidate_answer(cls, value: object) -> ScopedAnswer | None:
+        return None if value is None else _revalidate_answer(value)
+
+    @field_validator("failure_code", mode="before")
+    @classmethod
+    def revalidate_failure_code(cls, value: object) -> RunFailureCode | None:
+        return None if value is None else _revalidate_failure_code(value)
+
+    @field_validator("reflection", mode="before")
+    @classmethod
+    def revalidate_reflection(cls, value: object) -> RunReflection | None:
+        return None if value is None else _revalidate_reflection(value)
 
     @model_validator(mode="after")
     def validate_transition(self) -> StateUpdate:
@@ -350,6 +463,17 @@ class StateUpdate(StrictModel):
             self.lease_id is not None or self.worker_id is not None
         ):
             raise ValueError("unowned transitions cannot include ownership ids")
+        _validate_terminal_payload(
+            state=self.next_state,
+            answer=self.answer,
+            failure_code=self.failure_code,
+        )
+        _validate_state_update_reflection(
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            state=self.next_state,
+            reflection=self.reflection,
+        )
         return self
 
 
@@ -515,6 +639,10 @@ class IdempotencyConflictError(ValueError):
     """The same tenant key was reused for different request content."""
 
 
+class RunParentNotFoundError(ValueError):
+    """The referenced tenant-owned parent object does not exist."""
+
+
 class QueueConflictError(ValueError):
     """The same work id was reused for a different tenant or run."""
 
@@ -535,6 +663,8 @@ __all__ = [
     "LeaseResult",
     "QueueConflictError",
     "ReflectionRepository",
+    "RunFailureCode",
+    "RunParentNotFoundError",
     "RunRecord",
     "RunReflection",
     "RunRepository",
