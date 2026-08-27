@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import math
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -80,6 +81,7 @@ class LocalWorker:
         lease_seconds: int = 30,
         visibility_seconds: int = 30,
         heartbeat_seconds: float = 10.0,
+        cancellation_drain_seconds: float = 1.0,
         lease_id_factory: Callable[[], str] | None = None,
     ) -> None:
         if not 1 <= lease_seconds <= 900:
@@ -95,6 +97,13 @@ class LocalWorker:
             raise ValueError(
                 "heartbeat_seconds must be positive and below lease_seconds"
             )
+        if (
+            isinstance(cancellation_drain_seconds, bool)
+            or not isinstance(cancellation_drain_seconds, int | float)
+            or not math.isfinite(cancellation_drain_seconds)
+            or cancellation_drain_seconds <= 0
+        ):
+            raise ValueError("cancellation drain must be a positive finite number")
         self._repository = repository
         self._queue = queue
         self._executor = executor
@@ -104,6 +113,7 @@ class LocalWorker:
         self._lease_seconds = lease_seconds
         self._visibility_seconds = visibility_seconds
         self._heartbeat_seconds = float(heartbeat_seconds)
+        self._cancellation_drain_seconds = float(cancellation_drain_seconds)
         self._lease_id_factory = (
             _new_lease_id if lease_id_factory is None else lease_id_factory
         )
@@ -194,12 +204,14 @@ class LocalWorker:
                     continue
                 if lease.disposition is LeaseDisposition.CANCELLATION_REQUESTED:
                     task.cancel()
-                    await _drain_cancelled(task)
+                    await _drain_cancelled(
+                        task, timeout=self._cancellation_drain_seconds
+                    )
                     if lease.run is not None:
                         await self._finish_cancellation(item, lease.run)
                     return
                 task.cancel()
-                await _drain_cancelled(task)
+                await _drain_cancelled(task, timeout=self._cancellation_drain_seconds)
                 if lease.run is not None and lease.run.state in TERMINAL_RUN_STATES:
                     await self._queue.cancel(
                         tenant_id=item.tenant_id, run_id=item.run_id
@@ -207,11 +219,11 @@ class LocalWorker:
                 return
         except asyncio.CancelledError:
             task.cancel()
-            await _drain_cancelled(task)
+            await _drain_cancelled(task, timeout=self._cancellation_drain_seconds)
             raise
         except Exception:
             task.cancel()
-            await _drain_cancelled(task)
+            await _drain_cancelled(task, timeout=self._cancellation_drain_seconds)
             raise
         try:
             result = await task
@@ -371,9 +383,20 @@ def _transition_time(now: datetime, updated_at: datetime) -> datetime:
     return updated_at if now < updated_at else now
 
 
-async def _drain_cancelled(task: asyncio.Task[RunResult]) -> None:
+async def _drain_cancelled(task: asyncio.Task[RunResult], *, timeout: float) -> None:
+    done, _ = await asyncio.wait({task}, timeout=timeout)
+    if task not in done:
+        # Repository writes stay in LocalWorker, so this detached executor's late
+        # result is discarded while the durable lease expires for a new owner.
+        task.add_done_callback(_consume_task_result)
+        return
     with contextlib.suppress(asyncio.CancelledError, Exception):
-        await task
+        task.result()
+
+
+def _consume_task_result(task: asyncio.Task[RunResult]) -> None:
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        task.result()
 
 
 def _new_lease_id() -> str:

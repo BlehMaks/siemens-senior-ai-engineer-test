@@ -40,6 +40,7 @@ from .storage import (
     StorageError,
     migrate,
 )
+from .workers import LocalWorker, RunExecutor, worker_lifespan
 
 _OPAQUE_ID = TypeAdapter(OpaqueId)
 
@@ -60,6 +61,8 @@ def create_app(
     clock: Callable[[], datetime] | None = None,
     session_id_factory: Callable[[], str] | None = None,
     run_id_factory: Callable[[], str] | None = None,
+    run_executor: RunExecutor | None = None,
+    worker_shutdown_seconds: float = 5.0,
 ) -> FastAPI:
     provider = EnvPepperProvider() if pepper_provider is None else pepper_provider
     now = _utc_now if clock is None else clock
@@ -67,6 +70,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await migrate(database_path)
+        run_repository = SQLiteRunRepository(database_path)
+        work_queue = SQLiteWorkQueue(database_path)
         app.state.auth_manager = ApiKeyManager(
             SQLiteKeyHashRepository(database_path), provider
         )
@@ -76,17 +81,33 @@ def create_app(
             id_factory=session_id_factory,
         )
         app.state.run_service = RunService(
-            SQLiteRunRepository(database_path),
-            SQLiteWorkQueue(database_path),
+            run_repository,
+            work_queue,
             clock=now,
             run_id_factory=run_id_factory,
         )
         app.state.event_stream_service = EventStreamService(
-            SQLiteRunRepository(database_path),
+            run_repository,
             SQLiteEventRepository(database_path),
             clock=now,
         )
-        yield
+        worker = (
+            None
+            if run_executor is None
+            else LocalWorker(
+                repository=run_repository,
+                queue=work_queue,
+                executor=run_executor,
+                worker_id="worker-local",
+                clock=now,
+                cancellation_drain_seconds=worker_shutdown_seconds,
+            )
+        )
+        async with worker_lifespan(
+            worker,
+            shutdown_seconds=worker_shutdown_seconds,
+        ):
+            yield
 
     app = FastAPI(
         title="Research Agent API",

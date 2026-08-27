@@ -159,6 +159,15 @@ Cancellation reports the observed run state, whether cancellation is now
 requested, whether this request changed that flag, and the public request time.
 It does not claim that running work has stopped synchronously.
 
+The cancellation request is persisted before the `202` response. Repeating it is
+idempotent: queued work remains cancelled, running work retains its original
+request timestamp, and a run that already completed never regresses. Workers poll
+the persisted flag while renewing leases and cancel supported in-flight async
+HTTP/model operations at that boundary. Shutdown first drains the active worker
+for a bounded interval; overdue execution is cancelled without fabricating a
+terminal result, leaving the durable queue item and expiring lease recoverable by
+the next process.
+
 ## Errors
 
 All documented JSON error responses use one envelope:

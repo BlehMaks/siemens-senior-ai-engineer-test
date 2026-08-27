@@ -21,7 +21,12 @@ from ..ports import (
     WorkItem,
     WorkQueue,
 )
-from ..schemas import RunAcceptedResponse, RunStatusResponse, public_run_failure
+from ..schemas import (
+    CancellationResponse,
+    RunAcceptedResponse,
+    RunStatusResponse,
+    public_run_failure,
+)
 from ..storage import StorageError
 from .sessions import SessionNotFound
 
@@ -96,6 +101,29 @@ class RunService:
         if run is None:
             raise RunNotFound
         return _public_status(run)
+
+    async def cancel(
+        self, *, tenant_id: OpaqueId, run_id: OpaqueId
+    ) -> CancellationResponse:
+        result = await self._repository.request_cancellation(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            at=self._clock(),
+        )
+        run = result.run
+        if run is None:
+            raise RunNotFound
+        # Queued and lease-expired cancellations are terminal immediately. Removing
+        # their durable dispatch is idempotent, so a retry repairs a prior queue error.
+        if run.state is RunState.CANCELLED:
+            await self._queue.cancel(tenant_id=tenant_id, run_id=run_id)
+        return CancellationResponse(
+            run_id=run.run_id,
+            state=run.state,
+            cancellation_requested=run.cancellation_requested_at is not None,
+            changed=result.changed,
+            requested_at=run.cancellation_requested_at,
+        )
 
     def now(self) -> datetime:
         return self._clock()

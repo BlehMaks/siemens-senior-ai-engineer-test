@@ -9,7 +9,12 @@ from fastapi import APIRouter, Body, Depends, Header, Path, Request
 from search_agent.contracts import OpaqueId
 
 from ..ports import IdempotencyKey
-from ..schemas import RunAcceptedResponse, RunStatusResponse, RunSubmitRequest
+from ..schemas import (
+    CancellationResponse,
+    RunAcceptedResponse,
+    RunStatusResponse,
+    RunSubmitRequest,
+)
 from ..security import AuthenticatedApiKey
 from ..services import InvalidRequest, RunService
 from .common import ERROR_RESPONSES, authenticate_request
@@ -54,6 +59,23 @@ def build_run_router() -> APIRouter:
         principal: Annotated[AuthenticatedApiKey, Depends(_read_principal)],
     ) -> RunStatusResponse:
         return await _service(http_request).get(
+            tenant_id=principal.tenant_id,
+            run_id=run_id,
+        )
+
+    @router.post(
+        "/runs/{run_id}/cancel",
+        response_model=CancellationResponse,
+        status_code=202,
+        responses=ERROR_RESPONSES,
+        tags=["runs"],
+    )
+    async def cancel_run(
+        http_request: Request,
+        run_id: Annotated[OpaqueId, Path()],
+        principal: Annotated[AuthenticatedApiKey, Depends(_write_principal)],
+    ) -> CancellationResponse:
+        return await _service(http_request).cancel(
             tenant_id=principal.tenant_id,
             run_id=run_id,
         )
