@@ -103,3 +103,11 @@ module "deployer_identity" {
 
   depends_on = [google_project_service.required]
 }
+
+resource "google_service_account_iam_member" "deployer_runtime_user" {
+  for_each = toset(["api", "tasks", "worker"])
+
+  service_account_id = module.identity[each.value].name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${module.deployer_identity.email}"
+}

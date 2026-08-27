@@ -139,9 +139,16 @@ def test_deployer_project_roles_match_reviewed_allowlist() -> None:
     identity_variables = read(IDENTITY / "variables.tf")
 
     expected_roles = {
+        "roles/artifactregistry.admin",
+        "roles/cloudtasks.admin",
+        "roles/datastore.owner",
         "roles/iam.serviceAccountAdmin",
         "roles/iam.workloadIdentityPoolAdmin",
+        "roles/logging.admin",
+        "roles/monitoring.notificationChannelEditor",
         "roles/resourcemanager.projectIamAdmin",
+        "roles/run.admin",
+        "roles/secretmanager.admin",
         "roles/serviceusage.serviceUsageAdmin",
         "roles/storage.admin",
     }
@@ -162,6 +169,18 @@ def test_deployer_project_roles_match_reviewed_allowlist() -> None:
     assert 'regex("^roles/[A-Za-z0-9_.]+$", role)' in identity_variables
 
 
+def test_deployer_can_attach_only_the_three_runtime_identities() -> None:
+    main_tf = read(BOOTSTRAP / "main.tf")
+
+    resource = main_tf.split(
+        'resource "google_service_account_iam_member" "deployer_runtime_user"',
+        maxsplit=1,
+    )[1]
+    assert 'toset(["api", "tasks", "worker"])' in resource
+    assert 'role               = "roles/iam.serviceAccountUser"' in resource
+    assert 'member             = "serviceAccount:${module.deployer_identity.email}"' in resource
+
+
 def test_example_tfvars_are_secret_free_and_realistic() -> None:
     example = read(BOOTSTRAP / "terraform.tfvars.example")
 
@@ -172,3 +191,5 @@ def test_example_tfvars_are_secret_free_and_realistic() -> None:
     assert "token" not in example.lower()
     assert "private_key" not in example.lower()
     assert "client_secret" not in example.lower()
+    assert 'github_branch        = "master"' in example
+    assert 'github_environment   = "gcp-dev"' in example

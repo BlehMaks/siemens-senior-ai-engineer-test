@@ -24,9 +24,16 @@ locals {
   ) : null
 
   bootstrap_roles = toset([
+    "roles/artifactregistry.admin",
+    "roles/cloudtasks.admin",
+    "roles/datastore.owner",
     "roles/iam.serviceAccountAdmin",
     "roles/iam.workloadIdentityPoolAdmin",
+    "roles/logging.admin",
+    "roles/monitoring.notificationChannelEditor",
     "roles/resourcemanager.projectIamAdmin",
+    "roles/run.admin",
+    "roles/secretmanager.admin",
     "roles/serviceusage.serviceUsageAdmin",
     "roles/storage.admin",
   ])

@@ -102,7 +102,7 @@ variable "github_repository_id" {
 variable "github_branch" {
   description = "Git branch allowed to federate through GitHub OIDC."
   type        = string
-  default     = "main"
+  default     = "master"
 
   validation {
     condition     = can(regex("^[A-Za-z0-9._/-]+$", var.github_branch))
