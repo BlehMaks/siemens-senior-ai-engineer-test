@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "observations": {
+    "completed-report": {
+      "terminal_state": "completed",
+      "evidence": [{
+        "evidence_id": "ev-report",
+        "source_url": "https://www.siemens.com/sustainability/report-2025",
+        "source_title": "Siemens sustainability report",
+        "summary": "Siemens published its 2025 sustainability report.",
+        "quotes": ["Siemens published its 2025 sustainability report."]
+      }],
+      "answer": {
+        "answer_text": "Siemens published its 2025 sustainability report.",
+        "citations": [{
+          "claim": "Siemens published its 2025 sustainability report.",
+          "evidence_id": "ev-report",
+          "source_url": "https://www.siemens.com/sustainability/report-2025"
+        }]
+      },
+      "usage": {"elapsed_seconds": 0.25, "iterations": 5, "search_queries": 1, "pages": 1, "failed_pages": 0, "raw_bytes_reserved": 2097152, "decoded_bytes": 256, "model_calls": 2, "model_attempts": 2, "tokens": 1400},
+      "public_message": "Completed cited answer"
+    },
+    "completed-date": {
+      "terminal_state": "completed",
+      "evidence": [{
+        "evidence_id": "ev-date",
+        "source_url": "https://www.siemens.com/sustainability/current-report",
+        "source_title": "Current Siemens sustainability report",
+        "summary": "The Siemens report was published on 20 November 2025.",
+        "quotes": ["The Siemens report was published on 20 November 2025."]
+      }],
+      "answer": {
+        "answer_text": "The Siemens report was published on 20 November 2025.",
+        "citations": [{
+          "claim": "The Siemens report was published on 20 November 2025.",
+          "evidence_id": "ev-date",
+          "source_url": "https://www.siemens.com/sustainability/current-report"
+        }]
+      },
+      "usage": {"elapsed_seconds": 0.28, "iterations": 5, "search_queries": 1, "pages": 1, "failed_pages": 0, "raw_bytes_reserved": 2097152, "decoded_bytes": 280, "model_calls": 2, "model_attempts": 2, "tokens": 1450},
+      "public_message": "Completed recent cited answer"
+    },
+    "completed-emissions": {
+      "terminal_state": "completed",
+      "evidence": [{
+        "evidence_id": "ev-audited",
+        "source_url": "https://www.siemens.com/sustainability/audited-2025",
+        "source_title": "Audited Siemens sustainability statement",
+        "summary": "The audited Siemens report lists emissions at 1.2 million tonnes.",
+        "quotes": ["The audited Siemens report lists emissions at 1.2 million tonnes."]
+      }],
+      "answer": {
+        "answer_text": "The audited Siemens report lists emissions at 1.2 million tonnes.",
+        "citations": [{
+          "claim": "The audited Siemens report lists emissions at 1.2 million tonnes.",
+          "evidence_id": "ev-audited",
+          "source_url": "https://www.siemens.com/sustainability/audited-2025"
+        }]
+      },
+      "usage": {"elapsed_seconds": 0.34, "iterations": 7, "search_queries": 2, "pages": 2, "failed_pages": 0, "raw_bytes_reserved": 4194304, "decoded_bytes": 600, "model_calls": 2, "model_attempts": 2, "tokens": 1900},
+      "public_message": "Completed conflict-resolved answer"
+    },
+    "completed-help": {
+      "terminal_state": "completed",
+      "evidence": [{
+        "evidence_id": "ev-help",
+        "source_url": "https://www.siemens.com/sustainability/report-2025",
+        "source_title": "Siemens sustainability report",
+        "summary": "Siemens published its 2025 sustainability report.",
+        "quotes": ["Siemens published its 2025 sustainability report."]
+      }],
+      "answer": {
+        "answer_text": "Siemens published its 2025 sustainability report.",
+        "citations": [{
+          "claim": "Siemens published its 2025 sustainability report.",
+          "evidence_id": "ev-help",
+          "source_url": "https://www.siemens.com/sustainability/report-2025"
+        }],
+        "assistance": {
+          "offer": "Find the Siemens sustainability report publication.",
+          "follow_up_queries": ["Find the Siemens sustainability report publication"]
+        }
+      },
+      "usage": {"elapsed_seconds": 0.26, "iterations": 5, "search_queries": 1, "pages": 1, "failed_pages": 0, "raw_bytes_reserved": 2097152, "decoded_bytes": 256, "model_calls": 2, "model_attempts": 2, "tokens": 1500},
+      "public_message": "Completed answer with optional help"
+    },
+    "failed-validation": {
+      "terminal_state": "failed",
+      "failure_reason": "validation_failed",
+      "usage": {"elapsed_seconds": 0.08, "iterations": 1, "search_queries": 0, "pages": 0, "failed_pages": 0, "raw_bytes_reserved": 0, "decoded_bytes": 0, "model_calls": 1, "model_attempts": 1, "tokens": 320},
+      "public_message": "Run output did not pass policy validation"
+    },
+    "failed-no-evidence": {
+      "terminal_state": "failed",
+      "failure_reason": "no_evidence",
+      "usage": {"elapsed_seconds": 0.12, "iterations": 3, "search_queries": 1, "pages": 0, "failed_pages": 0, "raw_bytes_reserved": 0, "decoded_bytes": 0, "model_calls": 1, "model_attempts": 1, "tokens": 400},
+      "public_message": "Run failed without public evidence"
+    },
+    "failed-search": {
+      "terminal_state": "failed",
+      "failure_reason": "search_failed",
+      "usage": {"elapsed_seconds": 0.11, "iterations": 3, "search_queries": 1, "pages": 0, "failed_pages": 0, "raw_bytes_reserved": 0, "decoded_bytes": 0, "model_calls": 1, "model_attempts": 1, "tokens": 400},
+      "public_message": "Run failed at the bounded search boundary"
+    },
+    "failed-budget": {
+      "terminal_state": "failed",
+      "failure_reason": "budget_exhausted",
+      "usage": {"elapsed_seconds": 0.01, "iterations": 0, "search_queries": 0, "pages": 0, "failed_pages": 0, "raw_bytes_reserved": 0, "decoded_bytes": 0, "model_calls": 0, "model_attempts": 0, "tokens": 0},
+      "public_message": "Run stopped at a configured budget"
+    }
+  }
+}

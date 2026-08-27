@@ -10,6 +10,9 @@ dependencies = [
     "uvicorn>=0.35,<1",
 ]
 
+[project.scripts]
+agent-api-key-admin = "agent_api.security.key_admin:main"
+
 [tool.uv.sources]
 siemens-search-agent = { workspace = true }
 

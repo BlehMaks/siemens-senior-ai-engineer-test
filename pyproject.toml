@@ -13,7 +13,7 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
 asyncio_mode = "strict"
-pythonpath = ["."]
+pythonpath = [".", "task-02-agent-api/tests"]
 testpaths = ["tests", "task-*/tests"]
 
 [tool.ruff]

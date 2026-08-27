@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "synthetic",
+  "protocol_sha256": "47a118a2d740ed2c5de5b15363984ef393c629abfde26b352856441f4b1eb76a",
+  "eval_manifest_sha256": "0ac414a3aaddd41b05c4e40305cf268709787e2e0a44da63a6facb488f2ba3dd",
+  "provenance": null,
+  "candidates": [],
+  "selection": null,
+  "selection_reason": "synthetic or unexecuted evidence cannot select a model"
+}
