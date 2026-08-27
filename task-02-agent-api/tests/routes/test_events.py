@@ -14,10 +14,8 @@ from openapi_contract import build_contract_app
 
 from agent_api.app import create_app
 from agent_api.ports import RunState, RunSubmission
-from agent_api.schemas import RunEvent, RunEventType
 from agent_api.storage import (
     SessionRecord,
-    SQLiteEventRepository,
     SQLiteRunRepository,
     SQLiteSessionRepository,
     SQLiteTenantRepository,
@@ -106,21 +104,15 @@ def headers(
     return values
 
 
-def run_event(sequence: int, *, terminal: bool = False) -> RunEvent:
-    return RunEvent(
-        sequence=sequence,
+async def cancel_run(context: EventContext) -> None:
+    cancelled = await SQLiteRunRepository(context.database_path).request_cancellation(
+        tenant_id="tenant-one",
         run_id="run-one",
-        event_type=(RunEventType.CANCELLED if terminal else RunEventType.STATUS),
-        state=(RunState.CANCELLED if terminal else RunState.QUEUED),
-        occurred_at=NOW + timedelta(seconds=sequence),
-        message="Run was cancelled." if terminal else "Run is queued.",
+        at=NOW + timedelta(seconds=2),
     )
-
-
-async def append_events(context: EventContext, *events: RunEvent) -> None:
-    repository = SQLiteEventRepository(context.database_path)
-    for event in events:
-        assert await repository.append(tenant_id="tenant-one", event=event)
+    assert cancelled.changed
+    assert cancelled.run is not None
+    assert cancelled.run.state is RunState.CANCELLED
 
 
 def assert_error(payload: object, *, code: str, message: str) -> None:
@@ -155,7 +147,7 @@ async def test_stream_resumes_after_cursor_and_terminal_event_closes(
         scopes=("runs:read",),
         run_id="run-one",
     )
-    await append_events(event_context, run_event(2, terminal=True))
+    await cancel_run(event_context)
 
     response = await event_context.client.get(
         "/v1/runs/run-one/events",
@@ -235,7 +227,7 @@ async def test_scope_and_tenant_boundaries_are_enforced_before_streaming(
         tenant_id="tenant-write-only",
         scopes=("runs:write",),
     )
-    await append_events(event_context, run_event(2, terminal=True))
+    await cancel_run(event_context)
 
     hidden = (
         await event_context.client.get(

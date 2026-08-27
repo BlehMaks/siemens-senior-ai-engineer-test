@@ -859,8 +859,20 @@ class SQLiteEventRepository(_PathRepository):
                     raise StorageConflictError("event sequence must increase")
                 if latest.event_type is not RunEventType.STATUS:
                     raise StorageConflictError("terminal event must remain final")
-            if await _get_run(connection, checked_tenant, checked.run_id) is None:
+            run = await _get_run(connection, checked_tenant, checked.run_id)
+            if run is None:
                 raise StorageConflictError("event run does not exist")
+            expected_failure = (
+                None
+                if run.failure_code is None
+                else public_run_failure(run.failure_code)
+            )
+            if (
+                checked.state is not run.state
+                or checked.answer != run.answer
+                or checked.failure != expected_failure
+            ):
+                raise StorageConflictError("event does not match run state")
             await connection.execute(
                 "INSERT INTO run_events "
                 "(tenant_id, run_id, sequence, occurred_at, payload) "

@@ -183,30 +183,19 @@ async def test_run_and_event_order_survive_reopen(migrated_path: Path) -> None:
     ) == (1, 2, 3, 4)
     assert await reopened_events.list(tenant_id="tenant-two", run_id="run-alpha") == ()
 
-    completed = RunEvent(
-        sequence=5,
+    cancelled = await reopened_runs.request_cancellation(
+        tenant_id="tenant-one",
         run_id="run-alpha",
-        event_type=RunEventType.COMPLETED,
-        state=RunState.COMPLETED,
-        occurred_at=NOW + timedelta(seconds=4),
-        message="Run completed.",
-        answer=ScopedAnswer(
-            answer_text="The public answer.",
-            citations=(
-                Citation(
-                    claim="The public claim.",
-                    evidence_id="ev-public",
-                    source_url=AnyHttpUrl("https://example.com/report"),
-                ),
-            ),
-        ),
+        at=NOW + timedelta(seconds=5),
     )
-    assert await reopened_events.append(tenant_id="tenant-one", event=completed)
-    assert (
-        await reopened_events.list(
-            tenant_id="tenant-one", run_id="run-alpha", after_sequence=4
-        )
-    ) == (completed,)
+    assert cancelled.changed
+    resumed = await reopened_events.list(
+        tenant_id="tenant-one", run_id="run-alpha", after_sequence=4
+    )
+    assert len(resumed) == 1
+    assert resumed[0].sequence == 5
+    assert resumed[0].event_type is RunEventType.CANCELLED
+    assert resumed[0].state is RunState.CANCELLED
     with pytest.raises(StorageConflictError, match="terminal event must remain final"):
         await reopened_events.append(
             tenant_id="tenant-one",
@@ -259,15 +248,27 @@ async def test_event_append_rejects_a_new_out_of_order_sequence(
     await seed_session(migrated_path)
     await SQLiteRunRepository(migrated_path).create(submission())
     events = SQLiteEventRepository(migrated_path)
+    with pytest.raises(StorageConflictError, match="event does not match run state"):
+        await events.append(
+            tenant_id="tenant-one",
+            event=RunEvent(
+                sequence=2,
+                run_id="run-one",
+                event_type=RunEventType.CANCELLED,
+                state=RunState.CANCELLED,
+                occurred_at=NOW + timedelta(seconds=2),
+                message="Run cancelled.",
+            ),
+        )
     assert await events.append(
         tenant_id="tenant-one",
         event=RunEvent(
             sequence=3,
             run_id="run-one",
             event_type=RunEventType.STATUS,
-            state=RunState.RUNNING,
+            state=RunState.QUEUED,
             occurred_at=NOW + timedelta(seconds=3),
-            message="Run execution is in progress.",
+            message="Run is queued.",
         ),
     )
 
@@ -278,9 +279,9 @@ async def test_event_append_rejects_a_new_out_of_order_sequence(
                 sequence=2,
                 run_id="run-one",
                 event_type=RunEventType.STATUS,
-                state=RunState.RUNNING,
+                state=RunState.QUEUED,
                 occurred_at=NOW + timedelta(seconds=2),
-                message="Run execution is in progress.",
+                message="Run is queued.",
             ),
         )
 
