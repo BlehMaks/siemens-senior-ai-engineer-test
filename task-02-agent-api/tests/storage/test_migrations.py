@@ -91,6 +91,42 @@ async def test_migration_rejects_an_incompatible_legacy_reflection_table(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("table_name", ["RUN_REFLECTIONS", "run_reflections"])
+async def test_migration_preserves_unknown_reflection_table_variants(
+    tmp_path: Path, table_name: str
+) -> None:
+    path = tmp_path / f"{table_name}.sqlite3"
+    generated = (
+        ", private_metadata TEXT GENERATED ALWAYS AS (payload) VIRTUAL"
+        if table_name == "run_reflections"
+        else ", private_metadata TEXT NOT NULL"
+    )
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            f"CREATE TABLE {table_name} ("
+            "tenant_id TEXT NOT NULL, session_id TEXT NOT NULL, "
+            "run_id TEXT NOT NULL, payload TEXT NOT NULL"
+            f"{generated}, PRIMARY KEY (tenant_id, session_id, run_id)) WITHOUT ROWID"
+        )
+
+    with pytest.raises(MigrationError, match="reflection schema is incompatible"):
+        await migrate(path)
+
+    with sqlite3.connect(path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                f'PRAGMA table_xinfo("{table_name}")'
+            ).fetchall()
+        }
+        ledger = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'schema_migrations'"
+        ).fetchone()
+    assert "private_metadata" in columns
+    assert ledger is None
+
+
+@pytest.mark.asyncio
 async def test_tampered_and_future_migration_history_is_rejected(
     tmp_path: Path,
 ) -> None:

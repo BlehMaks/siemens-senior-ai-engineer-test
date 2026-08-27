@@ -75,10 +75,10 @@ _REQUIRED_COLUMNS = {
     "audit_entries": ("tenant_id", "entry_id", "action", "occurred_at"),
 }
 _LEGACY_REFLECTION_SCHEMA = (
-    ("tenant_id", "TEXT", 1, 1),
-    ("session_id", "TEXT", 1, 2),
-    ("run_id", "TEXT", 1, 3),
-    ("payload", "TEXT", 1, 0),
+    ("tenant_id", "TEXT", 1, 1, 0),
+    ("session_id", "TEXT", 1, 2, 0),
+    ("run_id", "TEXT", 1, 3, 0),
+    ("payload", "TEXT", 1, 0, 0),
 )
 
 
@@ -170,15 +170,15 @@ async def _validate_legacy_reflection_schema(
     existing = await (
         await connection.execute(
             "SELECT 1 FROM sqlite_master "
-            "WHERE type = 'table' AND name = 'run_reflections'"
+            "WHERE type = 'table' AND name = 'run_reflections' COLLATE NOCASE"
         )
     ).fetchone()
     if existing is None:
         return
     rows = await (
-        await connection.execute('PRAGMA table_info("run_reflections")')
+        await connection.execute('PRAGMA table_xinfo("run_reflections")')
     ).fetchall()
-    schema = tuple((row[1], row[2], row[3], row[5]) for row in rows)
+    schema = tuple((row[1], row[2], row[3], row[5], row[6]) for row in rows)
     if schema != _LEGACY_REFLECTION_SCHEMA:
         raise MigrationError("database reflection schema is incompatible")
 
