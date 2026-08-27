@@ -30,6 +30,36 @@ from agent_api.schemas import (
 from search_agent.contracts import Citation, OptionalAssistance, ScopedAnswer
 
 NOW = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
+DEFAULT_IGNORABLE_BOUNDARIES = (
+    "\u00ad",
+    "\u034f",
+    "\u061c",
+    "\u115f",
+    "\u1160",
+    "\u17b4",
+    "\u17b5",
+    "\u180b",
+    "\u180f",
+    "\u200b",
+    "\u200f",
+    "\u202a",
+    "\u202e",
+    "\u2060",
+    "\u206f",
+    "\u3164",
+    "\ufe00",
+    "\ufe0f",
+    "\ufeff",
+    "\uffa0",
+    "\ufff0",
+    "\ufff8",
+    "\U0001bca0",
+    "\U0001bca3",
+    "\U0001d173",
+    "\U0001d17a",
+    "\U000e0000",
+    "\U000e0fff",
+)
 
 
 def answer() -> ScopedAnswer:
@@ -310,6 +340,50 @@ def test_public_answer_rejects_sensitive_text_in_every_channel(
         RunStatusResponse.model_validate(
             {**status_values(RunState.COMPLETED), "answer": unsafe_answer}
         )
+
+
+@pytest.mark.parametrize(
+    "invisible_mark",
+    DEFAULT_IGNORABLE_BOUNDARIES,
+    ids=[f"U+{ord(mark):04X}" for mark in DEFAULT_IGNORABLE_BOUNDARIES],
+)
+def test_default_ignorable_boundaries_cannot_split_sensitive_markers(
+    invisible_mark: str,
+) -> None:
+    unsafe_answer = answer().model_copy(
+        update={
+            "answer_text": f"Pass{invisible_mark}word = stolen-production-credential"
+        }
+    )
+
+    with pytest.raises(ValidationError, match="sensitive"):
+        RunStatusResponse.model_validate(
+            {**status_values(RunState.COMPLETED), "answer": unsafe_answer}
+        )
+
+
+@pytest.mark.parametrize(
+    "public_text",
+    [
+        "Cafe\u0301 and re\u0301sume\u0301 evidence are public.",
+        "Résumé naïve façade: documented public evidence.",
+        "Исследование подтверждено открытыми источниками.",
+        "अनुसंधान सार्वजनिक स्रोतों से समर्थित है।",
+        "إجابةٌ عامةٌ مدعومةٌ بمصادرَ منشورةٍ.",
+        "公開情報に基づく回答です。",
+    ],
+)
+def test_ordinary_combining_marks_and_international_text_remain_public(
+    public_text: str,
+) -> None:
+    public_answer = answer().model_copy(update={"answer_text": public_text})
+
+    response = RunStatusResponse.model_validate(
+        {**status_values(RunState.COMPLETED), "answer": public_answer}
+    )
+
+    assert response.answer is not None
+    assert response.answer.answer_text == public_text
 
 
 def test_public_deletion_count_is_bounded() -> None:
