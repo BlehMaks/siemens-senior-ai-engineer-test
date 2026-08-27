@@ -14,6 +14,8 @@ enterprise boundaries reviewable.
   target.
 - [ADR-0001](architecture/adr/0001-gcp-reference-profiles.md) records the conditional
   GCP decision and its reversal triggers.
+- [C03 bootstrap Terraform](terraform/bootstrap/README.md) adds the executable
+  identity and remote-state foundation for later GCP stacks.
 
 GCP is selected for the executable assessment cell because Cloud Run, Cloud Tasks,
 Firestore, Secret Manager, Artifact Registry, and Workload Identity Federation form
@@ -36,7 +38,7 @@ SLO/DR/FinOps/governance gates.
 | Provider and service decision | Designed | Weighted scorecard, reversal triggers, and official references |
 | Assessment and enterprise topology | Designed | Container/plane and request-sequence diagrams with explicit boundaries |
 | Container | Pending C02 | Locked multi-architecture build, non-root/read-only smoke, SBOM, scans |
-| Identity and Terraform | Pending C03-C07 | WIF/IAM, managed services, static policy, plan, rollback, teardown, budget checks |
+| Identity and Terraform | C03 foundation shipped; C04-C07 pending | WIF/IAM, managed services, static policy, plan, rollback, teardown, budget checks |
 | Enterprise migration | Pending C01A | Residency, SLO/RTO/RPO, IAM, DR, FinOps, and approval gates |
 | Capacity proof | Pending C01B | Repeatable fake-provider load scenario and machine-readable measurements |
 
@@ -49,6 +51,11 @@ Later implementation work must pass the repository gate:
 ```bash
 make check
 ```
+
+The C03 Terraform slice is intentionally bootstrap-only: it creates the state
+bucket, required APIs, workload identities, and optional GitHub federation.
+Managed services, Cloud Run, Cloud Tasks, monitoring, and budgets remain
+deferred to C04-C07.
 
 ## Honest boundary
 
