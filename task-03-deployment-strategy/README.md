@@ -59,6 +59,9 @@ bucket, required APIs, workload identities, and optional GitHub federation.
 Managed services, Cloud Run, Cloud Tasks, monitoring, and budgets remain
 deferred to C04-C07.
 
+Operational preflight, smoke, existing-revision rollback, and guarded teardown are
+documented in [the assessment-cell runbooks](architecture/runbooks.md).
+
 ## Honest boundary
 
 Apigee, Spanner, AlloyDB, GKE, Vertex AI, Cloud Run GPU, multi-cell routing,
