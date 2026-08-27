@@ -141,10 +141,10 @@ def test_deployer_project_roles_match_reviewed_allowlist() -> None:
     expected_roles = {
         "roles/artifactregistry.admin",
         "roles/cloudtasks.admin",
-        "roles/datastore.owner",
+        "roles/datastore.admin",
         "roles/iam.serviceAccountAdmin",
         "roles/iam.workloadIdentityPoolAdmin",
-        "roles/logging.admin",
+        "roles/logging.configWriter",
         "roles/monitoring.notificationChannelEditor",
         "roles/resourcemanager.projectIamAdmin",
         "roles/run.admin",
