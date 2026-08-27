@@ -57,7 +57,7 @@ CREDENTIAL_ASSIGNMENT = re.compile(
 QUOTED_VALUE = re.compile(r"(?P<prefix>(?i:[bruf]{0,3}))(?P<quote>\"\"\"|'''|\"|')")
 SYMBOLIC_VALUE = re.compile(
     r"(?:"
-    r"\$\{[^{}\r\n]+\}|\$[A-Za-z_][A-Za-z0-9_]*|"
+    r"\$\{[^{}\r\n]+\}|"
     r"(?:var|local|module|data|settings|google_[A-Za-z0-9_]*|"
     r"aws_[A-Za-z0-9_]*|azurerm_[A-Za-z0-9_]*)\.[A-Za-z0-9_.\[\]\"'-]+|"
     r"[A-Za-z_][A-Za-z0-9_.]*\s*\(.*\)(?:\.[A-Za-z_][A-Za-z0-9_]*\(.*\))*"
