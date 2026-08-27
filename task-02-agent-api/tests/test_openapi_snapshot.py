@@ -83,9 +83,9 @@ def test_pagination_and_sse_transport_are_bounded() -> None:
     assert set(stream["responses"]["200"]["content"]) == {"text/event-stream"}
 
 
-def test_every_declared_error_uses_the_safe_envelope() -> None:
+def test_errors_are_safe_and_readiness_uses_the_bounded_health_model() -> None:
     document = openapi()
-    for path_item in document["paths"].values():
+    for path, path_item in document["paths"].items():
         for method, operation in path_item.items():
             if method not in {"get", "post", "put", "delete", "patch"}:
                 continue
@@ -95,7 +95,12 @@ def test_every_declared_error_uses_the_safe_envelope() -> None:
                 schema = operation["responses"][status]["content"]["application/json"][
                     "schema"
                 ]
-                assert schema == {"$ref": "#/components/schemas/ErrorEnvelope"}
+                expected = (
+                    {"$ref": "#/components/schemas/HealthResponse"}
+                    if path == "/health/ready" and status == "503"
+                    else {"$ref": "#/components/schemas/ErrorEnvelope"}
+                )
+                assert schema == expected
 
 
 def test_public_schema_has_no_forbidden_information_channels() -> None:

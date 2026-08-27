@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, cast
 
-from fastapi import Depends, FastAPI, Header, Request
+from fastapi import Depends, FastAPI, Header, Request, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import TypeAdapter, ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -18,8 +18,18 @@ from starlette.responses import JSONResponse
 
 from search_agent.contracts import OpaqueId
 
+from .observability import (
+    OperationalTelemetry,
+    ReadinessProbe,
+    SQLiteReadinessProbe,
+)
 from .ports import IdempotencyConflictError
-from .routes import build_event_router, build_run_router, build_session_router
+from .routes import (
+    build_event_router,
+    build_health_router,
+    build_run_router,
+    build_session_router,
+)
 from .schemas import ErrorCode, ErrorDetail, ErrorEnvelope
 from .security import (
     ApiKeyAuthError,
@@ -43,6 +53,7 @@ from .services import (
     SessionUnavailable,
 )
 from .storage import (
+    SQLiteAuditRepository,
     SQLiteEventRepository,
     SQLiteKeyHashRepository,
     SQLiteRunRepository,
@@ -57,12 +68,16 @@ _OPAQUE_ID = TypeAdapter(OpaqueId)
 
 
 async def _correlation_header(
+    request: Request,
+    response: Response,
     correlation_id: Annotated[
         OpaqueId | None,
         Header(alias="X-Correlation-ID", description="Opaque request correlation ID"),
     ] = None,
 ) -> None:
-    del correlation_id
+    checked = _new_correlation_id() if correlation_id is None else correlation_id
+    request.state.correlation_id = checked
+    response.headers["X-Correlation-ID"] = checked
 
 
 def create_app(
@@ -76,6 +91,8 @@ def create_app(
     worker_shutdown_seconds: float = 5.0,
     limit_config: LimitConfig | None = None,
     quota_limiter: QuotaLimiter | None = None,
+    telemetry: OperationalTelemetry | None = None,
+    readiness_probe: ReadinessProbe | None = None,
 ) -> FastAPI:
     provider = EnvPepperProvider() if pepper_provider is None else pepper_provider
     now = _utc_now if clock is None else clock
@@ -92,6 +109,20 @@ def create_app(
             else quota_limiter
         )
         app.state.quota_limiter = limiter
+        runtime_telemetry = (
+            OperationalTelemetry(
+                pseudonym_key=provider.pepper(),
+                audit=SQLiteAuditRepository(database_path),
+            )
+            if telemetry is None
+            else telemetry
+        )
+        app.state.telemetry = runtime_telemetry
+        app.state.readiness_probe = (
+            SQLiteReadinessProbe(database_path)
+            if readiness_probe is None
+            else readiness_probe
+        )
         app.state.auth_manager = ApiKeyManager(
             SQLiteKeyHashRepository(database_path), provider
         )
@@ -123,6 +154,7 @@ def create_app(
                 clock=now,
                 cancellation_drain_seconds=worker_shutdown_seconds,
                 limiter=limiter,
+                telemetry=runtime_telemetry,
             )
         )
         async with worker_lifespan(
@@ -137,6 +169,7 @@ def create_app(
         dependencies=[Depends(_correlation_header)],
         lifespan=lifespan,
     )
+    app.include_router(build_health_router(clock=now))
     app.include_router(build_session_router())
     app.include_router(build_run_router())
     app.include_router(build_event_router())
@@ -279,20 +312,32 @@ def _error_response(
             retryable=retryable,
         )
     )
+    response_headers = {} if headers is None else dict(headers)
+    response_headers["X-Correlation-ID"] = envelope.error.correlation_id
     return JSONResponse(
         content=envelope.model_dump(mode="json"),
         status_code=status_code,
-        headers=headers,
+        headers=response_headers,
     )
 
 
 def _correlation_id(request: Request) -> OpaqueId:
+    stored = getattr(request.state, "correlation_id", None)
+    if stored is not None:
+        try:
+            return _OPAQUE_ID.validate_python(stored, strict=True)
+        except ValidationError:
+            pass
     values = request.headers.getlist("x-correlation-id")
     if len(values) == 1:
         try:
             return _OPAQUE_ID.validate_python(values[0], strict=True)
         except ValidationError:
             pass
+    return _new_correlation_id()
+
+
+def _new_correlation_id() -> OpaqueId:
     encoded = base64.b32encode(secrets.token_bytes(10)).decode().lower().rstrip("=")
     return _OPAQUE_ID.validate_python(f"corr-{encoded}", strict=True)
 

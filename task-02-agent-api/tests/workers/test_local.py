@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -11,6 +13,7 @@ import pytest
 from pydantic import AnyHttpUrl
 
 from agent_api import RunRepository
+from agent_api.observability import OperationalTelemetry
 from agent_api.ports import (
     ClaimDisposition,
     ClaimRequest,
@@ -29,6 +32,7 @@ from agent_api.ports import (
     WriteDisposition,
 )
 from agent_api.storage import (
+    AuditEntry,
     SessionRecord,
     SQLiteRunRepository,
     SQLiteSessionRepository,
@@ -58,6 +62,15 @@ from search_agent.contracts import EventType, OpaqueId
 from search_agent.memory import RunReflection
 
 NOW = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
+
+
+class AuditRecorder:
+    def __init__(self) -> None:
+        self.entries: list[AuditEntry] = []
+
+    async def append(self, entry: AuditEntry) -> bool:
+        self.entries.append(entry)
+        return True
 
 
 class MutableClock:
@@ -447,6 +460,57 @@ async def test_terminal_mapping_persists_public_projection(
     else:
         reflection = repository.reflections[("tenant-one", "session-one", "run-one")]
         assert isinstance(reflection, RunReflection)
+
+
+@pytest.mark.asyncio
+async def test_worker_emits_safe_failed_run_diagnostics(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    queue = FakeQueue(work_item())
+    repository = FakeRunRepository(queued_run())
+    audit = AuditRecorder()
+    logger = logging.getLogger("agent_api.operations.worker-test")
+    logger.setLevel(logging.INFO)
+    telemetry = OperationalTelemetry(
+        pseudonym_key=b"t" * 32,
+        audit=audit,
+        logger=logger,
+    )
+    worker = LocalWorker(
+        repository=cast(RunRepository, repository),
+        queue=queue,
+        executor=ScriptedExecutor(
+            result=failed_result(reason=FailureReason.SEARCH_FAILED)
+        ),
+        worker_id="worker-one",
+        clock=MutableClock(NOW),
+        lease_id_factory=lambda: "lease-one",
+        telemetry=telemetry,
+    )
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        await worker.process_one()
+
+    payloads = [json.loads(record.message) for record in caplog.records]
+    assert [payload["event"] for payload in payloads] == [
+        "worker.outcome",
+        "worker.outcome",
+        "run.terminal",
+    ]
+    terminal = payloads[-1]
+    assert terminal["state"] == "failed"
+    assert terminal["failure"] == "search_failed"
+    assert (
+        terminal["pages"]
+        == failed_result(reason=FailureReason.SEARCH_FAILED).usage.pages
+    )
+    serialized = "\n".join(record.message for record in caplog.records)
+    for forbidden in ("tenant-one", "session-one", "run-one", queued_run().query):
+        assert forbidden not in serialized
+    assert [(entry.action, entry.tenant_id) for entry in audit.entries] == [
+        ("run.failed", "tenant-one")
+    ]
+    assert all("tenant" not in dict(sample.labels) for sample in telemetry.snapshot())
 
 
 @pytest.mark.asyncio

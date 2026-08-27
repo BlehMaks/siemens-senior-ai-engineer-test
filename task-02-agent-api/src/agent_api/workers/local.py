@@ -12,10 +12,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
-from search_agent import FailureReason, RunResult, TerminalState
+from search_agent import FailureReason, RunResult, RunUsage, TerminalState
 from search_agent.contracts import OpaqueId, QueryText, ScopedAnswer
 from search_agent.memory import RunReflection, reflect_run
 
+from ..observability import OperationalTelemetry
 from ..ports import (
     TERMINAL_RUN_STATES,
     ClaimDisposition,
@@ -85,6 +86,7 @@ class LocalWorker:
         cancellation_drain_seconds: float = 1.0,
         lease_id_factory: Callable[[], str] | None = None,
         limiter: QuotaLimiter | None = None,
+        telemetry: OperationalTelemetry | None = None,
     ) -> None:
         if not 1 <= lease_seconds <= 900:
             raise ValueError("lease_seconds must be between 1 and 900")
@@ -121,6 +123,7 @@ class LocalWorker:
         )
         self._stop = asyncio.Event()
         self._limiter = limiter
+        self._telemetry = telemetry
 
     async def process_one(self) -> bool:
         item = await self._queue.receive(
@@ -142,13 +145,17 @@ class LocalWorker:
                 lease_seconds=self._lease_seconds,
             )
             if permit is None:
+                self._observe_lease(item, "blocked")
+                self._observe_work(item, "quota_blocked")
                 return
+            self._observe_lease(item, "acquired")
         try:
             await self._process_admitted(item, permit)
         finally:
             if permit is not None:
                 assert self._limiter is not None
                 await self._limiter.release_execution(permit)
+                self._observe_lease(item, "released")
 
     async def _process_admitted(
         self, item: WorkItem, permit: ExecutionPermit | None
@@ -168,9 +175,16 @@ class LocalWorker:
             ClaimDisposition.TERMINAL,
             ClaimDisposition.NOT_FOUND,
         }:
+            self._observe_work(
+                item,
+                "terminal"
+                if claim.disposition is ClaimDisposition.TERMINAL
+                else "not_found",
+            )
             await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
             return
         if claim.disposition is ClaimDisposition.CANCELLATION_REQUESTED:
+            self._observe_work(item, "cancelled")
             if run is not None and run.state in TERMINAL_RUN_STATES:
                 await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
             return
@@ -179,8 +193,10 @@ class LocalWorker:
             ClaimDisposition.BUSY,
             ClaimDisposition.LEASE_UNAVAILABLE,
         }:
+            self._observe_work(item, "busy")
             return
         assert run is not None
+        self._observe_work(item, "claimed")
         await self._execute(item, run, permit)
 
     async def run_forever(self, *, poll_interval: float = 1.0) -> None:
@@ -234,14 +250,17 @@ class LocalWorker:
                             lease_seconds=self._lease_seconds,
                         )
                     ):
+                        self._observe_lease(item, "lost")
                         task.cancel()
                         await _drain_cancelled(
                             task, timeout=self._cancellation_drain_seconds
                         )
                         return
+                    self._observe_lease(item, "renewed")
                     current = lease.run
                     continue
                 if lease.disposition is LeaseDisposition.CANCELLATION_REQUESTED:
+                    self._observe_work(item, "cancelled")
                     task.cancel()
                     await _drain_cancelled(
                         task, timeout=self._cancellation_drain_seconds
@@ -249,6 +268,7 @@ class LocalWorker:
                     if lease.run is not None:
                         await self._finish_cancellation(item, lease.run)
                     return
+                self._observe_lease(item, "lost")
                 task.cancel()
                 await _drain_cancelled(task, timeout=self._cancellation_drain_seconds)
                 if lease.run is not None and lease.run.state in TERMINAL_RUN_STATES:
@@ -271,7 +291,7 @@ class LocalWorker:
             worker_task = asyncio.current_task()
             if worker_task is not None and worker_task.cancelling():
                 raise
-            await self._finish_terminal(
+            terminal = await self._finish_terminal(
                 item,
                 current,
                 _TerminalProjection(
@@ -279,9 +299,12 @@ class LocalWorker:
                     failure_code=RunFailureCode.EXECUTION_FAILED,
                 ),
             )
+            if terminal is not None:
+                self._observe_work(item, "failed")
+                await self._observe_terminal(terminal, usage=None)
             return
         except Exception:
-            await self._finish_terminal(
+            terminal = await self._finish_terminal(
                 item,
                 current,
                 _TerminalProjection(
@@ -289,32 +312,40 @@ class LocalWorker:
                     failure_code=RunFailureCode.EXECUTION_FAILED,
                 ),
             )
+            if terminal is not None:
+                self._observe_work(item, "failed")
+                await self._observe_terminal(terminal, usage=None)
             return
         try:
             projection = _projection_from_result(result, run=current)
+            result_usage: RunUsage | None = result.usage
         except (AttributeError, TypeError, ValueError):
             projection = _TerminalProjection(
                 next_state=RunState.FAILED,
                 failure_code=RunFailureCode.EXECUTION_FAILED,
             )
-        await self._finish_result(item, current, projection)
+            result_usage = None
+        terminal = await self._finish_result(item, current, projection)
+        if terminal is not None:
+            self._observe_work(item, terminal.state.value)
+            await self._observe_terminal(terminal, usage=result_usage)
 
     async def _finish_result(
         self, item: WorkItem, run: RunRecord, projection: _TerminalProjection
-    ) -> None:
+    ) -> RunRecord | None:
         current = await self._repository.get(tenant_id=run.tenant_id, run_id=run.run_id)
         if current is None:
             await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
-            return
+            return None
         if current.state in TERMINAL_RUN_STATES:
             await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
-            return
+            return None
         if current.cancellation_requested_at is not None:
             await self._finish_cancellation(item, current)
-            return
+            return None
         if not _owns(current, worker_id=self._worker_id, lease_id=_lease_id(run)):
-            return
-        await self._finish_terminal(item, current, projection)
+            return None
+        return await self._finish_terminal(item, current, projection)
 
     async def _finish_cancellation(self, item: WorkItem, run: RunRecord) -> None:
         if run.state in TERMINAL_RUN_STATES:
@@ -341,7 +372,7 @@ class LocalWorker:
 
     async def _finish_terminal(
         self, item: WorkItem, run: RunRecord, projection: _TerminalProjection
-    ) -> None:
+    ) -> RunRecord | None:
         write = await self._repository.compare_and_set(
             StateUpdate(
                 tenant_id=run.tenant_id,
@@ -359,7 +390,8 @@ class LocalWorker:
         )
         if write.disposition is WriteDisposition.APPLIED:
             await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
-            return
+            assert write.run is not None
+            return write.run
         if (
             write.run is not None
             and write.run.cancellation_requested_at is not None
@@ -370,9 +402,54 @@ class LocalWorker:
             )
         ):
             await self._finish_cancellation(item, write.run)
-            return
+            return None
         if write.run is not None and write.run.state in TERMINAL_RUN_STATES:
             await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
+        return None
+
+    def _observe_work(self, item: WorkItem, outcome: str) -> None:
+        if self._telemetry is None:
+            return
+        try:
+            self._telemetry.work_outcome(
+                tenant_id=item.tenant_id,
+                run_id=item.run_id,
+                outcome=outcome,
+                at=self._clock(),
+            )
+        except Exception:
+            return
+
+    def _observe_lease(self, item: WorkItem, outcome: str) -> None:
+        if self._telemetry is None:
+            return
+        try:
+            self._telemetry.lease_outcome(
+                tenant_id=item.tenant_id,
+                run_id=item.run_id,
+                outcome=outcome,
+                at=self._clock(),
+            )
+        except Exception:
+            return
+
+    async def _observe_terminal(
+        self, run: RunRecord, *, usage: RunUsage | None
+    ) -> None:
+        if self._telemetry is None:
+            return
+        try:
+            await self._telemetry.run_terminal(
+                tenant_id=run.tenant_id,
+                session_id=run.session_id,
+                run_id=run.run_id,
+                state=run.state,
+                failure_code=run.failure_code,
+                usage=usage,
+                at=run.updated_at,
+            )
+        except Exception:
+            return
 
 
 def _projection_from_result(

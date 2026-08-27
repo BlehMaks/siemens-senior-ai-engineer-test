@@ -17,7 +17,12 @@ from ..schemas import (
 )
 from ..security import AuthenticatedApiKey
 from ..services import InvalidRequest, RunService
-from .common import ERROR_RESPONSES, authenticate_request
+from .common import (
+    ERROR_RESPONSES,
+    authenticate_request,
+    correlation_id,
+    telemetry,
+)
 
 
 def build_run_router() -> APIRouter:
@@ -40,13 +45,21 @@ def build_run_router() -> APIRouter:
             Header(alias="Idempotency-Key", description="Tenant-scoped retry key"),
         ],
     ) -> RunAcceptedResponse:
-        return await _service(http_request).submit(
+        accepted = await _service(http_request).submit(
             tenant_id=principal.tenant_id,
             key_id=principal.key_id,
             session_id=session_id,
             idempotency_key=_single_idempotency_key(http_request, idempotency_key),
             query=request.query,
         )
+        await telemetry(http_request).run_submitted(
+            tenant_id=principal.tenant_id,
+            session_id=accepted.session_id,
+            run_id=accepted.run_id,
+            correlation_id=correlation_id(http_request),
+            at=accepted.created_at,
+        )
+        return accepted
 
     @router.get(
         "/runs/{run_id}",
@@ -76,10 +89,19 @@ def build_run_router() -> APIRouter:
         run_id: Annotated[OpaqueId, Path()],
         principal: Annotated[AuthenticatedApiKey, Depends(_write_principal)],
     ) -> CancellationResponse:
-        return await _service(http_request).cancel(
+        response = await _service(http_request).cancel(
             tenant_id=principal.tenant_id,
             run_id=run_id,
         )
+        await telemetry(http_request).run_cancelled(
+            tenant_id=principal.tenant_id,
+            run_id=response.run_id,
+            state=response.state,
+            changed=response.changed,
+            correlation_id=correlation_id(http_request),
+            at=response.requested_at or _service(http_request).now(),
+        )
+        return response
 
     return router
 

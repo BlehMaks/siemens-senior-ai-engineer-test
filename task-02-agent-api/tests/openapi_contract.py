@@ -29,6 +29,11 @@ ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     code: {"model": ErrorEnvelope}
     for code in (400, 401, 403, 404, 409, 413, 422, 429, 500, 503)
 }
+HEALTH_RESPONSES: dict[int | str, dict[str, Any]] = {
+    422: {"model": ErrorEnvelope},
+    500: {"model": ErrorEnvelope},
+    503: {"model": HealthResponse},
+}
 
 
 def _contract_only() -> NoReturn:
@@ -54,7 +59,7 @@ def build_contract_app() -> FastAPI:
     @app.get(
         "/health/live",
         response_model=HealthResponse,
-        responses=ERROR_RESPONSES,
+        responses={422: {"model": ErrorEnvelope}, 500: {"model": ErrorEnvelope}},
         tags=["health"],
     )
     async def live() -> HealthResponse:
@@ -63,7 +68,7 @@ def build_contract_app() -> FastAPI:
     @app.get(
         "/health/ready",
         response_model=HealthResponse,
-        responses=ERROR_RESPONSES,
+        responses=HEALTH_RESPONSES,
         tags=["health"],
     )
     async def ready() -> HealthResponse:

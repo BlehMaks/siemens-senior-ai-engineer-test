@@ -7,6 +7,9 @@ from typing import Any, cast
 
 from fastapi import Request
 
+from search_agent.contracts import OpaqueId
+
+from ..observability import OperationalTelemetry
 from ..schemas import ErrorEnvelope
 from ..security import (
     ApiKeyManager,
@@ -42,3 +45,11 @@ async def authenticate_request(
     if request_too_large(request):
         raise RequestTooLarge
     return principal
+
+
+def correlation_id(request: Request) -> OpaqueId:
+    return cast(OpaqueId, request.state.correlation_id)
+
+
+def telemetry(request: Request) -> OperationalTelemetry:
+    return cast(OperationalTelemetry, request.app.state.telemetry)

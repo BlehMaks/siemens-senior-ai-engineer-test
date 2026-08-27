@@ -71,3 +71,7 @@ The GCP target maps unauthenticated/global edge throttling to Cloud Armor or an 
 gateway, dispatch/concurrency to Cloud Tasks queue controls, and durable work/SSE
 accounting to a shared transactional store. This repository deliberately contains
 no pretend cloud adapter or SDK dependency.
+
+Operational logging, bounded metric dimensions, durable audit actions, correlation
+behavior, and health-probe semantics are documented in
+[`docs/operations.md`](docs/operations.md).
