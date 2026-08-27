@@ -123,12 +123,31 @@ teardown() {
     --arg project "$project" \
     --arg project_number "$project_number" \
     --arg region "$region" \
+    --arg environment "$environment" \
     --arg system_code "$system_code" \
-    '(.variables.project_id.value | tostring) == $project and
+    'def deletes: (.change.actions // []) | index("delete") != null;
+     def expected_module:
+       (.address | startswith("module.managed_services.") or startswith("module.run_services."));
+     def expected_project:
+       if .type == "google_billing_budget" then
+         ([.change.before.budget_filter[]?.projects[]?] | length) > 0 and
+         all(.change.before.budget_filter[]?.projects[]?; . == "projects/" + $project_number)
+       else
+         ((.change.before.project? // .change.before.project_id? // "") | tostring) == $project
+       end;
+     def expected_region:
+       ((.change.before.location? // .change.before.location_id? // $region) | tostring) == $region;
+     def expected_labels:
+       (.change.before.labels? // {}) as $labels |
+       ($labels.environment? // $environment) == $environment and
+       ($labels.system? // $system_code) == $system_code;
+     (.variables.project_id.value | tostring) == $project and
      (.variables.project_number.value | tostring) == $project_number and
      (.variables.region.value | tostring) == $region and
-     (.variables.system_code.value | tostring) == $system_code' \
-    <<<"$plan_json" >/dev/null || fail "destroy plan inputs do not match the confirmed target"
+     (.variables.system_code.value | tostring) == $system_code and
+     all(.resource_changes[]? | select(deletes);
+       expected_module and expected_project and expected_region and expected_labels)' \
+    <<<"$plan_json" >/dev/null || fail "destroy plan does not match the confirmed target"
   terraform -chdir="$terraform_root" show -no-color "$plan_file"
   terraform -chdir="$terraform_root" apply -input=false -lock-timeout=60s "$plan_file"
 
