@@ -46,12 +46,8 @@ output "logging" {
 }
 
 output "workload_access" {
-  description = "Least-privilege access granted to assessment workloads."
+  description = "Resource-scoped secret access granted by this module. Firestore data access remains bootstrap-owned."
   value = {
-    datastore_users = sort([
-      for binding in google_project_iam_member.firestore_user :
-      binding.member
-    ])
     secret_accessors = {
       api_key_pepper = sort([
         for binding in google_secret_manager_secret_iam_member.api_pepper_reader :

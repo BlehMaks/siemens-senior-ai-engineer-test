@@ -25,8 +25,8 @@ is committed.
 - one explicit region: `europe-west3`;
 - Firestore delete protection enabled and Terraform destroy set to `ABANDON`;
 - Artifact Registry uses immutable tags;
-- runtime identities get only `roles/datastore.user` and
-  `roles/secretmanager.secretAccessor`;
+- bootstrap grants `roles/datastore.user` only to the API and worker identities;
+  this stack grants them resource-scoped `roles/secretmanager.secretAccessor`;
 - the deployer gets repository-scoped `roles/artifactregistry.writer`;
 - secret containers and the log bucket stay in the configured region;
 - the log bucket keeps 30 days of redacted application logs;

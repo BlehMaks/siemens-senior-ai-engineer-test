@@ -134,39 +134,71 @@ def test_no_keys_or_wildcard_principals_are_defined() -> None:
     assert 'member  = "*"' not in terraform_sources
 
 
-def test_deployer_project_roles_match_reviewed_allowlist() -> None:
+def test_project_roles_match_reviewed_allowlist() -> None:
     locals_tf = read(BOOTSTRAP / "locals.tf")
     identity_variables = read(IDENTITY / "variables.tf")
 
     expected_roles = {
         "roles/artifactregistry.admin",
         "roles/cloudtasks.admin",
-        "roles/datastore.admin",
-        "roles/iam.serviceAccountAdmin",
-        "roles/iam.workloadIdentityPoolAdmin",
+        "roles/datastore.indexAdmin",
+        "roles/datastore.user",
         "roles/logging.configWriter",
         "roles/monitoring.notificationChannelEditor",
-        "roles/resourcemanager.projectIamAdmin",
         "roles/run.admin",
         "roles/secretmanager.admin",
         "roles/serviceusage.serviceUsageAdmin",
-        "roles/storage.admin",
     }
 
     for role in expected_roles:
         assert f'"{role}"' in locals_tf
 
-    role_lines = {
-        line.strip().strip('",')
-        for line in locals_tf.splitlines()
-        if line.strip().startswith('"roles/')
-    }
+    role_lines = set(re.findall(r'"(roles/[A-Za-z0-9_.]+)"', locals_tf))
     assert role_lines == expected_roles
-    assert "project_roles = local.bootstrap_roles" in locals_tf
-    assert "setunion(local.bootstrap_roles" not in locals_tf
+    assert locals_tf.count('project_roles = ["roles/datastore.user"]') == 2
+    assert "project_roles = local.deployer_project_roles" in locals_tf
     assert '["roles/owner", "roles/editor", "roles/viewer"]' in identity_variables
     assert "role == trimspace(role)" in identity_variables
     assert 'regex("^roles/[A-Za-z0-9_.]+$", role)' in identity_variables
+
+
+def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
+    locals_tf = read(BOOTSTRAP / "locals.tf")
+    main_tf = read(BOOTSTRAP / "main.tf")
+
+    assert 'resource "google_project_iam_custom_role" "deployer_application"' in main_tf
+    assert 'resource "google_project_iam_member" "deployer_custom_role"' in main_tf
+    assert "local.deployer_project_permissions" in main_tf
+    assert "roles/resourcemanager.projectIamAdmin" not in locals_tf
+    assert "roles/iam.serviceAccountAdmin" not in locals_tf
+    assert "roles/datastore.admin" not in locals_tf
+    assert "roles/storage.admin" not in locals_tf
+    assert "roles/iam.workloadIdentityPoolAdmin" not in locals_tf
+    assert "datastore.entities" not in locals_tf
+
+    expected_custom_permissions = {
+        "billing.resourcebudgets.read",
+        "billing.resourcebudgets.write",
+        "datastore.databases.create",
+        "datastore.databases.delete",
+        "datastore.databases.getMetadata",
+        "datastore.databases.list",
+        "datastore.databases.update",
+        "datastore.locations.get",
+        "datastore.locations.list",
+        "datastore.operations.get",
+        "datastore.operations.list",
+        "resourcemanager.projects.get",
+    }
+    permission_block = locals_tf.split(
+        "deployer_project_permissions = toset([", maxsplit=1
+    )[1].split("])", maxsplit=1)[0]
+    permission_lines = {
+        line.strip().strip('",')
+        for line in permission_block.splitlines()
+        if line.strip().startswith('"') and "." in line
+    }
+    assert permission_lines == expected_custom_permissions
 
 
 def test_deployer_can_attach_only_the_three_runtime_identities() -> None:
@@ -182,6 +214,55 @@ def test_deployer_can_attach_only_the_three_runtime_identities() -> None:
         'member             = "serviceAccount:${module.deployer_identity.email}"'
         in resource
     )
+
+
+def test_deployer_policy_admin_is_limited_to_tasks_identity() -> None:
+    locals_tf = read(BOOTSTRAP / "locals.tf")
+    main_tf = read(BOOTSTRAP / "main.tf")
+
+    resource = main_tf.split(
+        'resource "google_service_account_iam_member" "deployer_tasks_policy_admin"',
+        maxsplit=1,
+    )[1]
+    assert 'service_account_id = module.identity["tasks"].name' in resource
+    assert (
+        "role               = google_project_iam_custom_role.tasks_policy.name"
+        in resource
+    )
+    assert (
+        'member             = "serviceAccount:${module.deployer_identity.email}"'
+        in resource
+    )
+    assert "roles/iam.serviceAccountAdmin" not in main_tf
+    expected_policy_permissions = {
+        "iam.serviceAccounts.get",
+        "iam.serviceAccounts.getIamPolicy",
+        "iam.serviceAccounts.setIamPolicy",
+    }
+    permission_block = locals_tf.split(
+        "tasks_policy_permissions = toset([", maxsplit=1
+    )[1].split("])", maxsplit=1)[0]
+    assert expected_policy_permissions == {
+        line.strip().strip('",')
+        for line in permission_block.splitlines()
+        if line.strip().startswith('"')
+    }
+
+
+def test_deployer_state_access_is_bucket_scoped() -> None:
+    main_tf = read(BOOTSTRAP / "main.tf")
+
+    resource = main_tf.split(
+        'resource "google_storage_bucket_iam_member" "deployer_state_objects"',
+        maxsplit=1,
+    )[1]
+    resource = resource.split(
+        'resource "google_service_account_iam_member" "deployer_runtime_user"',
+        maxsplit=1,
+    )[0]
+    assert "bucket = google_storage_bucket.terraform_state.name" in resource
+    assert 'role   = "roles/storage.objectAdmin"' in resource
+    assert 'member = "serviceAccount:${module.deployer_identity.email}"' in resource
 
 
 def test_example_tfvars_are_secret_free_and_realistic() -> None:

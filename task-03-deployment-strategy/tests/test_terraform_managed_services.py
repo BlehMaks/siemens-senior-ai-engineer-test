@@ -57,9 +57,9 @@ def test_secret_and_artifact_access_is_resource_specific() -> None:
 
     assert assigned_roles == {
         "roles/artifactregistry.writer",
-        "roles/datastore.user",
         "roles/secretmanager.secretAccessor",
     }
+    assert 'resource "google_project_iam_member"' not in main
     assert (
         'resource "google_secret_manager_secret_iam_member" "api_pepper_reader"' in main
     )

@@ -121,14 +121,6 @@ resource "google_artifact_registry_repository_iam_member" "deployer_writer" {
   member     = "serviceAccount:${var.deployer_service_account_email}"
 }
 
-resource "google_project_iam_member" "firestore_user" {
-  for_each = local.workload_members
-
-  project = var.project_id
-  role    = "roles/datastore.user"
-  member  = each.value
-}
-
 resource "google_firestore_index" "sessions" {
   project    = var.project_id
   database   = google_firestore_database.assessment.name

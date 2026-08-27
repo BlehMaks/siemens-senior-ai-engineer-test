@@ -23,19 +23,36 @@ locals {
     var.github_repository_id,
   ) : null
 
-  bootstrap_roles = toset([
+  deployer_project_permissions = toset([
+    "billing.resourcebudgets.read",
+    "billing.resourcebudgets.write",
+    "datastore.databases.create",
+    "datastore.databases.delete",
+    "datastore.databases.getMetadata",
+    "datastore.databases.list",
+    "datastore.databases.update",
+    "datastore.locations.get",
+    "datastore.locations.list",
+    "datastore.operations.get",
+    "datastore.operations.list",
+    "resourcemanager.projects.get",
+  ])
+
+  deployer_project_roles = toset([
     "roles/artifactregistry.admin",
     "roles/cloudtasks.admin",
-    "roles/datastore.admin",
-    "roles/iam.serviceAccountAdmin",
-    "roles/iam.workloadIdentityPoolAdmin",
+    "roles/datastore.indexAdmin",
     "roles/logging.configWriter",
     "roles/monitoring.notificationChannelEditor",
-    "roles/resourcemanager.projectIamAdmin",
     "roles/run.admin",
     "roles/secretmanager.admin",
     "roles/serviceusage.serviceUsageAdmin",
-    "roles/storage.admin",
+  ])
+
+  tasks_policy_permissions = toset([
+    "iam.serviceAccounts.get",
+    "iam.serviceAccounts.getIamPolicy",
+    "iam.serviceAccounts.setIamPolicy",
   ])
 
   identities = {
@@ -43,13 +60,13 @@ locals {
       account_id    = "${var.system_code}-${var.environment}-api"
       display_name  = "Assessment API runtime"
       description   = "Runtime identity for the assignment API service."
-      project_roles = []
+      project_roles = ["roles/datastore.user"]
     }
     worker = {
       account_id    = "${var.system_code}-${var.environment}-worker"
       display_name  = "Assessment worker runtime"
       description   = "Runtime identity for the assignment worker service."
-      project_roles = []
+      project_roles = ["roles/datastore.user"]
     }
     tasks = {
       account_id    = "${var.system_code}-${var.environment}-tasks"
@@ -61,7 +78,7 @@ locals {
       account_id    = "${var.system_code}-${var.environment}-deploy"
       display_name  = "Terraform deployer"
       description   = "Identity that applies reviewed Terraform for assignment resources."
-      project_roles = local.bootstrap_roles
+      project_roles = local.deployer_project_roles
     }
     ci = {
       account_id    = "${var.system_code}-${var.environment}-ci"

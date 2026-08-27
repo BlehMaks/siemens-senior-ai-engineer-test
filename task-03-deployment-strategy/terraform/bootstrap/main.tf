@@ -104,10 +104,50 @@ module "deployer_identity" {
   depends_on = [google_project_service.required]
 }
 
+resource "google_project_iam_custom_role" "deployer_application" {
+  project     = var.project_id
+  role_id     = "${replace(var.system_code, "-", "_")}_${replace(var.environment, "-", "_")}_terraform_deployer"
+  title       = "Assessment Terraform deployer"
+  description = "Database lifecycle and project-budget permissions missing from safe predefined roles."
+  permissions = local.deployer_project_permissions
+  stage       = "GA"
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_project_iam_member" "deployer_custom_role" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.deployer_application.name
+  member  = "serviceAccount:${module.deployer_identity.email}"
+}
+
+resource "google_project_iam_custom_role" "tasks_policy" {
+  project     = var.project_id
+  role_id     = "${replace(var.system_code, "-", "_")}_${replace(var.environment, "-", "_")}_tasks_policy_admin"
+  title       = "Assessment tasks identity policy administrator"
+  description = "Read and update only the IAM policy of the Cloud Tasks caller identity."
+  permissions = local.tasks_policy_permissions
+  stage       = "GA"
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_storage_bucket_iam_member" "deployer_state_objects" {
+  bucket = google_storage_bucket.terraform_state.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${module.deployer_identity.email}"
+}
+
 resource "google_service_account_iam_member" "deployer_runtime_user" {
   for_each = toset(["api", "tasks", "worker"])
 
   service_account_id = module.identity[each.value].name
   role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${module.deployer_identity.email}"
+}
+
+resource "google_service_account_iam_member" "deployer_tasks_policy_admin" {
+  service_account_id = module.identity["tasks"].name
+  role               = google_project_iam_custom_role.tasks_policy.name
   member             = "serviceAccount:${module.deployer_identity.email}"
 }

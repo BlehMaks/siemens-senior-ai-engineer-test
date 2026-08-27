@@ -9,8 +9,14 @@ identity federation. Application resources stay out of scope until C04 and C05.
 - no service-account keys;
 - no primitive Owner, Editor, or Viewer roles;
 - one service account per workload;
-- a reviewed deployer role allowlist for the application stack and
-  `serviceAccountUser` only on the three runtime identities it must attach;
+- reviewed predefined roles plus a small database/budget custom role for the
+  application deployer, with no project-IAM or Firestore entity permissions;
+- `serviceAccountUser` only on the three runtime identities it must attach,
+  a three-permission custom policy role only on the Cloud Tasks caller identity,
+  and `storage.objectAdmin` only on the Terraform state bucket;
+- project-level `datastore.user` bindings are bootstrap-owned and limited to the
+  API and worker identities, so the application deployer cannot grant itself data
+  access;
 - GitHub OIDC trust anchored to one immutable numeric repository ID and also
   narrowed to the expected owner/repository name and branch, with optional
   environment pinning;
@@ -25,6 +31,6 @@ identity federation. Application resources stay out of scope until C04 and C05.
   in the local Terraform cache.
 - Applying this stack still requires a human-held project-admin credential in a
   dedicated assessment project. That live plan is deferred to O13.
-- An enabled budget additionally needs `roles/billing.costsManager` on the
-  selected billing account. Project-scoped bootstrap Terraform cannot grant that
-  external permission.
+- The deployer custom role uses the single-project budget permissions documented
+  by Google Cloud. If the selected billing-account policy does not permit that
+  flow, an administrator must grant the external billing permission before O13.
