@@ -45,14 +45,15 @@ workflow accepts a service-account key or reads a GitHub secret.
    out-of-band administrator session. Terraform and GitHub never receive the
    payloads. The administrator must verify both enabled versions before the first
    application apply; the deployer intentionally cannot inspect Secret Manager.
-5. Create the deterministic Cloud Run services and queue with one reviewed
-   application apply. Reapply `terraform/bootstrap` as the human administrator
+5. Create the deterministic Cloud Run services with one reviewed application
+   apply. Reapply `terraform/bootstrap` as the human administrator
    with `enable_runtime_policy = true` and `api_allow_unauthenticated` matching
-   the ingress mode. This one-time second phase installs runtime IAM after its
-   targets exist. Keep these policies bootstrap-owned for later deployments.
+   the ingress mode. This one-time second phase creates the authenticated queue
+   and installs runtime IAM after its Cloud Run targets exist. Keep the queue and
+   these policies bootstrap-owned for later deployments.
 
-The deployer deliberately holds Cloud Run and queue lifecycle permissions but no
-service, queue, project, or service-account IAM-policy mutation permission. It
+The deployer deliberately holds Cloud Run lifecycle permissions but no queue
+permission and no service, project, or service-account IAM-policy mutation. It
 also has no route-invoke or SSH permission. Because deploying code under a
 runtime service account is itself a privileged act, compromise of the approved
 deploy job can still exercise that

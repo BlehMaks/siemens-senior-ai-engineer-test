@@ -1,11 +1,4 @@
-mock_provider "google" {
-  override_data {
-    target = module.run_services.data.google_project.current
-    values = {
-      number = "123456789012"
-    }
-  }
-}
+mock_provider "google" {}
 
 mock_provider "google-beta" {}
 

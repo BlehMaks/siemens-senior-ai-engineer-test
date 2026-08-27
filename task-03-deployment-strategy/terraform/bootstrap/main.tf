@@ -154,7 +154,7 @@ resource "google_project_iam_custom_role" "deployer_application" {
   project     = var.project_id
   role_id     = "${replace(var.system_code, "-", "_")}_${replace(var.environment, "-", "_")}_terraform_deployer"
   title       = "Assessment Terraform deployer"
-  description = "Database, budget, Cloud Tasks, and Cloud Run lifecycle permissions missing from safe predefined roles."
+  description = "Database, budget, and Cloud Run lifecycle permissions missing from safe predefined roles."
   permissions = local.deployer_project_permissions
   stage       = "GA"
 
@@ -174,7 +174,7 @@ resource "google_storage_bucket_iam_member" "deployer_state_objects" {
 }
 
 resource "google_service_account_iam_member" "deployer_runtime_user" {
-  for_each = toset(["api", "tasks", "worker"])
+  for_each = toset(["api", "worker"])
 
   service_account_id = module.identity[each.value].name
   role               = "roles/iam.serviceAccountUser"
@@ -187,12 +187,79 @@ resource "google_service_account_iam_member" "tasks_service_agent_token_creator"
   member             = "serviceAccount:${google_project_service_identity.cloud_tasks.email}"
 }
 
-resource "google_cloud_run_v2_service_iam_binding" "worker_invoker" {
+data "google_cloud_run_v2_service" "worker" {
   count = var.enable_runtime_policy ? 1 : 0
 
   project  = var.project_id
   location = var.region
   name     = "${var.system_code}-${var.environment}-worker"
+}
+
+resource "google_cloud_tasks_queue" "dispatch" {
+  count = var.enable_runtime_policy ? 1 : 0
+
+  project  = var.project_id
+  location = var.region
+  name     = "${var.system_code}-${var.environment}-run-dispatch"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  rate_limits {
+    max_dispatches_per_second = var.queue_max_dispatches_per_second
+    max_concurrent_dispatches = var.queue_max_concurrent_dispatches
+  }
+
+  retry_config {
+    max_attempts       = var.queue_max_attempts
+    max_retry_duration = "${var.queue_max_retry_seconds}s"
+    min_backoff        = "${var.queue_min_backoff_seconds}s"
+    max_backoff        = "${var.queue_max_backoff_seconds}s"
+    max_doublings      = 3
+  }
+
+  stackdriver_logging_config {
+    sampling_ratio = 1
+  }
+
+  http_target {
+    http_method = "POST"
+
+    uri_override {
+      scheme = "HTTPS"
+      host   = replace(data.google_cloud_run_v2_service.worker[0].uri, "https://", "")
+
+      path_override {
+        path = var.worker_dispatch_path
+      }
+    }
+
+    oidc_token {
+      service_account_email = module.identity["tasks"].email
+      audience              = data.google_cloud_run_v2_service.worker[0].uri
+    }
+
+    header_overrides {
+      header {
+        key   = "Content-Type"
+        value = "application/json"
+      }
+    }
+  }
+
+  depends_on = [
+    google_project_service.required,
+    google_service_account_iam_member.tasks_service_agent_token_creator,
+  ]
+}
+
+resource "google_cloud_run_v2_service_iam_binding" "worker_invoker" {
+  count = var.enable_runtime_policy ? 1 : 0
+
+  project  = var.project_id
+  location = var.region
+  name     = data.google_cloud_run_v2_service.worker[0].name
   role     = "roles/run.invoker"
   members  = ["serviceAccount:${module.identity["tasks"].email}"]
 }
@@ -233,7 +300,7 @@ resource "google_cloud_tasks_queue_iam_member" "runtime" {
 
   project  = var.project_id
   location = var.region
-  name     = "${var.system_code}-${var.environment}-run-dispatch"
+  name     = google_cloud_tasks_queue.dispatch[0].name
   role     = each.value.role
   member   = "serviceAccount:${each.value.member}"
 }

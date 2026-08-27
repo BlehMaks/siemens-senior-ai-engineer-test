@@ -7,6 +7,8 @@ TERRAFORM_ROOT = TASK_ROOT / "terraform"
 RUN_SERVICES_MAIN = TERRAFORM_ROOT / "modules" / "run_services" / "main.tf"
 RUN_SERVICES_OUTPUTS = TERRAFORM_ROOT / "modules" / "run_services" / "outputs.tf"
 RUN_SERVICES_VARIABLES = TERRAFORM_ROOT / "modules" / "run_services" / "variables.tf"
+BOOTSTRAP_MAIN = TERRAFORM_ROOT / "bootstrap" / "main.tf"
+BOOTSTRAP_VARIABLES = TERRAFORM_ROOT / "bootstrap" / "variables.tf"
 DEV_VARIABLES = TERRAFORM_ROOT / "environments" / "dev" / "variables.tf"
 INGRESS_POLICY_TEST = (
     TERRAFORM_ROOT
@@ -22,6 +24,7 @@ RUN_SERVICES_TEST = (
     / "tests"
     / "c05_run_services.tftest.hcl"
 )
+BOOTSTRAP_TEST = TERRAFORM_ROOT / "bootstrap" / "tests" / "c03_wif_contract.tftest.hcl"
 DEV_MAIN = TERRAFORM_ROOT / "environments" / "dev" / "main.tf"
 DEV_README = TERRAFORM_ROOT / "environments" / "dev" / "README.md"
 ATTACK_PATH = TERRAFORM_ROOT / "environments" / "dev" / "c05a-attack-path.md"
@@ -34,6 +37,7 @@ def read(path: Path) -> str:
 def test_run_services_keeps_worker_private_and_oidc_bound() -> None:
     source = read(RUN_SERVICES_MAIN)
     outputs = read(RUN_SERVICES_OUTPUTS)
+    bootstrap = read(BOOTSTRAP_MAIN)
 
     assert source.count("invoker_iam_disabled = false") == 2
     assert "ingress              = var.worker_ingress" in source
@@ -46,8 +50,12 @@ def test_run_services_keeps_worker_private_and_oidc_bound() -> None:
         'tasks_service_agent_token_role = "roles/iam.serviceAccountTokenCreator"'
         in outputs
     )
-    assert "service_account_email = var.tasks_service_account_email" in source
-    assert "audience              = google_cloud_run_v2_service.worker.uri" in source
+    assert 'resource "google_cloud_tasks_queue"' not in source
+    assert 'service_account_email = module.identity["tasks"].email' in bootstrap
+    assert (
+        "audience              = data.google_cloud_run_v2_service.worker[0].uri"
+        in bootstrap
+    )
     assert "allUsers" not in source
     assert "allAuthenticatedUsers" not in source
 
@@ -65,25 +73,34 @@ def test_run_services_uses_secret_refs_and_not_secret_payloads() -> None:
 def test_run_services_is_digest_pinned_and_bounded() -> None:
     variables = read(RUN_SERVICES_VARIABLES)
     source = read(RUN_SERVICES_MAIN)
+    bootstrap_variables = read(BOOTSTRAP_VARIABLES)
+    bootstrap = read(BOOTSTRAP_MAIN)
 
     assert 'regex("^sha256:[a-f0-9]{64}$"' in variables
     assert "min_instance_count = 0" in source
     assert "max_instance_count = var.api_max_instances" in source
     assert "max_instance_count = var.worker_max_instances" in source
-    assert "max_dispatches_per_second = var.queue_max_dispatches_per_second" in source
-    assert "max_concurrent_dispatches = var.queue_max_concurrent_dispatches" in source
-    assert "max_attempts       = var.queue_max_attempts" in source
-    assert "prevent_destroy = true" in source
-    assert "var.queue_max_retry_seconds >= 1" in variables
+    assert (
+        "max_dispatches_per_second = var.queue_max_dispatches_per_second" in bootstrap
+    )
+    assert (
+        "max_concurrent_dispatches = var.queue_max_concurrent_dispatches" in bootstrap
+    )
+    assert "max_attempts       = var.queue_max_attempts" in bootstrap
+    assert "prevent_destroy = true" in bootstrap
+    assert "var.queue_max_retry_seconds >= 1" in bootstrap_variables
 
 
-def test_run_services_resolves_cloud_tasks_service_agent_from_project() -> None:
+def test_human_bootstrap_owns_the_cloud_tasks_queue() -> None:
     source = read(RUN_SERVICES_MAIN)
-    variables = read(RUN_SERVICES_VARIABLES)
+    bootstrap = read(BOOTSTRAP_MAIN)
 
-    assert 'data "google_project" "current"' in source
-    assert "data.google_project.current.number" in source
-    assert 'variable "project_number"' not in variables
+    assert 'resource "google_cloud_tasks_queue" "dispatch"' not in source
+    assert 'resource "google_cloud_tasks_queue" "dispatch"' in bootstrap
+    assert "count = var.enable_runtime_policy ? 1 : 0" in bootstrap
+    assert "cloudtasks.queues.update" not in read(
+        TERRAFORM_ROOT / "bootstrap" / "locals.tf"
+    )
 
 
 def test_dev_environment_wires_c04_outputs_into_c05a() -> None:
@@ -104,6 +121,7 @@ def test_c05a_docs_and_tests_cover_baseline_and_hardened_modes() -> None:
     attack_path = read(ATTACK_PATH)
     ingress_test = read(INGRESS_POLICY_TEST)
     run_test = read(RUN_SERVICES_TEST)
+    bootstrap_test = read(BOOTSTRAP_TEST)
 
     assert 'ingress_mode = "baseline"' in readme
     assert '"hardened"' in readme
@@ -111,7 +129,7 @@ def test_c05a_docs_and_tests_cover_baseline_and_hardened_modes() -> None:
     assert "Worker ingress is never public" in readme
     assert "api_allow_unauthenticated" in ingress_test
     assert "public_invoker_with_disabled_api_url_fails_closed" in run_test
-    assert "unbounded_retry_window_fails_closed" in run_test
+    assert "unbounded_retry_window_fails_closed" in bootstrap_test
     assert "invalid_digest_fails_closed" in run_test
     assert "invalid_worker_path_fails_closed" in run_test
 

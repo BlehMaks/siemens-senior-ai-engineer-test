@@ -33,20 +33,12 @@ output "worker_service" {
 }
 
 output "dispatch_queue" {
-  description = "Cloud Tasks queue contract for authenticated worker delivery."
+  description = "Deterministic contract for the bootstrap-owned Cloud Tasks queue."
   value = {
-    name                      = google_cloud_tasks_queue.dispatch.name
-    location                  = google_cloud_tasks_queue.dispatch.location
-    max_dispatches_per_second = google_cloud_tasks_queue.dispatch.rate_limits[0].max_dispatches_per_second
-    max_concurrent_dispatches = google_cloud_tasks_queue.dispatch.rate_limits[0].max_concurrent_dispatches
-    max_attempts              = google_cloud_tasks_queue.dispatch.retry_config[0].max_attempts
-    max_retry_duration        = google_cloud_tasks_queue.dispatch.retry_config[0].max_retry_duration
-    min_backoff               = google_cloud_tasks_queue.dispatch.retry_config[0].min_backoff
-    max_backoff               = google_cloud_tasks_queue.dispatch.retry_config[0].max_backoff
-    oidc_service_account      = google_cloud_tasks_queue.dispatch.http_target[0].oidc_token[0].service_account_email
-    oidc_audience             = google_cloud_tasks_queue.dispatch.http_target[0].oidc_token[0].audience
-    target_host               = google_cloud_tasks_queue.dispatch.http_target[0].uri_override[0].host
-    target_path               = google_cloud_tasks_queue.dispatch.http_target[0].uri_override[0].path_override[0].path
+    name      = local.dispatch_queue_name
+    path      = local.dispatch_queue_path
+    location  = var.region
+    ownership = "human-bootstrap"
   }
 }
 
@@ -61,7 +53,6 @@ output "iam_contract" {
     task_deleter_role              = "roles/cloudtasks.taskDeleter"
     worker_invoker_members         = ["serviceAccount:${var.tasks_service_account_email}"]
     worker_invoker_role            = "roles/run.invoker"
-    tasks_service_agent_member     = local.tasks_service_agent_member
     tasks_service_agent_token_role = "roles/iam.serviceAccountTokenCreator"
   }
 }

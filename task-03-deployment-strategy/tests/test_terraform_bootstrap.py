@@ -180,16 +180,6 @@ def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
     expected_custom_permissions = {
         "billing.resourcebudgets.read",
         "billing.resourcebudgets.write",
-        "cloudtasks.locations.get",
-        "cloudtasks.locations.list",
-        "cloudtasks.operations.get",
-        "cloudtasks.queues.create",
-        "cloudtasks.queues.delete",
-        "cloudtasks.queues.get",
-        "cloudtasks.queues.list",
-        "cloudtasks.queues.pause",
-        "cloudtasks.queues.resume",
-        "cloudtasks.queues.update",
         "datastore.databases.create",
         "datastore.databases.delete",
         "datastore.databases.getMetadata",
@@ -241,20 +231,26 @@ def test_secrets_and_runtime_access_stay_in_human_bootstrap() -> None:
         'resource "google_secret_manager_secret_iam_member" "task_hmac_reader"'
         in main_tf
     )
-    assert main_tf.count('for_each = toset(["api", "worker"])') == 2
+    for resource_name in ("api_pepper_reader", "task_hmac_reader"):
+        resource = main_tf.split(
+            f'resource "google_secret_manager_secret_iam_member" "{resource_name}"',
+            maxsplit=1,
+        )[1].split("resource ", maxsplit=1)[0]
+        assert 'for_each = toset(["api", "worker"])' in resource
     assert main_tf.count('role      = "roles/secretmanager.secretAccessor"') == 2
     assert 'output "secret_containers"' in outputs_tf
     assert 'output "secret_accessors"' in outputs_tf
 
 
-def test_deployer_can_attach_only_the_three_runtime_identities() -> None:
+def test_deployer_can_attach_only_the_two_cloud_run_identities() -> None:
     main_tf = read(BOOTSTRAP / "main.tf")
 
     resource = main_tf.split(
         'resource "google_service_account_iam_member" "deployer_runtime_user"',
         maxsplit=1,
     )[1]
-    assert 'toset(["api", "tasks", "worker"])' in resource
+    assert 'toset(["api", "worker"])' in resource
+    assert 'toset(["api", "tasks", "worker"])' not in resource
     assert 'role               = "roles/iam.serviceAccountUser"' in resource
     assert (
         'member             = "serviceAccount:${module.deployer_identity.email}"'
@@ -286,6 +282,8 @@ def test_runtime_policy_is_owned_by_human_bootstrap() -> None:
     )
     assert "for_each = var.enable_runtime_policy ? {" in main_tf
     assert main_tf.count('resource "google_cloud_tasks_queue_iam_member"') == 1
+    assert 'resource "google_cloud_tasks_queue" "dispatch"' in main_tf
+    assert "name     = google_cloud_tasks_queue.dispatch[0].name" in main_tf
 
 
 def test_deployer_state_access_is_bucket_scoped() -> None:

@@ -1,4 +1,12 @@
-mock_provider "google" {}
+mock_provider "google" {
+  override_data {
+    target = data.google_cloud_run_v2_service.worker
+    values = {
+      name = "sai-dev-worker"
+      uri  = "https://sai-dev-worker-example.europe-west3.run.app"
+    }
+  }
+}
 
 mock_provider "google-beta" {}
 
@@ -65,8 +73,8 @@ run "github_wif_plans_in_one_pass" {
   }
 
   assert {
-    condition     = !output.runtime_policy.enabled && output.runtime_policy.queue_binding_count == 0 && output.runtime_policy.worker_invoker_binding_count == 0
-    error_message = "Runtime policies must wait until the application resources exist."
+    condition     = !output.runtime_policy.enabled && output.runtime_policy.dispatch_queue_count == 0 && output.runtime_policy.queue_binding_count == 0 && output.runtime_policy.worker_invoker_binding_count == 0
+    error_message = "The queue and runtime policies must wait until the application services exist."
   }
 }
 
@@ -96,9 +104,48 @@ run "human_bootstrap_owns_runtime_policies" {
   }
 
   assert {
+    condition     = output.runtime_policy.dispatch_queue_count == 1
+    error_message = "The human bootstrap must own the single authenticated dispatch queue."
+  }
+
+  assert {
     condition     = output.runtime_policy.queue_binding_count == 5
     error_message = "Bootstrap must apply the five reviewed queue runtime bindings."
   }
+
+  assert {
+    condition     = output.dispatch_queue.max_concurrent_dispatches == 1
+    error_message = "Queue concurrency must stay tightly bounded by default."
+  }
+}
+
+run "inverted_queue_backoff_fails_closed" {
+  command = plan
+
+  variables {
+    project_id                = "contract-assignment-dev"
+    state_bucket_name         = "contract-assignment-dev-tf-state"
+    enable_github_wif         = false
+    enable_runtime_policy     = true
+    queue_min_backoff_seconds = 100
+    queue_max_backoff_seconds = 60
+  }
+
+  expect_failures = [var.queue_max_backoff_seconds]
+}
+
+run "unbounded_retry_window_fails_closed" {
+  command = plan
+
+  variables {
+    project_id              = "contract-assignment-dev"
+    state_bucket_name       = "contract-assignment-dev-tf-state"
+    enable_github_wif       = false
+    enable_runtime_policy   = true
+    queue_max_retry_seconds = 0
+  }
+
+  expect_failures = [var.queue_max_retry_seconds]
 }
 
 run "invalid_or_colliding_secret_ids_fail_closed" {

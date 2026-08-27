@@ -1,6 +1,5 @@
 locals {
   required_services = toset([
-    "cloudtasks.googleapis.com",
     "run.googleapis.com",
   ])
 
@@ -12,8 +11,6 @@ locals {
       system      = var.system_code
     },
   )
-
-  tasks_service_agent_member = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
 
   image = format(
     "%s-docker.pkg.dev/%s/%s/%s@%s",
@@ -47,10 +44,6 @@ locals {
     AGENT_API_CLOUD_TASKS_QUEUE   = local.dispatch_queue_path
     AGENT_API_QUEUE_DELIVERY_PATH = var.worker_dispatch_path
   }
-}
-
-data "google_project" "current" {
-  project_id = var.project_id
 }
 
 resource "google_project_service" "required" {
@@ -184,60 +177,6 @@ resource "google_cloud_run_v2_service" "worker" {
             version = "latest"
           }
         }
-      }
-    }
-  }
-
-  depends_on = [google_project_service.required]
-}
-
-resource "google_cloud_tasks_queue" "dispatch" {
-  project  = var.project_id
-  location = var.region
-  name     = local.dispatch_queue_name
-
-  lifecycle {
-    prevent_destroy = true
-  }
-
-  rate_limits {
-    max_dispatches_per_second = var.queue_max_dispatches_per_second
-    max_concurrent_dispatches = var.queue_max_concurrent_dispatches
-  }
-
-  retry_config {
-    max_attempts       = var.queue_max_attempts
-    max_retry_duration = "${var.queue_max_retry_seconds}s"
-    min_backoff        = "${var.queue_min_backoff_seconds}s"
-    max_backoff        = "${var.queue_max_backoff_seconds}s"
-    max_doublings      = 3
-  }
-
-  stackdriver_logging_config {
-    sampling_ratio = 1
-  }
-
-  http_target {
-    http_method = "POST"
-
-    uri_override {
-      scheme = "HTTPS"
-      host   = replace(google_cloud_run_v2_service.worker.uri, "https://", "")
-
-      path_override {
-        path = var.worker_dispatch_path
-      }
-    }
-
-    oidc_token {
-      service_account_email = var.tasks_service_account_email
-      audience              = google_cloud_run_v2_service.worker.uri
-    }
-
-    header_overrides {
-      header {
-        key   = "Content-Type"
-        value = "application/json"
       }
     }
   }

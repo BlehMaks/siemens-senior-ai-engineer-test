@@ -8,8 +8,10 @@
   service gets `roles/run.invoker`, and only for the dedicated Cloud Tasks
   caller identity.
 - The API runtime can enqueue only on the single reviewed queue.
-- The human-held bootstrap stack owns these service and queue IAM bindings; the
-  routine application deployer cannot edit any of those policies.
+- The human-held bootstrap stack owns the queue, its delivery target, and these
+  service and queue IAM bindings. The routine application deployer has neither
+  queue lifecycle nor policy permissions, so it cannot redirect authenticated
+  task delivery.
 
 ## Hardened mode
 
@@ -30,8 +32,8 @@
 - Cloud Run IAM still requires an OIDC token minted for the dedicated Tasks
   caller identity. Neither the public API principal nor `allUsers` receives
   worker invocation rights.
-- The API references only its pepper secret; the worker references only the
-  task-signing HMAC, matching the resource-specific Secret Manager grants.
+- The API and worker receive the pepper and task-signing HMAC required by the
+  shared runtime settings, matching the two resource-scoped Secret Manager grants.
 
 ## Honest boundary
 
@@ -39,8 +41,8 @@ This Terraform slice defines the infrastructure guardrails, not the final Task 2
 worker handler. Until `C05B/C05C` land, the reserved queue path is a contract
 only, not a fully wired application endpoint.
 
-The application deployer can replace Cloud Run code and attach only the three
-named runtime identities. This necessarily lets a successful deployment execute
+The application deployer can replace Cloud Run code and attach only the two
+named Cloud Run runtime identities. This necessarily lets a successful deployment execute
 with the selected runtime permissions even though the deployer has no direct
 invoke, SSH, Secret Manager administration, or Firestore entity permission.
 The exact-repository WIF condition, protected approvals, immutable digest, and

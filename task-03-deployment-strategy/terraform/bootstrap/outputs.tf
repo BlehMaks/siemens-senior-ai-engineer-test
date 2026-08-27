@@ -49,15 +49,34 @@ output "secret_accessors" {
 }
 
 output "runtime_policy" {
-  description = "Human-bootstrap IAM applied after the deterministic service and queue names exist."
+  description = "Human-bootstrap queue and IAM applied after the deterministic services exist."
   value = {
     enabled                        = var.enable_runtime_policy
     api_public_invoker_enabled     = var.enable_runtime_policy && var.api_allow_unauthenticated
+    dispatch_queue_count           = length(google_cloud_tasks_queue.dispatch)
     queue_binding_count            = length(google_cloud_tasks_queue_iam_member.runtime)
     tasks_service_agent_member     = google_service_account_iam_member.tasks_service_agent_token_creator.member
     tasks_service_agent_token_role = google_service_account_iam_member.tasks_service_agent_token_creator.role
     worker_invoker_binding_count   = length(google_cloud_run_v2_service_iam_binding.worker_invoker)
   }
+}
+
+output "dispatch_queue" {
+  description = "Human-bootstrap-owned authenticated Cloud Tasks queue, or null before runtime policy is enabled."
+  value = var.enable_runtime_policy ? {
+    name                      = "${var.system_code}-${var.environment}-run-dispatch"
+    location                  = var.region
+    max_dispatches_per_second = var.queue_max_dispatches_per_second
+    max_concurrent_dispatches = var.queue_max_concurrent_dispatches
+    max_attempts              = var.queue_max_attempts
+    max_retry_duration        = "${var.queue_max_retry_seconds}s"
+    min_backoff               = "${var.queue_min_backoff_seconds}s"
+    max_backoff               = "${var.queue_max_backoff_seconds}s"
+    oidc_service_account      = module.identity["tasks"].email
+    oidc_audience             = data.google_cloud_run_v2_service.worker[0].uri
+    target_host               = replace(data.google_cloud_run_v2_service.worker[0].uri, "https://", "")
+    target_path               = var.worker_dispatch_path
+  } : null
 }
 
 output "remote_backend" {

@@ -1,11 +1,4 @@
-mock_provider "google" {
-  override_data {
-    target = data.google_project.current
-    values = {
-      number = "123456789012"
-    }
-  }
-}
+mock_provider "google" {}
 
 mock_provider "google-beta" {}
 
@@ -62,8 +55,8 @@ run "default_contract_is_bounded_and_digest_pinned" {
   }
 
   assert {
-    condition     = output.dispatch_queue.oidc_service_account == "sai-dev-tasks@contract-assignment-dev.iam.gserviceaccount.com"
-    error_message = "Cloud Tasks must mint OIDC tokens as the dedicated caller identity."
+    condition     = output.dispatch_queue.ownership == "human-bootstrap"
+    error_message = "The application stack must declare, but never own, the dispatch queue."
   }
 
   assert {
@@ -88,13 +81,8 @@ run "default_contract_is_bounded_and_digest_pinned" {
   }
 
   assert {
-    condition     = output.iam_contract.tasks_service_agent_member == "serviceAccount:service-123456789012@gcp-sa-cloudtasks.iam.gserviceaccount.com"
-    error_message = "Cloud Tasks token minting must use the resolved project service agent."
-  }
-
-  assert {
-    condition     = output.dispatch_queue.max_concurrent_dispatches == 1
-    error_message = "Queue concurrency should stay tightly bounded by default."
+    condition     = output.dispatch_queue.path == "projects/contract-assignment-dev/locations/europe-west3/queues/sai-dev-run-dispatch"
+    error_message = "The execution plane must use the deterministic bootstrap queue path."
   }
 
   assert {
@@ -246,25 +234,4 @@ run "label_overflow_and_secret_collision_fail_closed" {
     var.labels,
     var.task_signing_hmac_secret_id,
   ]
-}
-
-run "inverted_queue_backoff_fails_closed" {
-  command = plan
-
-  variables {
-    queue_min_backoff_seconds = 100
-    queue_max_backoff_seconds = 60
-  }
-
-  expect_failures = [var.queue_max_backoff_seconds]
-}
-
-run "unbounded_retry_window_fails_closed" {
-  command = plan
-
-  variables {
-    queue_max_retry_seconds = 0
-  }
-
-  expect_failures = [var.queue_max_retry_seconds]
 }
