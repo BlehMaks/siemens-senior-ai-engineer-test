@@ -22,6 +22,9 @@ _DEFAULT_IGNORABLE_PATTERN = re.compile(
     "\ufeff\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3"
     "\U0001d173-\U0001d17a\U000e0000-\U000e0fff]"
 )
+# DNS canonicalization removes token case. A dedicated hostname rule therefore
+# treats a complete long admin label as sensitive without broadening path topics.
+_HOST_ADMIN_TOKEN_PATTERN = re.compile(r"(?i)(?:^|\.)sk-admin-[a-z0-9_-]{20,}(?:\.|$)")
 _REDACTIONS = (
     re.compile(r"(?i)\bbearer\b[^.!?]*"),
     re.compile(
@@ -206,4 +209,12 @@ def redact_memory_text(value: str) -> str:
 def contains_sensitive_memory_text(value: str) -> bool:
     return bool(_DEFAULT_IGNORABLE_PATTERN.search(value)) or any(
         pattern.search(value) for pattern in _REDACTIONS
+    )
+
+
+def contains_sensitive_memory_hostname(value: str) -> bool:
+    """Detect credentials after case-insensitive DNS canonicalization."""
+
+    return contains_sensitive_memory_text(value) or bool(
+        _HOST_ADMIN_TOKEN_PATTERN.search(value)
     )

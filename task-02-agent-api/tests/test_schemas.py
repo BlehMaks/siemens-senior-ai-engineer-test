@@ -305,6 +305,7 @@ def test_nested_public_answer_collections_are_bounded() -> None:
         "https://example.com/report?download=xoxp-1234567890-1234567890-1234567890-abcdef",
         "https://example.com/report?download=ya29.a0AfH6SMB1234567890abcdefghijklmnopqrstuv",
         "https://sk-admin-1234abcd.example.com/report",
+        f"https://sk-admin-{'A1' * 10}.example.com/report",
         *(
             f"https://example.com/report?download={token}"
             for token in _DOCUMENTED_CREDENTIAL_TOKENS

@@ -20,7 +20,10 @@ from pydantic import (
 )
 
 from search_agent.contracts import OpaqueId, QueryText, ScopedAnswer, StrictModel
-from search_agent.memory.contracts import contains_sensitive_memory_text
+from search_agent.memory.contracts import (
+    contains_sensitive_memory_hostname,
+    contains_sensitive_memory_text,
+)
 
 from .ports import TERMINAL_RUN_STATES, RunFailureCode, RunState
 
@@ -176,7 +179,7 @@ def _require_public_source_url(value: str) -> None:
     if parsed.username is not None or parsed.password is not None or host is None:
         raise ValueError("citation URL is not safe to expose")
     normalized_host = host.rstrip(".").lower()
-    if contains_sensitive_memory_text(normalized_host):
+    if contains_sensitive_memory_hostname(normalized_host):
         raise ValueError("citation URL contains sensitive material")
     try:
         address = ipaddress.ip_address(normalized_host)
