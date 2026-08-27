@@ -21,6 +21,7 @@ from search_agent.memory import (
     UnresolvedItem,
     reflect_run,
 )
+from search_agent.memory.contracts import contains_sensitive_memory_text
 
 from .helpers import CLAIM, cancelled_result, completed_result, failed_result
 
@@ -168,6 +169,41 @@ def test_request_redacts_common_credential_forms(raw_request: str, secret: str) 
     serialized = reflect_run(completed_result(request=raw_request)).model_dump_json()
 
     assert secret.casefold() not in serialized.casefold()
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "ABIA1234567890ABCDEF",
+        "ASIA1234567890ABCDEF",
+        *(
+            f"{prefix}-{'A' * 24}"
+            for prefix in (
+                "gloas",
+                "gldt",
+                "glrt",
+                "glrtr",
+                "glcbt",
+                "glptt",
+                "glft",
+                "glimt",
+                "glagent",
+                "glwt",
+                "glsoat",
+                "glffct",
+            )
+        ),
+        f"_gitlab_session={'A' * 24}",
+    ],
+)
+def test_shared_memory_rejects_documented_credential_prefixes(token: str) -> None:
+    assert contains_sensitive_memory_text(token)
+    assert (
+        token
+        not in reflect_run(
+            completed_result(request=f"Find the report using {token}")
+        ).model_dump_json()
+    )
 
 
 def test_hostile_containers_subclasses_and_oversized_usage_fail_typed() -> None:

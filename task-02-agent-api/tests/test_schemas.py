@@ -34,6 +34,28 @@ _PASSWORD_FIELD = "pass" + "word"
 _CLIENT_SECRET_FIELD = "client_" + "secret"
 _DOUBLE_ENCODED_CLIENT_SECRET_FIELD = _CLIENT_SECRET_FIELD.replace("_", "%255f")
 _DISCLOSURE_SENTINEL = "stolen-production-credential"
+_DOCUMENTED_CREDENTIAL_TOKENS = (
+    "ABIA1234567890ABCDEF",
+    "ASIA1234567890ABCDEF",
+    *(
+        f"{prefix}-{'A' * 24}"
+        for prefix in (
+            "gloas",
+            "gldt",
+            "glrt",
+            "glrtr",
+            "glcbt",
+            "glptt",
+            "glft",
+            "glimt",
+            "glagent",
+            "glwt",
+            "glsoat",
+            "glffct",
+        )
+    ),
+    f"_gitlab_session={'A' * 24}",
+)
 DEFAULT_IGNORABLE_BOUNDARIES = (
     "\u00ad",
     "\u034f",
@@ -280,6 +302,10 @@ def test_nested_public_answer_collections_are_bounded() -> None:
         "https://example.com/report?download=github_pat_11AA000000000000000000_0123456789abcdefghijklmnopqrstuvwxyz",
         "https://example.com/report?download=xoxp-1234567890-1234567890-1234567890-abcdef",
         "https://example.com/report?download=ya29.a0AfH6SMB1234567890abcdefghijklmnopqrstuv",
+        *(
+            f"https://example.com/report?download={token}"
+            for token in _DOCUMENTED_CREDENTIAL_TOKENS
+        ),
     ],
 )
 def test_public_answer_rejects_non_public_or_sensitive_source_urls(
@@ -310,6 +336,7 @@ def test_public_answer_rejects_non_public_or_sensitive_source_urls(
         "https://example.com/oauth/client-secret-management",
         "https://example.com/report?topic=client_secret_management",
         "https://example.com/report?q=credential+rotation+guide",
+        "https://example.com/companies/sk-telecom-sustainability-report",
         "https://example.com/r%C3%A9sum%C3%A9?q=cafe%CC%81",
         "https://example.com/report?completion=100%25",
     ],

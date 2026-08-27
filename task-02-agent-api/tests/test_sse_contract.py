@@ -25,6 +25,28 @@ from search_agent.memory.contracts import contains_sensitive_memory_text
 
 NOW = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
 MAX_SEQUENCE = 9_223_372_036_854_775_807
+DOCUMENTED_CREDENTIAL_TOKENS = (
+    "ABIA1234567890ABCDEF",
+    "ASIA1234567890ABCDEF",
+    *(
+        f"{prefix}-{'A' * 24}"
+        for prefix in (
+            "gloas",
+            "gldt",
+            "glrt",
+            "glrtr",
+            "glcbt",
+            "glptt",
+            "glft",
+            "glimt",
+            "glagent",
+            "glwt",
+            "glsoat",
+            "glffct",
+        )
+    ),
+    f"_gitlab_session={'A' * 24}",
+)
 
 
 def answer() -> ScopedAnswer:
@@ -142,6 +164,37 @@ def test_encoder_revalidates_constructed_models_before_emitting() -> None:
 
     with pytest.raises(ValidationError):
         encode_sse(unchecked)
+
+
+@pytest.mark.parametrize("token", DOCUMENTED_CREDENTIAL_TOKENS)
+def test_documented_credentials_cannot_reach_sse_channels(token: str) -> None:
+    with pytest.raises(ValidationError, match="sensitive material"):
+        RunEvent.model_validate(
+            {
+                **event_values(RunEventType.STATUS, RunState.RUNNING),
+                "message": token,
+            }
+        )
+
+    unsafe_answer = ScopedAnswer(
+        answer_text="The cited source supports the answer.",
+        citations=(
+            Citation.model_validate(
+                {
+                    "claim": "The source supports the answer.",
+                    "evidence_id": "ev-source-one",
+                    "source_url": f"https://example.com/report?download={token}",
+                }
+            ),
+        ),
+    )
+    with pytest.raises(ValidationError, match="citation URL"):
+        RunEvent.model_validate(
+            {
+                **event_values(RunEventType.COMPLETED, RunState.COMPLETED),
+                "answer": unsafe_answer,
+            }
+        )
 
 
 def test_heartbeat_is_an_sse_comment_without_an_event_id() -> None:

@@ -21,19 +21,21 @@ _REDACTIONS = (
         r"password|secret|token)\b\s*(?::|=|\bis\b)\s*(?:basic\s+)?[^.!?]*"
     ),
     re.compile(r"(?i)\bhttps?://[^/\s:@]+:[^@/\s]+@[^\s]*"),
-    # High-signal credential prefixes are safe to reject wherever public text is
-    # retained. Requiring each provider's delimiter avoids matching ordinary words.
+    # Keep provider prefixes explicit: credential families stay blocked without
+    # treating every hyphenated public slug as a secret.
     re.compile(
         r"(?<![A-Za-z0-9])(?:"
-        r"sk[-_][A-Za-z0-9_-]{8,}|"
+        r"sk-(?:[A-Za-z0-9]{20,}|(?:proj|svcacct)-[A-Za-z0-9_-]{20,})|"
         r"gh[pousr]_[A-Za-z0-9]{8,}|"
         r"github_pat_[A-Za-z0-9_]{20,}|"
         r"xox[baprs]-[A-Za-z0-9-]{20,}|"
         r"xapp-[A-Za-z0-9-]{20,}|"
         r"AIza[A-Za-z0-9_-]{20,}|"
         r"ya29\.[A-Za-z0-9._-]{20,}|"
-        r"AKIA[0-9A-Z]{16}|"
-        r"glpat-[A-Za-z0-9_-]{20,}|"
+        r"(?:ABIA|AKIA|ASIA)[0-9A-Z]{16}|"
+        r"(?:glpat|gloas|gldt|glrtr?|glcbt|glptt|glft|glimt|glagent|glwt|"
+        r"glsoat|glffct)-[A-Za-z0-9_-]{20,}|"
+        r"_gitlab_session=[A-Za-z0-9%_-]{20,}|"
         r"hf_[A-Za-z0-9]{20,}"
         r")(?![A-Za-z0-9])"
     ),
