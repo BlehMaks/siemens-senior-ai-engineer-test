@@ -51,7 +51,7 @@ MATERIAL_COLUMNS = (
 # Require a numeric magnitude so ordinary prose containing a single-letter unit is
 # not counted as quantitative evidence.
 _UNIT_BEARING_VALUE = re.compile(
-    r"(?i)(?<![\w.])\d+(?:\.\d+)?(?:\s*\([^)]{1,12}\))?\s*"
+    r"(?i)(?<![\w.])\d+(?:\.\d+)?(?:\s*@?\s*\([^)]{1,12}\))?\s*"
     r"(?:mm|millimet(?:er|re)s?|vac|vdc|volts?|v|amperes?|amps?|a|"
     r"watts?|w|milliseconds?|ms|joules?|j|celsius|cel|°c|hz|ohms?)\b"
 )
@@ -106,9 +106,12 @@ def load_materials(path: Path) -> tuple[dict[str, str], ...]:
     """Load the semicolon-delimited catalog while keeping source blanks explicit."""
 
     with path.open(encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle, delimiter=";")
-        _validate_schema(reader.fieldnames or ())
-        rows = tuple(_material_row(raw) for raw in reader)
+        reader = csv.DictReader(handle, delimiter=";", strict=True)
+        try:
+            _validate_schema(reader.fieldnames or ())
+            rows = tuple(_material_row(raw) for raw in reader)
+        except csv.Error as error:
+            raise MaterialDataError(f"malformed CSV: {error}") from error
 
     if not rows:
         raise MaterialDataError("material catalog is empty")

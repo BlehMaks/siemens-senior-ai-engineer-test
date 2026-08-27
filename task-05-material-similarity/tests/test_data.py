@@ -62,11 +62,21 @@ def test_load_materials_rejects_wrong_schema(tmp_path: Path) -> None:
         load_materials(source)
 
 
+def test_load_materials_rejects_unterminated_csv_quote(tmp_path: Path) -> None:
+    source = tmp_path / "Fuse.csv"
+    source.write_text(
+        ";".join(MATERIAL_COLUMNS) + '\nA1;"unterminated', encoding="utf-8"
+    )
+
+    with pytest.raises(MaterialDataError, match="malformed CSV"):
+        load_materials(source)
+
+
 def test_profile_exposes_blanks_duplicates_sparsity_categories_and_units() -> None:
     materials = [
         _row("A1", "Fuse 5 A", Acting="Fast", **{"Current Rating": "5A"}),
         _row("A2", "Fuse 5 A", Acting="Slow", **{"Current Rating": "5 amp"}),
-        _row("A3", "", Acting="Fast", **{"Current Rating": ""}),
+        _row("A3", "", Acting="Fast", **{"Current Rating": "6.3@(CSA/UL)A"}),
         _row("A4", "  ", Acting="", **{"Current Rating": "n/a"}),
     ]
 
@@ -79,7 +89,7 @@ def test_profile_exposes_blanks_duplicates_sparsity_categories_and_units() -> No
     assert profile.duplicate_description_count == 1
     assert profile.duplicate_description_group_count == 1
     assert profile.column("Acting").unique_nonempty_count == 2
-    assert profile.column("Current Rating").unit_bearing_count == 2
+    assert profile.column("Current Rating").unit_bearing_count == 3
     assert DESCRIPTION_COLUMN in profile.sparse_columns
     assert PART_ID_COLUMN not in profile.sparse_columns
 

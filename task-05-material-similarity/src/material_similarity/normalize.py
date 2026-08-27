@@ -5,7 +5,10 @@ from __future__ import annotations
 import re
 
 _WHITESPACE = re.compile(r"\s+")
-_DIMENSION_SEPARATOR = re.compile(r"(?<=\d)\s*[x\N{MULTIPLICATION SIGN}]\s*(?=\d)")
+_DIMENSION_SEPARATOR = re.compile(
+    r"(?:(?<=\d)|(?<=mm))\s*[x\N{MULTIPLICATION SIGN}]\s*(?=\d)"
+)
+_SIEMENS_SYMBOL = re.compile(r"(?<![\w.])(?P<number>\d+(?:\.\d+)?)\s*(?P<unit>[mM]S)\b")
 _UNIT = re.compile(
     r"(?<![\w.])(?P<number>\d+(?:\.\d+)?)\s*(?P<unit>"
     r"millimet(?:er|re)s?|mm|milliseconds?|ms|volts?|vac|vdc|v|"
@@ -47,7 +50,7 @@ _CANONICAL_UNIT = {
 def normalize_description(description: str) -> str:
     """Canonicalize safe variants without deleting technical evidence."""
 
-    normalized = _WHITESPACE.sub(" ", description.casefold()).strip()
+    normalized = _WHITESPACE.sub(" ", _casefold_description(description)).strip()
     normalized = _UNIT.sub(_canonicalize_unit, normalized)
     normalized = _DIMENSION_SEPARATOR.sub("x", normalized)
     return _VOLTAGE_MODE.sub(lambda match: f"v{match.group('mode')}", normalized)
@@ -55,3 +58,16 @@ def normalize_description(description: str) -> str:
 
 def _canonicalize_unit(match: re.Match[str]) -> str:
     return f"{match.group('number')}{_CANONICAL_UNIT[match.group('unit')]}"
+
+
+def _casefold_description(description: str) -> str:
+    """Case-fold prose while keeping SI conductance distinct from milliseconds."""
+
+    parts: list[str] = []
+    previous_end = 0
+    for match in _SIEMENS_SYMBOL.finditer(description):
+        parts.append(description[previous_end : match.start()].casefold())
+        parts.append(f"{match.group('number')}{match.group('unit')}")
+        previous_end = match.end()
+    parts.append(description[previous_end:].casefold())
+    return "".join(parts)

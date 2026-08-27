@@ -15,6 +15,8 @@ from material_similarity.normalize import normalize_description
             "250 Volts AC; 5 \N{MULTIPLICATION SIGN} 20 millimetres",
             "250vac; 5x20mm",
         ),
+        ("5 mm \N{MULTIPLICATION SIGN} 20 mm", "5mmx20mm"),
+        ("Response 5 mS; delay 5 ms", "response 5mS; delay 5ms"),
         ("6.9(Typ)W / -55 Cel to 125 °C", "6.9(typ)w / -55cel to 125cel"),
         ("FRN-R-10, AC/DC, 1/4-inch", "frn-r-10, ac/dc, 1/4-inch"),
         (" \t\n ", ""),

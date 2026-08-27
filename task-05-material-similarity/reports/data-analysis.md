@@ -13,8 +13,10 @@ and rejects blank or duplicate identifiers. `profile_materials` observes:
   beyond the first item, spread across 45 duplicate-text groups (126 rows total);
 - low-cardinality categorical evidence, including 5 non-empty `Acting` values,
   8 `Fuse Material` values, 5 `Mounting` values, and 3 `LC Risk` values;
-- unit-bearing source values such as `6.3A`, `250VAC`, `5.2mm x 20mm`, `3ms`,
-  `6.9(Typ)W`, and temperature values suffixed by `Cel`.
+- 821 of 834 non-empty `Current Rating` values carry recognized quantitative
+  evidence, including the qualified value `6.3@(CSA/UL)A`; other unit-bearing
+  values include `250VAC`, `5.2mm x 20mm`, `3ms`, `6.9(Typ)W`, and temperatures
+  suffixed by `Cel`.
 
 `PART_ID` is identity only. It is validated and retained for joins and deterministic
 tie-breaking, but it must never enter a similarity feature matrix.
@@ -41,9 +43,11 @@ lexicographic comparison or stripping units would create unsafe equivalences.
 
 ## D51 normalization boundary
 
-`normalize_description` case-folds and collapses whitespace, canonicalizes safe
-spellings of common units, and standardizes multiplication signs in numeric
-dimensions. It deliberately retains model punctuation, decimal ratings, AC/DC,
-dimensions, and qualifiers. It performs no stemming, stop-word removal, semantic
-rewriting, or structured-value inference. The next delivery slice can therefore
-build lexical features from normalized descriptions without losing catalog evidence.
+`normalize_description` case-folds prose and collapses whitespace, canonicalizes
+safe spellings of common units, and standardizes multiplication signs in numeric
+dimensions. Case-sensitive conductance symbols remain distinct from milliseconds
+(`mS` versus `ms`). The normalizer deliberately retains model punctuation, decimal
+ratings, AC/DC, dimensions, and qualifiers. It performs no stemming, stop-word
+removal, semantic rewriting, or structured-value inference. The next delivery slice
+can therefore build lexical features from normalized descriptions without losing
+catalog evidence.
