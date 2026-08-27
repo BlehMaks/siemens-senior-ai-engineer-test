@@ -44,7 +44,7 @@ run "hardened_mode_disables_default_api_url_and_requires_lb" {
   }
 
   assert {
-    condition     = output.policy.api_allow_unauthenticated
-    error_message = "The external load balancer must be able to reach the app-authenticated API backend."
+    condition     = !output.policy.api_allow_unauthenticated
+    error_message = "Hardened mode must require an authenticated API front door."
   }
 }

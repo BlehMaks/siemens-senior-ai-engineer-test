@@ -179,6 +179,17 @@ variable "api_default_uri_disabled" {
   }
 }
 
+variable "api_allow_unauthenticated" {
+  description = "Grant allUsers Cloud Run invocation only for the low-cost baseline API."
+  type        = bool
+  default     = true
+
+  validation {
+    condition     = var.api_allow_unauthenticated != var.api_default_uri_disabled
+    error_message = "api_allow_unauthenticated must be false when the default API URL is disabled."
+  }
+}
+
 variable "worker_ingress" {
   description = "Resolved worker ingress posture from the ingress policy module."
   type        = string

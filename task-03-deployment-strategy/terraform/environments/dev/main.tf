@@ -37,6 +37,7 @@ module "run_services" {
   tasks_service_account_email  = var.tasks_service_account_email
   api_ingress                  = module.ingress_policy.policy.api_ingress
   api_default_uri_disabled     = module.ingress_policy.policy.api_default_uri_disabled
+  api_allow_unauthenticated    = module.ingress_policy.policy.api_allow_unauthenticated
   worker_ingress               = module.ingress_policy.policy.worker_ingress
   firestore_database_name      = module.managed_services.firestore.name
   api_key_pepper_secret_id     = module.managed_services.secret_containers.api_key_pepper

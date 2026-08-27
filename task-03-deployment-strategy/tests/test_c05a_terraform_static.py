@@ -32,6 +32,7 @@ def test_run_services_keeps_worker_private_and_oidc_bound() -> None:
     assert 'role               = "roles/iam.serviceAccountTokenCreator"' in source
     assert 'service_account_email = var.tasks_service_account_email' in source
     assert 'audience              = google_cloud_run_v2_service.worker.uri' in source
+    assert 'for_each = var.api_allow_unauthenticated ? toset(["baseline"]) : toset([])' in source
     assert source.count('member   = "allUsers"') == 1
     assert "allAuthenticatedUsers" not in source
 
@@ -82,5 +83,6 @@ def test_c05a_docs_and_tests_cover_baseline_and_hardened_modes() -> None:
     assert "default `run.app` URL is disabled" in attack_path
     assert "Worker ingress is never public" in readme
     assert "api_allow_unauthenticated" in ingress_test
+    assert "public_invoker_with_disabled_api_url_fails_closed" in run_test
     assert "invalid_digest_fails_closed" in run_test
     assert "invalid_worker_path_fails_closed" in run_test

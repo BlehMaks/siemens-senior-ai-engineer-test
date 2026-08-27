@@ -10,7 +10,7 @@ output "api_service" {
     min_instances          = google_cloud_run_v2_service.api.template[0].scaling[0].min_instance_count
     concurrency            = google_cloud_run_v2_service.api.template[0].max_instance_request_concurrency
     timeout                = google_cloud_run_v2_service.api.template[0].timeout
-    public_invoker_enabled = true
+    public_invoker_enabled = var.api_allow_unauthenticated
     image                  = local.image
   }
 }

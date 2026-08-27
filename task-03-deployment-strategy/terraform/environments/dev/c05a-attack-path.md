@@ -14,11 +14,9 @@
 - API ingress accepts only internal and Cloud Load Balancing traffic, and the
   default `run.app` URL is disabled, so direct internet requests cannot bypass
   the reviewed edge.
-- A later external HTTPS load balancer plus Cloud Armor becomes mandatory.
-- The API keeps its unauthenticated Cloud Run IAM binding because a serverless
-  NEG does not authenticate as a service account. Task 2 API-key authentication
-  remains the application boundary; ingress and the disabled URL keep the
-  backend unreachable except through the load balancer.
+- A later authenticated HTTPS load balancer plus Cloud Armor becomes mandatory.
+- The API does not keep an unauthenticated Cloud Run IAM binding in this mode;
+  external access must be added explicitly with the reviewed front door.
 - The worker still stays behind internal load-balancer ingress and does not
   rely on the public API edge.
 

@@ -34,9 +34,9 @@ the C03 outputs without changing the resource contract.
   and OIDC delivery to the worker only;
 - `ingress_mode = "baseline"` keeps the API on direct Cloud Run ingress for
   the cheapest path, while `"hardened"` disables the default URL and expects a
-  later LB + Cloud Armor front door. Hardened mode retains the API's public IAM
-  binding so the serverless NEG can reach it; network ingress and Task 2 API-key
-  authentication remain the bypass and application-authentication controls.
+  later authenticated LB + Cloud Armor front door. Hardened mode removes the
+  API's public IAM binding so unauthenticated callers cannot invoke Cloud Run
+  directly.
 
 This slice prepares the regional log bucket. C05 owns the reviewed Cloud Run log
 routing, so the bucket intentionally receives no application logs before that wiring

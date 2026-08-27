@@ -16,6 +16,7 @@ variables {
   tasks_service_account_email  = "sai-dev-tasks@contract-assignment-dev.iam.gserviceaccount.com"
   api_ingress                  = "INGRESS_TRAFFIC_ALL"
   api_default_uri_disabled     = false
+  api_allow_unauthenticated    = true
   worker_ingress               = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
   api_key_pepper_secret_id     = "sai-dev-api-key-pepper"
   task_signing_hmac_secret_id  = "sai-dev-task-signing-hmac"
@@ -37,6 +38,11 @@ run "default_contract_is_bounded_and_digest_pinned" {
   assert {
     condition     = output.api_service.public_invoker_enabled
     error_message = "Baseline mode should leave the API publicly callable."
+  }
+
+  assert {
+    condition     = google_cloud_run_v2_service_iam_member.api_public_invoker["baseline"].member == "allUsers"
+    error_message = "Only baseline mode should grant unauthenticated API invocation."
   }
 
   assert {
@@ -69,8 +75,9 @@ run "hardened_api_mode_blocks_url_bypass_and_keeps_lb_usable" {
   command = plan
 
   variables {
-    api_ingress              = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-    api_default_uri_disabled = true
+    api_ingress               = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+    api_default_uri_disabled  = true
+    api_allow_unauthenticated = false
   }
 
   assert {
@@ -84,8 +91,13 @@ run "hardened_api_mode_blocks_url_bypass_and_keeps_lb_usable" {
   }
 
   assert {
-    condition     = output.api_service.public_invoker_enabled
-    error_message = "The load balancer must reach the API while network ingress blocks URL bypass."
+    condition     = !output.api_service.public_invoker_enabled
+    error_message = "Hardened mode must not grant unauthenticated Cloud Run invocation."
+  }
+
+  assert {
+    condition     = length(google_cloud_run_v2_service_iam_member.api_public_invoker) == 0
+    error_message = "Hardened mode must omit the public API invoker binding."
   }
 }
 
@@ -117,6 +129,18 @@ run "incoherent_hardened_ingress_fails_closed" {
   }
 
   expect_failures = [var.api_default_uri_disabled]
+}
+
+run "public_invoker_with_disabled_api_url_fails_closed" {
+  command = plan
+
+  variables {
+    api_ingress               = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+    api_default_uri_disabled  = true
+    api_allow_unauthenticated = true
+  }
+
+  expect_failures = [var.api_allow_unauthenticated]
 }
 
 run "public_worker_ingress_fails_closed" {
