@@ -214,6 +214,7 @@ async def test_authenticated_crud_and_memory_lifecycle(
         headers=_headers(authorization),
     )
     assert deleted.status_code == 204
+    assert deleted.headers["X-Correlation-ID"] == CORRELATION_ID
     assert deleted.content == b""
 
     deleted_again = await client.delete(

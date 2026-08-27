@@ -150,7 +150,7 @@ async def migrate(path: Path) -> None:
                             datetime.now(UTC).isoformat(timespec="microseconds"),
                         ),
                     )
-                await _validate_physical_schema(connection)
+                await validate_current_schema(connection)
                 await connection.commit()
             except Exception:
                 await connection.rollback()
@@ -177,6 +177,22 @@ def _validate_ledger(rows: Sequence[Sequence[object]]) -> None:
         expected = _MIGRATIONS[index]
         if tuple(row) != (expected.version, expected.name, expected.checksum):
             raise MigrationError("database migration history is incompatible")
+
+
+async def validate_current_schema(connection: aiosqlite.Connection) -> None:
+    """Verify that a read-only connection matches this build's complete schema."""
+
+    rows = tuple(
+        await (
+            await connection.execute(
+                "SELECT version, name, checksum FROM schema_migrations ORDER BY version"
+            )
+        ).fetchall()
+    )
+    _validate_ledger(rows)
+    if len(rows) != len(_MIGRATIONS):
+        raise MigrationError("database schema is not current")
+    await _validate_physical_schema(connection)
 
 
 def _statements(script: str) -> tuple[str, ...]:
@@ -293,4 +309,4 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
         raise MigrationError("database physical schema is incompatible")
 
 
-__all__ = ["MigrationError", "migrate"]
+__all__ = ["MigrationError", "migrate", "validate_current_schema"]

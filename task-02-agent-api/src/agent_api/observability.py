@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import sqlite3
+import sys
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -20,7 +21,7 @@ from search_agent import RunUsage
 from search_agent.contracts import OpaqueId
 
 from .ports import RunFailureCode, RunState
-from .storage import AuditEntry
+from .storage import AuditEntry, MigrationError, validate_current_schema
 
 _LOGGER = logging.getLogger("agent_api.operations")
 _TERMINAL_STATES = frozenset(
@@ -91,16 +92,8 @@ class SQLiteReadinessProbe:
             async with aiosqlite.connect(
                 f"{self._path.resolve().as_uri()}?mode=ro", uri=True
             ) as connection:
-                for table in (
-                    "schema_migrations",
-                    "runs",
-                    "work_items",
-                    "quota_rate_buckets",
-                ):
-                    await (
-                        await connection.execute(f'SELECT 1 FROM "{table}" LIMIT 1')
-                    ).fetchone()
-        except (OSError, sqlite3.Error):
+                await validate_current_schema(connection)
+        except (MigrationError, OSError, sqlite3.Error):
             return False
         return True
 
@@ -171,6 +164,11 @@ class OperationalTelemetry:
             correlation_id=correlation_id,
         )
         await self._append_audit(tenant_id, "run.cancellation-requested", run_id, at)
+        if changed and state is RunState.CANCELLED:
+            self._increment(
+                "api_runs_terminal_total", state=state.value, failure="none"
+            )
+            await self._append_audit(tenant_id, "run.cancelled", run_id, at)
 
     async def run_terminal(
         self,
@@ -293,7 +291,9 @@ class OperationalTelemetry:
         if not math.isfinite(value) or value < 0:
             raise ValueError("metric increments must be non-negative")
         with self._metric_lock:
-            self._metrics[checked] = self._metrics.get(checked, 0.0) + value
+            current = self._metrics.get(checked, 0.0)
+            # Counters saturate instead of publishing invalid JSON/Prometheus values.
+            self._metrics[checked] = min(sys.float_info.max, current + value)
 
     def _emit(self, event: str, *, at: datetime, **fields: object) -> None:
         payload = {

@@ -85,10 +85,11 @@ class MutableClock:
 
 
 class FakeQueue:
-    def __init__(self, *items: WorkItem) -> None:
+    def __init__(self, *items: WorkItem, cancel_error: Exception | None = None) -> None:
         self._items = {item.work_id: item for item in items}
         self.cancel_calls: list[tuple[str, str]] = []
         self._lock = asyncio.Lock()
+        self._cancel_error = cancel_error
 
     async def receive(
         self, *, now: datetime, visibility_seconds: int
@@ -110,6 +111,8 @@ class FakeQueue:
 
     async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int:
         async with self._lock:
+            if self._cancel_error is not None:
+                raise self._cancel_error
             keys = [
                 work_id
                 for work_id, item in self._items.items()
@@ -597,6 +600,8 @@ async def test_persisted_cancellation_wins_running_execution_race() -> None:
     executor = ScriptedExecutor(result=completed_result(), block=block)
     repository = FakeRunRepository(queued_run())
     queue = FakeQueue(work_item())
+    audit = AuditRecorder()
+    telemetry = OperationalTelemetry(pseudonym_key=b"t" * 32, audit=audit)
     worker = LocalWorker(
         repository=cast(RunRepository, repository),
         queue=queue,
@@ -606,6 +611,7 @@ async def test_persisted_cancellation_wins_running_execution_race() -> None:
         heartbeat_seconds=0.01,
         lease_seconds=1,
         lease_id_factory=lambda: "lease-one",
+        telemetry=telemetry,
     )
 
     processing = asyncio.create_task(worker.process_one())
@@ -622,6 +628,69 @@ async def test_persisted_cancellation_wins_running_execution_race() -> None:
     assert stored.state is RunState.CANCELLED
     assert stored.cancellation_requested_at == NOW
     assert queue.cancel_calls == [("tenant-one", "run-one")]
+
+    duplicate = LocalWorker(
+        repository=cast(RunRepository, repository),
+        queue=FakeQueue(work_item().model_copy(update={"work_id": "work-two"})),
+        executor=executor,
+        worker_id="worker-two",
+        clock=MutableClock(NOW),
+        heartbeat_seconds=0.01,
+        lease_seconds=1,
+        lease_id_factory=lambda: "lease-two",
+        telemetry=telemetry,
+    )
+    await duplicate.process_one()
+
+    terminal = [
+        sample
+        for sample in telemetry.snapshot()
+        if sample.name == "api_runs_terminal_total"
+        and dict(sample.labels)["state"] == "cancelled"
+    ]
+    assert len(terminal) == 1 and terminal[0].value == 1
+    assert [entry.action for entry in audit.entries].count("run.cancelled") == 1
+
+
+@pytest.mark.asyncio
+async def test_applied_cancellation_is_observed_before_queue_cleanup_failure() -> None:
+    block = asyncio.Event()
+    executor = ScriptedExecutor(result=completed_result(), block=block)
+    repository = FakeRunRepository(queued_run())
+    audit = AuditRecorder()
+    telemetry = OperationalTelemetry(pseudonym_key=b"t" * 32, audit=audit)
+    worker = LocalWorker(
+        repository=cast(RunRepository, repository),
+        queue=FakeQueue(
+            work_item(), cancel_error=RuntimeError("queue cleanup unavailable")
+        ),
+        executor=executor,
+        worker_id="worker-one",
+        clock=MutableClock(NOW),
+        heartbeat_seconds=0.01,
+        lease_seconds=1,
+        lease_id_factory=lambda: "lease-one",
+        telemetry=telemetry,
+    )
+
+    processing = asyncio.create_task(worker.process_one())
+    await executor.started.wait()
+    await repository.request_cancellation(
+        tenant_id="tenant-one", run_id="run-one", at=NOW
+    )
+    with pytest.raises(RuntimeError, match="queue cleanup unavailable"):
+        await processing
+
+    stored = await repository.get(tenant_id="tenant-one", run_id="run-one")
+    assert stored is not None and stored.state is RunState.CANCELLED
+    assert [entry.action for entry in audit.entries].count("run.cancelled") == 1
+    terminal = [
+        sample
+        for sample in telemetry.snapshot()
+        if sample.name == "api_runs_terminal_total"
+        and dict(sample.labels)["state"] == "cancelled"
+    ]
+    assert len(terminal) == 1 and terminal[0].value == 1
 
 
 @pytest.mark.asyncio

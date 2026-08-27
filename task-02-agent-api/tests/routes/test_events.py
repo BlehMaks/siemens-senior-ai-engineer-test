@@ -155,6 +155,7 @@ async def test_stream_resumes_after_cursor_and_terminal_event_closes(
     )
 
     assert response.status_code == 200
+    assert response.headers["X-Correlation-ID"] == CORRELATION_ID
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
     assert response.content.startswith(b"id: 2\nevent: run.cancelled\n")
     assert b"id: 1\n" not in response.content

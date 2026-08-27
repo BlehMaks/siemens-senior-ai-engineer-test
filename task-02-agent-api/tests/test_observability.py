@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -256,6 +257,7 @@ async def test_run_routes_emit_joinable_safe_logs_and_idempotent_audit(
             assert forbidden not in serialized
         audit = await SQLiteAuditRepository(path).list(tenant_id="tenant-private-one")
         assert {entry.action for entry in audit} == {
+            "run.cancelled",
             "run.submitted",
             "run.cancellation-requested",
         }
@@ -280,6 +282,47 @@ async def test_sqlite_readiness_is_read_only_and_checks_runtime_tables(
     with sqlite3.connect(path) as connection:
         connection.execute("DROP TABLE quota_rate_buckets")
     assert not await probe.ready()
+
+    replacement = tmp_path / "lookalike.sqlite3"
+    with sqlite3.connect(replacement) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE schema_migrations (placeholder INTEGER);
+            CREATE TABLE runs (placeholder INTEGER);
+            CREATE TABLE work_items (placeholder INTEGER);
+            CREATE TABLE quota_rate_buckets (placeholder INTEGER);
+            """
+        )
+    replacement.replace(path)
+    assert not await probe.ready()
+
+
+@pytest.mark.asyncio
+async def test_metric_totals_saturate_at_a_finite_value() -> None:
+    telemetry = OperationalTelemetry(
+        pseudonym_key=b"k" * 32,
+        audit=AuditRecorder(),
+    )
+    huge = usage().model_copy(update={"elapsed_seconds": 1e308})
+
+    for run_id in ("run-one", "run-two", "run-three"):
+        await telemetry.run_terminal(
+            tenant_id="tenant-one",
+            session_id="session-one",
+            run_id=run_id,
+            state=RunState.COMPLETED,
+            failure_code=None,
+            usage=huge,
+            at=NOW,
+        )
+
+    elapsed = next(
+        sample
+        for sample in telemetry.snapshot()
+        if sample.name == "api_run_elapsed_seconds_total"
+    )
+    assert math.isfinite(elapsed.value)
+    assert elapsed.value >= 1e308
 
 
 @pytest.mark.parametrize("key", [b"", b"k" * 31, bytearray(b"k" * 32)])

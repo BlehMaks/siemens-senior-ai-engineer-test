@@ -17,6 +17,7 @@ from agent_api.ports import ClaimRequest, RunState, StateUpdate
 from agent_api.schemas import RunEventType
 from agent_api.storage import (
     SessionRecord,
+    SQLiteAuditRepository,
     SQLiteEventRepository,
     SQLiteRunRepository,
     SQLiteSessionRepository,
@@ -175,6 +176,17 @@ async def test_queued_cancellation_is_persisted_idempotent_and_emitted_once(
     assert stored.cancellation_requested_at == NOW
     assert work is None
     assert [event.event_type for event in events].count(RunEventType.CANCELLED) == 1
+    terminal = [
+        sample
+        for sample in cancellation_context.app.state.telemetry.snapshot()
+        if sample.name == "api_runs_terminal_total"
+        and dict(sample.labels)["state"] == "cancelled"
+    ]
+    assert len(terminal) == 1 and terminal[0].value == 1
+    audit = await SQLiteAuditRepository(cancellation_context.database_path).list(
+        tenant_id="tenant-one"
+    )
+    assert [entry.action for entry in audit].count("run.cancelled") == 1
 
 
 @pytest.mark.asyncio

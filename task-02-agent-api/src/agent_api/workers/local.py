@@ -186,6 +186,7 @@ class LocalWorker:
         if claim.disposition is ClaimDisposition.CANCELLATION_REQUESTED:
             self._observe_work(item, "cancelled")
             if run is not None and run.state in TERMINAL_RUN_STATES:
+                await self._observe_terminal(run, usage=None)
                 await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
             return
         if claim.disposition in {
@@ -365,9 +366,11 @@ class LocalWorker:
                 worker_id=self._worker_id,
             )
         )
-        if write.disposition is WriteDisposition.APPLIED or (
-            write.run is not None and write.run.state in TERMINAL_RUN_STATES
-        ):
+        if write.disposition is WriteDisposition.APPLIED:
+            assert write.run is not None
+            await self._observe_terminal(write.run, usage=None)
+            await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
+        elif write.run is not None and write.run.state in TERMINAL_RUN_STATES:
             await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
 
     async def _finish_terminal(

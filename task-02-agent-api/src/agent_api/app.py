@@ -10,11 +10,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, cast
 
-from fastapi import Depends, FastAPI, Header, Request, Response
+from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import TypeAdapter, ValidationError
+from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from search_agent.contracts import OpaqueId
 
@@ -69,15 +71,41 @@ _OPAQUE_ID = TypeAdapter(OpaqueId)
 
 async def _correlation_header(
     request: Request,
-    response: Response,
     correlation_id: Annotated[
         OpaqueId | None,
         Header(alias="X-Correlation-ID", description="Opaque request correlation ID"),
     ] = None,
 ) -> None:
-    checked = _new_correlation_id() if correlation_id is None else correlation_id
+    values = request.headers.getlist("x-correlation-id")
+    checked = (
+        _new_correlation_id()
+        if correlation_id is None or len(values) != 1
+        else correlation_id
+    )
     request.state.correlation_id = checked
-    response.headers["X-Correlation-ID"] = checked
+
+
+class _CorrelationHeaderMiddleware:
+    """Attach the validated request ID to every HTTP response implementation."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        async def send_with_correlation(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                correlation_id = cast(
+                    str | None, scope.get("state", {}).get("correlation_id")
+                )
+                if correlation_id is not None:
+                    MutableHeaders(scope=message)["X-Correlation-ID"] = correlation_id
+            await send(message)
+
+        await self._app(scope, receive, send_with_correlation)
 
 
 def create_app(
@@ -177,6 +205,7 @@ def create_app(
         RequestBodyLimitMiddleware,
         max_bytes=limits.max_request_bytes,
     )
+    app.add_middleware(_CorrelationHeaderMiddleware)
     app.add_exception_handler(ApiKeyAuthError, _auth_error)
     app.add_exception_handler(SessionNotFound, _not_found)
     app.add_exception_handler(RunNotFound, _run_not_found)

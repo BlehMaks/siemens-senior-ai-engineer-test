@@ -17,7 +17,7 @@ from .repositories import (
     TenantRecord,
     reflection_repository,
 )
-from .schema import MigrationError, migrate
+from .schema import MigrationError, migrate, validate_current_schema
 
 __all__ = [
     "ApiKeyHashRecord",
@@ -37,4 +37,5 @@ __all__ = [
     "TenantRecord",
     "migrate",
     "reflection_repository",
+    "validate_current_schema",
 ]
