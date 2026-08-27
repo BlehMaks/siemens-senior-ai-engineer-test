@@ -17,6 +17,7 @@ from agent_api.schemas import (
     LastEventId,
     PageCursor,
     RunAcceptedResponse,
+    RunEvent,
     RunStatusResponse,
     RunSubmitRequest,
     SessionListResponse,
@@ -170,6 +171,7 @@ def build_contract_app() -> FastAPI:
 
     @app.get(
         "/v1/runs/{run_id}/events",
+        response_model=RunEvent,
         response_class=StreamingResponse,
         responses={
             200: {

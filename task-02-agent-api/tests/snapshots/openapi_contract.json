@@ -43,6 +43,8 @@
     "HealthState",
     "OptionalAssistance",
     "RunAcceptedResponse",
+    "RunEvent",
+    "RunEventType",
     "RunFailure",
     "RunFailureCode",
     "RunState",
@@ -52,5 +54,5 @@
     "SessionListResponse",
     "SessionResponse"
   ],
-  "sha256": "d2c8b4def8c54eda36dba455677b72a182d27bdfa840b7b15110ed7a605fa630"
+  "sha256": "825e3b7a4e4615909db33bac16fcf1f6875d849fcbac4dd20a97211813fa5e56"
 }

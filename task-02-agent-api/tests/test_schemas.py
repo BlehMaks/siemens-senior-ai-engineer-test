@@ -17,6 +17,8 @@ from agent_api.schemas import (
     ErrorCode,
     ErrorDetail,
     ErrorEnvelope,
+    FieldIssue,
+    LastEventId,
     PageCursor,
     RunFailure,
     RunFailureCode,
@@ -219,6 +221,37 @@ def test_nested_public_answer_collections_are_bounded() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "source_url",
+    [
+        "https://alice:private-pass@example.com/report",
+        "http://127.0.0.1:8080/private",
+        "https://example.com/report#access-token",
+        "https://example.com/report?api_key=private",
+    ],
+)
+def test_public_answer_rejects_non_public_or_sensitive_source_urls(
+    source_url: str,
+) -> None:
+    unsafe_answer = ScopedAnswer(
+        answer_text="The response must not publish a sensitive source URL.",
+        citations=(
+            Citation.model_validate(
+                {
+                    "claim": "The source supports the answer.",
+                    "evidence_id": "ev-source-one",
+                    "source_url": source_url,
+                }
+            ),
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="citation URL"):
+        RunStatusResponse.model_validate(
+            {**status_values(RunState.COMPLETED), "answer": unsafe_answer}
+        )
+
+
 def test_public_deletion_count_is_bounded() -> None:
     with pytest.raises(ValidationError):
         DeletionResponse(
@@ -307,6 +340,50 @@ def test_safe_error_envelope_has_no_internal_detail_channel() -> None:
             correlation_id="correlation-one",
             retryable=False,
         )
+    for unsafe_message in (
+        'Traceback (most recent call last): File "/srv/app.py", line 42',
+        "postgresql://admin:p4ssw0rd@db.internal/agent",
+    ):
+        with pytest.raises(ValidationError, match="sensitive material"):
+            RunFailure(
+                code=RunFailureCode.EXECUTION_FAILED,
+                message=unsafe_message,
+                retryable=False,
+            )
+    with pytest.raises(ValidationError, match="private diagnostic"):
+        FieldIssue(field="internal_detail", message="The value is invalid.")
+
+
+def test_nested_public_error_models_are_revalidated() -> None:
+    unsafe_failure = RunFailure.model_construct(
+        code="expired",
+        message="password=public-leak",
+        retryable=False,
+    )
+    with pytest.raises(ValidationError):
+        RunStatusResponse.model_validate(
+            {**status_values(RunState.FAILED), "failure": unsafe_failure}
+        )
+
+    unsafe_detail = ErrorDetail.model_construct(
+        code=ErrorCode.INTERNAL,
+        message="password=public-leak",
+        correlation_id="correlation-one",
+        retryable=False,
+        field_issues=(),
+    )
+    with pytest.raises(ValidationError, match="sensitive material"):
+        ErrorEnvelope(error=unsafe_detail)
+
+
+def test_last_event_header_type_enforces_the_signed_sequence_bound() -> None:
+    adapter = TypeAdapter(LastEventId)
+
+    assert adapter.validate_python("9223372036854775807", strict=True) == (
+        "9223372036854775807"
+    )
+    with pytest.raises(ValidationError, match="public bound"):
+        adapter.validate_python("9223372036854775808", strict=True)
 
 
 @pytest.mark.parametrize(

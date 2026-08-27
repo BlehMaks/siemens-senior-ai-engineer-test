@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Annotated, Literal
+from urllib.parse import parse_qsl, urlsplit
 
 from pydantic import (
+    AfterValidator,
     Field,
     StringConstraints,
     TypeAdapter,
@@ -31,10 +35,6 @@ PageCursor = Annotated[
         pattern=r"^[A-Za-z0-9_-]+$",
     ),
 ]
-LastEventId = Annotated[
-    str,
-    StringConstraints(min_length=1, max_length=19, pattern=r"^[1-9][0-9]{0,18}$"),
-]
 SafeMessage = Annotated[
     str, StringConstraints(min_length=1, max_length=240, strip_whitespace=True)
 ]
@@ -47,8 +47,61 @@ FieldPath = Annotated[
     ),
 ]
 
-_LAST_EVENT_ID = TypeAdapter(LastEventId)
 _MAX_EVENT_SEQUENCE = 9_223_372_036_854_775_807
+_PRIVATE_FIELD_TOKENS = frozenset(
+    {
+        "authorization",
+        "chain",
+        "credential",
+        "exception",
+        "internal",
+        "password",
+        "prompt",
+        "raw",
+        "reasoning",
+        "secret",
+        "stack",
+        "tenant",
+        "token",
+        "traceback",
+    }
+)
+_SENSITIVE_QUERY_NAMES = frozenset(
+    {
+        "apikey",
+        "accesstoken",
+        "auth",
+        "authorization",
+        "credential",
+        "credentials",
+        "key",
+        "passwd",
+        "password",
+        "secret",
+        "sig",
+        "signature",
+        "token",
+        "xamzsignature",
+    }
+)
+_PUBLIC_MESSAGE_PATTERNS = (
+    re.compile(r"(?i)\btraceback\b"),
+    re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^@\s/]+@"),
+)
+
+
+def _bounded_event_id(value: str) -> str:
+    if int(value) > _MAX_EVENT_SEQUENCE:
+        raise ValueError("event sequence exceeds the public bound")
+    return value
+
+
+LastEventId = Annotated[
+    str,
+    StringConstraints(min_length=1, max_length=19, pattern=r"^[1-9][0-9]{0,18}$"),
+    AfterValidator(_bounded_event_id),
+]
+_LAST_EVENT_ID = TypeAdapter(LastEventId)
 
 
 def _require_utc(value: datetime) -> datetime:
@@ -74,12 +127,53 @@ def _revalidate_answer(value: object) -> ScopedAnswer:
         raise ValueError("public answer exceeds the citation limit")
     if answer.assistance is not None and len(answer.assistance.follow_up_queries) > 8:
         raise ValueError("public answer exceeds the follow-up query limit")
+    for citation in answer.citations:
+        _require_public_source_url(str(citation.source_url))
     return answer
 
 
 def _reject_sensitive_text(value: str) -> str:
-    if contains_sensitive_memory_text(value):
+    if contains_sensitive_memory_text(value) or any(
+        pattern.search(value) for pattern in _PUBLIC_MESSAGE_PATTERNS
+    ):
         raise ValueError("public message contains sensitive material")
+    return value
+
+
+def _require_public_source_url(value: str) -> None:
+    """Reject citation URLs that reveal credentials or non-public infrastructure."""
+
+    parsed = urlsplit(value)
+    host = parsed.hostname
+    if parsed.username is not None or parsed.password is not None or host is None:
+        raise ValueError("citation URL is not safe to expose")
+    normalized_host = host.rstrip(".").lower()
+    try:
+        address = ipaddress.ip_address(normalized_host)
+    except ValueError:
+        if normalized_host == "localhost" or normalized_host.endswith(
+            (".localhost", ".local", ".internal")
+        ):
+            raise ValueError("citation URL is not public") from None
+    else:
+        if not address.is_global:
+            raise ValueError("citation URL is not public")
+    if parsed.fragment:
+        raise ValueError("citation URL fragments are not public")
+    for name, _ in parse_qsl(parsed.query, keep_blank_values=True):
+        normalized_name = re.sub(r"[^a-z0-9]", "", name.lower())
+        if normalized_name in _SENSITIVE_QUERY_NAMES:
+            raise ValueError("citation URL contains a sensitive query field")
+
+
+def _reject_private_field_path(value: str) -> str:
+    tokens = {
+        token
+        for component in value.split(".")
+        for token in component.lower().split("_")
+    }
+    if tokens & _PRIVATE_FIELD_TOKENS:
+        raise ValueError("field path identifies a private diagnostic channel")
     return value
 
 
@@ -118,6 +212,20 @@ class SessionListResponse(StrictModel):
     items: tuple[SessionResponse, ...] = Field(max_length=100)
     next_cursor: PageCursor | None = None
 
+    @field_validator("items", mode="before")
+    @classmethod
+    def revalidate_items(cls, value: object) -> object:
+        if not isinstance(value, (list, tuple)):
+            return value
+        return tuple(
+            SessionResponse.model_validate(
+                item.model_dump(mode="python", warnings=False)
+                if type(item) is SessionResponse
+                else item
+            )
+            for item in value
+        )
+
 
 class RunSubmitRequest(StrictModel):
     query: QueryText
@@ -149,6 +257,14 @@ class RunFailure(StrictModel):
     _message_is_public = field_validator("message")(_reject_sensitive_text)
 
 
+def _revalidate_failure(value: object) -> RunFailure:
+    if isinstance(value, dict):
+        return RunFailure.model_validate(value)
+    if type(value) is not RunFailure:
+        raise ValueError("failure has the wrong concrete type")
+    return RunFailure.model_validate(value.model_dump(mode="python", warnings=False))
+
+
 class RunStatusResponse(StrictModel):
     session_id: OpaqueId
     run_id: OpaqueId
@@ -169,6 +285,11 @@ class RunStatusResponse(StrictModel):
     @classmethod
     def revalidate_answer(cls, value: object) -> ScopedAnswer | None:
         return None if value is None else _revalidate_answer(value)
+
+    @field_validator("failure", mode="before")
+    @classmethod
+    def revalidate_failure(cls, value: object) -> RunFailure | None:
+        return None if value is None else _revalidate_failure(value)
 
     @model_validator(mode="after")
     def validate_lifecycle(self) -> RunStatusResponse:
@@ -253,6 +374,15 @@ class FieldIssue(StrictModel):
     message: SafeMessage
 
     _message_is_public = field_validator("message")(_reject_sensitive_text)
+    _field_is_public = field_validator("field")(_reject_private_field_path)
+
+
+def _revalidate_field_issue(value: object) -> FieldIssue:
+    if isinstance(value, dict):
+        return FieldIssue.model_validate(value)
+    if type(value) is not FieldIssue:
+        raise ValueError("field issue has the wrong concrete type")
+    return FieldIssue.model_validate(value.model_dump(mode="python", warnings=False))
 
 
 class ErrorDetail(StrictModel):
@@ -264,9 +394,29 @@ class ErrorDetail(StrictModel):
 
     _message_is_public = field_validator("message")(_reject_sensitive_text)
 
+    @field_validator("field_issues", mode="before")
+    @classmethod
+    def revalidate_field_issues(cls, value: object) -> object:
+        if not isinstance(value, (list, tuple)):
+            return value
+        return tuple(_revalidate_field_issue(item) for item in value)
+
+
+def _revalidate_error_detail(value: object) -> ErrorDetail:
+    if isinstance(value, dict):
+        return ErrorDetail.model_validate(value)
+    if type(value) is not ErrorDetail:
+        raise ValueError("error detail has the wrong concrete type")
+    return ErrorDetail.model_validate(value.model_dump(mode="python", warnings=False))
+
 
 class ErrorEnvelope(StrictModel):
     error: ErrorDetail
+
+    @field_validator("error", mode="before")
+    @classmethod
+    def revalidate_error(cls, value: object) -> ErrorDetail:
+        return _revalidate_error_detail(value)
 
 
 class RunEventType(StrEnum):
@@ -303,6 +453,11 @@ class RunEvent(StrictModel):
     @classmethod
     def revalidate_answer(cls, value: object) -> ScopedAnswer | None:
         return None if value is None else _revalidate_answer(value)
+
+    @field_validator("failure", mode="before")
+    @classmethod
+    def revalidate_failure(cls, value: object) -> RunFailure | None:
+        return None if value is None else _revalidate_failure(value)
 
     @model_validator(mode="after")
     def validate_event(self) -> RunEvent:

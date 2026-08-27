@@ -122,6 +122,7 @@ def test_public_schema_has_no_forbidden_information_channels() -> None:
     assert forbidden.isdisjoint(public_properties)
     assert "ScopedAnswer" in document["components"]["schemas"]
     assert "Citation" in document["components"]["schemas"]
+    assert "RunEvent" in document["components"]["schemas"]
 
 
 def test_openapi_contract_matches_deterministic_snapshot() -> None:
