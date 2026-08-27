@@ -334,9 +334,8 @@ def choose_threshold(
     ):
         raise ValueError("misclassification costs must be finite and positive")
     truth, scores = _validate_probabilities(target, probabilities)
-    candidates = np.unique(
-        np.concatenate(([0.0], scores, [1.0, _ALL_NEGATIVE_THRESHOLD]))
-    )
+    upper_threshold = _ALL_NEGATIVE_THRESHOLD if np.max(scores) == 1.0 else 1.0
+    candidates = np.unique(np.concatenate(([0.0], scores, [upper_threshold])))
     choices: list[ThresholdChoice] = []
     for threshold in candidates:
         predicted = scores >= threshold

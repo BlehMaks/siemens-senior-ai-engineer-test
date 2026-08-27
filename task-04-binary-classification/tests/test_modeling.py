@@ -242,6 +242,14 @@ def test_threshold_can_choose_all_negative_at_probability_boundary() -> None:
             np.nextafter(choice.threshold, np.inf),
         )
 
+    ordinary_choice = choose_threshold(
+        target,
+        np.array([0.2, 0.9], dtype="float64"),
+        false_negative_cost=1.0,
+        false_positive_cost=100.0,
+    )
+    assert ordinary_choice.threshold == 1.0
+
 
 @pytest.mark.parametrize(
     ("false_negative_cost", "false_positive_cost"),
