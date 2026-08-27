@@ -12,6 +12,7 @@ from search_agent.contracts import OpaqueId
 from ..observability import OperationalTelemetry
 from ..schemas import ErrorEnvelope
 from ..security import (
+    ApiKeyAuthError,
     ApiKeyManager,
     AuthenticatedApiKey,
     QuotaLimiter,
@@ -31,10 +32,26 @@ async def authenticate_request(
     values = request.headers.getlist("authorization")
     authorization = values[0] if len(values) == 1 else None
     manager = cast(ApiKeyManager, request.app.state.auth_manager)
-    principal = await manager.authenticate(
-        authorization=authorization,
-        required_scope=required_scope,
-        now=now,
+    signals = telemetry(request)
+    try:
+        principal = await manager.authenticate(
+            authorization=authorization,
+            required_scope=required_scope,
+            now=now,
+        )
+    except ApiKeyAuthError as error:
+        signals.auth_outcome(
+            outcome=error.code,
+            correlation_id=correlation_id(request),
+            tenant_id=error.tenant_id,
+            at=now,
+        )
+        raise
+    signals.auth_outcome(
+        outcome="authenticated",
+        correlation_id=correlation_id(request),
+        tenant_id=principal.tenant_id,
+        at=now,
     )
     limiter = cast(QuotaLimiter, request.app.state.quota_limiter)
     await limiter.admit_request(

@@ -19,14 +19,21 @@ Terminal run records contain only public state/failure codes, bounded Task 1 usa
 counters, elapsed time, and pseudonymous identity. This is enough to join submission
 and worker records without exposing user content.
 
+HTTP authentication emits `auth.outcome` with only the bounded outcome, UTC time,
+correlation ID, and a tenant HMAC pseudonym when a key was verified. Unknown or
+malformed credentials therefore disclose no claimed tenant or key identifier;
+wrong-scope denials remain attributable through the verified tenant pseudonym.
+The last-resort handler emits `request.unexpected_error` with only UTC time and the
+correlation ID, while the client receives the fixed generic error envelope.
+
 ## Bounded signals
 
 The in-process metric snapshot has a finite key space. Its labels are limited to
-run state, public failure code, usage resource, worker/lease outcome, readiness
-outcome, and telemetry component. Correlation IDs and resource IDs can never become
-labels. Counters cover submissions, cancellation requests, terminal outcomes,
-policy failures, Task 1 usage, queue/worker outcomes, lease outcomes, readiness, and
-telemetry failures.
+run state, public failure code, usage resource, worker/lease/authentication outcome,
+readiness outcome, and telemetry component. Correlation IDs and resource IDs can
+never become labels. Counters cover submissions, cancellation requests, terminal
+outcomes, policy failures, Task 1 usage, queue/worker outcomes, lease outcomes,
+authentication, unexpected errors, readiness, and telemetry failures.
 
 Durable audit entries record only the tenant scope, an idempotent pseudonymous event
 ID, a bounded action such as `run.submitted` or `run.failed`, and a UTC timestamp.

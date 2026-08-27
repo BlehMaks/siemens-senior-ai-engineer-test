@@ -192,6 +192,7 @@ The envelope is used for `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`,
 `500`, and `503` responses where applicable. Messages are bounded and safe for
 clients. They never contain tenant IDs, prompts, chain-of-thought, raw pages,
 credentials, traceback text, exception types, or storage/provider internals.
+Every `/v1` JSON, error, and SSE response sets `Cache-Control: no-store`.
 
 ## Quotas and retry behavior
 
@@ -209,7 +210,8 @@ TTL, while its daily work charge and idempotency history remain for the UTC day.
 Concurrent execution and SSE connections use renewable SQLite leases, so another
 process sees the same cap and a crashed owner is released after its authoritative
 lease horizon. Terminal/cancelled work and closed/disconnected streams release live
-capacity.
+capacity. Every SSE renewal also rechecks the owning key row, so revocation or
+expiry closes an already-open stream at its next event or heartbeat.
 
 Quota exhaustion returns `429` with a decimal integer `Retry-After` header rounded
 up to at least one second. Daily exhaustion points to the next UTC day. An
@@ -259,4 +261,6 @@ Public schemas forbid extra fields. They expose no authenticated tenant ID,
 prompt, chain-of-thought, raw page, raw provider response, internal exception,
 traceback, lease, worker, queue, database, or storage identifier. Every initial
 or resumed connection is authenticated and tenant-scoped before its first event
-is read. Run state and its corresponding public event are committed together.
+is read. Answer text, citation claims, assistance offers, and follow-up queries are
+all rejected if they match the sensitive-material boundary. Run state and its
+corresponding public event are committed together.

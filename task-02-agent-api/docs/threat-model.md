@@ -44,7 +44,7 @@ client -> bounded ASGI body -> API-key authentication and scope -> quota admissi
 | Tenant and object isolation | Auth-derived tenant IDs, route scopes, tenant predicates, opaque IDs | `tests/routes/`, `tests/security/test_api_attack_surface.py`, repository contracts |
 | Replay and race safety | Tenant-scoped idempotency, SQLite transactions, state/version CAS, renewable leases | run, quota, cancellation, queue, and worker tests |
 | Bounded resource use | Body, request, queued/daily work, execution, SSE, Task 1 tool/model/page/byte/time budgets | `tests/security/test_limits.py`, quota route tests, Task 1 budget tests |
-| Safe public output | Strict models, fixed failure messages, public URL validation, typed SSE encoding | schema, error, event, and SSE contract tests |
+| Safe public output | Strict models, sensitive-text and public-URL validation, fixed failure messages, typed SSE encoding | schema, error, event, and SSE contract tests |
 | Secret and privacy protection | HMAC key storage, scope/lifecycle checks, one-time key display, pseudonymous telemetry | auth, key-admin, observability, and redaction tests |
 | Safe tool use | Task 1 URL guard, pinned connections, redirect/content/decompression limits, untrusted-evidence policy | Task 1 security and fetch tests |
 | Durable recovery | Persist-before-dispatch, idempotent queue repair, terminal-state monotonicity, cancellation cleanup | service, storage, worker lifecycle, and cancellation tests |
@@ -54,7 +54,7 @@ client -> bounded ASGI body -> API-key authentication and scope -> quota admissi
 | Risk | Decision and evidence |
 | --- | --- |
 | API1 Broken Object Level Authorization | Controlled: all object reads, streams, cancels, deletes, queue operations, and events use the authenticated tenant. Two-tenant negative route and repository tests cover the boundary. |
-| API2 Broken Authentication | Controlled locally: 256-bit random keys, HMAC-SHA256 digests with a 32-byte pepper, constant-time comparison, bounded parsing, scopes, expiry, revocation, and rotation. Production ingress and secret storage remain Task 3 controls. |
+| API2 Broken Authentication | Controlled locally: 256-bit random keys, HMAC-SHA256 digests with a 32-byte pepper, constant-time comparison, bounded parsing, scopes, expiry, revocation, rotation, and active-key checks on SSE renewal. Production ingress and secret storage remain Task 3 controls. |
 | API3 Broken Object Property Level Authorization | Controlled: strict request models forbid unknown fields; public response models omit tenant, key, lease, storage, prompt, and reasoning fields. Mass-assignment tests cover session and run bodies. |
 | API4 Unrestricted Resource Consumption | Controlled: request bytes/rate, queued and daily work, execution and SSE leases, plus Task 1 tool/model/page/byte/token/time budgets fail closed. |
 | API5 Broken Function Level Authorization | Controlled: sibling operations require separate `sessions:read`, `sessions:write`, `memory:delete`, `runs:read`, and `runs:write` scopes. |
@@ -69,10 +69,10 @@ client -> bounded ASGI body -> API-key authentication and scope -> quota admissi
 | Risk | Decision and evidence |
 | --- | --- |
 | LLM01 Prompt Injection | Controlled at Task 1: page text is untrusted evidence, not instruction; tool choice and budgets remain code-owned. Injection-shaped API text remains data in the security suite. |
-| LLM02 Sensitive Information Disclosure | Controlled: public models and fixed errors exclude prompts, reasoning, raw pages, credentials, tenant IDs, and internals; telemetry accepts only typed pseudonymous fields. |
+| LLM02 Sensitive Information Disclosure | Controlled: every public answer text channel and fixed error excludes sensitive material, reasoning, raw pages, credentials, tenant IDs, and internals; telemetry accepts only typed pseudonymous fields. |
 | LLM03 Supply Chain | Partial: locked dependencies and repository checks exist. SBOM, image, provenance, and vulnerability gates are Task 3/release controls. |
 | LLM04 Data and Model Poisoning | Partial: evidence is source-attributed, bounded, and validated; provider/model integrity and corpus governance are deployment decisions. |
-| LLM05 Improper Output Handling | Controlled: executor identity and public answers are revalidated before persistence; citations accept public HTTP(S) URLs without credentials or sensitive query names. |
+| LLM05 Improper Output Handling | Controlled: executor identity and every public answer text channel are revalidated before persistence; citations accept public HTTP(S) URLs without credentials or sensitive query names. |
 | LLM06 Excessive Agency | Controlled: the executor receives bounded research input and has only explicit search/fetch/model ports; Task 2 exposes no arbitrary tool or code-execution endpoint. |
 | LLM07 System Prompt Leakage | Controlled: prompts and chain-of-thought are absent from HTTP/SSE/error/telemetry schemas. There is no public prompt-inspection route. |
 | LLM08 Vector and Embedding Weaknesses | Not applicable: Task 2 has no vector or embedding store. Memory is tenant/session-scoped structured reflection storage. |
@@ -130,3 +130,6 @@ Reference sets: [OWASP API Security Top 10 2023](https://owasp.org/API-Security/
 [OWASP ASVS 5.0](https://github.com/OWASP/ASVS/releases/tag/v5.0.0),
 [OWASP LLM Top 10](https://genai.owasp.org/llm-top-10/), and
 [OWASP Agentic Security Initiative](https://genai.owasp.org/initiatives/agentic-security-initiative/).
+
+The sealed Codex Security result is summarized in
+[`security-audits/codex-standard/report.md`](../security-audits/codex-standard/report.md).

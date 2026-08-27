@@ -66,9 +66,16 @@ class EnvPepperProvider:
 class ApiKeyAuthError(RuntimeError):
     """Safe auth failure; message never identifies a tenant, key, or secret."""
 
-    def __init__(self, status_code: int, code: str = "unauthenticated") -> None:
+    def __init__(
+        self,
+        status_code: int,
+        code: str = "unauthenticated",
+        *,
+        tenant_id: OpaqueId | None = None,
+    ) -> None:
         self.status_code = status_code
         self.code = code
+        self.tenant_id = tenant_id
         super().__init__("Authentication failed" if status_code == 401 else "Forbidden")
 
     @classmethod
@@ -76,8 +83,8 @@ class ApiKeyAuthError(RuntimeError):
         return cls(401, "unauthenticated")
 
     @classmethod
-    def forbidden(cls) -> ApiKeyAuthError:
-        return cls(403, "forbidden")
+    def forbidden(cls, *, tenant_id: OpaqueId) -> ApiKeyAuthError:
+        return cls(403, "forbidden", tenant_id=tenant_id)
 
 
 class ApiKeyCredentials(StrictModel):
@@ -183,7 +190,7 @@ class ApiKeyManager:
         required = _SCOPE.validate_python(required_scope, strict=True)
         record = await self._matching_record(credentials=credentials, now=now)
         if required not in record.scopes:
-            raise ApiKeyAuthError.forbidden()
+            raise ApiKeyAuthError.forbidden(tenant_id=record.tenant_id)
         return AuthenticatedApiKey(
             tenant_id=record.tenant_id,
             key_id=record.key_id,

@@ -530,12 +530,18 @@ class SQLiteQuotaLimiter:
             cursor = await connection.execute(
                 "UPDATE quota_sse_leases SET expires_at = ? "
                 "WHERE tenant_id = ? AND key_id = ? AND permit_id = ? "
-                "AND expires_at > ?",
+                "AND expires_at > ? AND EXISTS ("
+                "SELECT 1 FROM api_key_hashes AS keys "
+                "WHERE keys.tenant_id = quota_sse_leases.tenant_id "
+                "AND keys.key_id = quota_sse_leases.key_id "
+                "AND keys.revoked_at IS NULL "
+                "AND (keys.expires_at IS NULL OR keys.expires_at > ?))",
                 (
                     _timestamp(now + timedelta(seconds=self._config.sse_lease_seconds)),
                     permit.tenant_id,
                     permit.key_id,
                     permit.permit_id,
+                    now_timestamp,
                     now_timestamp,
                 ),
             )

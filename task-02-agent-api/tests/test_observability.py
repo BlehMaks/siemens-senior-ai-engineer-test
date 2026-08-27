@@ -219,6 +219,11 @@ async def test_run_routes_emit_joinable_safe_logs_and_idempotent_audit(
             scopes=("runs:read", "runs:write"),
             now=NOW,
         )
+        read_only = await app.state.auth_manager.create(
+            tenant_id="tenant-private-one",
+            scopes=("runs:read",),
+            now=NOW,
+        )
         headers = {
             "Authorization": f"Bearer {generated.plaintext}",
             "Idempotency-Key": "request-observe-one",
@@ -237,22 +242,60 @@ async def test_run_routes_emit_joinable_safe_logs_and_idempotent_audit(
                     "X-Correlation-ID": headers["X-Correlation-ID"],
                 },
             )
+            forbidden = await client.post(
+                "/v1/sessions/session-private-one/runs",
+                json={"query": "Find the documented public answer."},
+                headers={
+                    **headers,
+                    "Authorization": f"Bearer {read_only.plaintext}",
+                },
+            )
+            unauthenticated = await client.post(
+                "/v1/sessions/session-private-one/runs",
+                json={"query": "Find the documented public answer."},
+                headers={
+                    "Idempotency-Key": "request-observe-two",
+                    "X-Correlation-ID": headers["X-Correlation-ID"],
+                },
+            )
 
         assert accepted.status_code == cancelled.status_code == 202
+        assert forbidden.status_code == 403
+        assert unauthenticated.status_code == 401
+        assert all(
+            response.headers["Cache-Control"] == "no-store"
+            for response in (accepted, cancelled, forbidden, unauthenticated)
+        )
         payloads = [json.loads(record.message) for record in caplog.records]
         assert [payload["event"] for payload in payloads] == [
+            "auth.outcome",
             "run.submitted",
+            "auth.outcome",
             "run.cancellation_requested",
+            "auth.outcome",
+            "auth.outcome",
         ]
         assert {payload["correlation_id"] for payload in payloads} == {
             "corr-observe-client-one"
         }
+        auth_payloads = [
+            payload for payload in payloads if payload["event"] == "auth.outcome"
+        ]
+        assert [payload["outcome"] for payload in auth_payloads] == [
+            "authenticated",
+            "authenticated",
+            "forbidden",
+            "unauthenticated",
+        ]
+        assert all("tenant" in payload for payload in auth_payloads[:3])
+        assert "tenant" not in auth_payloads[3]
         serialized = "\n".join(record.message for record in caplog.records)
         for forbidden in (
             "tenant-private-one",
             "session-private-one",
             "run-observe-one",
             generated.plaintext,
+            read_only.plaintext,
             "prompt",
             "evidence",
             "private.example",
@@ -269,6 +312,74 @@ async def test_run_routes_emit_joinable_safe_logs_and_idempotent_audit(
             "tenant" not in dict(sample.labels)
             for sample in app.state.telemetry.snapshot()
         )
+        auth_metrics = {
+            dict(sample.labels)["outcome"]: sample.value
+            for sample in app.state.telemetry.snapshot()
+            if sample.name == "api_auth_outcomes_total"
+        }
+        assert auth_metrics == {
+            "authenticated": 2.0,
+            "forbidden": 1.0,
+            "unauthenticated": 1.0,
+        }
+
+
+@pytest.mark.asyncio
+async def test_unexpected_errors_emit_a_safe_signal_and_private_response(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    path = tmp_path / "unexpected-error.sqlite3"
+    app = create_app(
+        database_path=path,
+        pepper_provider=FixedPepper(),
+        clock=lambda: NOW,
+    )
+
+    @app.get("/v1/test-unexpected-error")
+    async def fail_privately() -> None:
+        raise RuntimeError("pass" + "word = private-production-secret")
+
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(
+            transport=ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://testserver",
+        ) as client,
+    ):
+        with caplog.at_level(logging.INFO, logger="agent_api.operations"):
+            response = await client.get(
+                "/v1/test-unexpected-error",
+                headers={"X-Correlation-ID": "corr-unexpected-one"},
+            )
+
+    assert response.status_code == 500
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.json() == {
+        "error": {
+            "code": "internal_error",
+            "message": "Request could not be completed.",
+            "correlation_id": "corr-unexpected-one",
+            "retryable": False,
+            "field_issues": [],
+        }
+    }
+    payloads = [json.loads(record.message) for record in caplog.records]
+    assert payloads == [
+        {
+            "correlation_id": "corr-unexpected-one",
+            "event": "request.unexpected_error",
+            "occurred_at": "2026-08-27T10:00:00.000000+00:00",
+        }
+    ]
+    assert "private-production-secret" not in caplog.records[0].message
+    sample = next(
+        sample
+        for sample in app.state.telemetry.snapshot()
+        if sample.name == "api_unexpected_errors_total"
+    )
+    assert sample.labels == ()
+    assert sample.value == 1.0
 
 
 @pytest.mark.asyncio

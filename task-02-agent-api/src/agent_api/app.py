@@ -98,11 +98,15 @@ class _CorrelationHeaderMiddleware:
 
         async def send_with_correlation(message: Message) -> None:
             if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
                 correlation_id = cast(
                     str | None, scope.get("state", {}).get("correlation_id")
                 )
                 if correlation_id is not None:
-                    MutableHeaders(scope=message)["X-Correlation-ID"] = correlation_id
+                    headers["X-Correlation-ID"] = correlation_id
+                path = cast(str, scope.get("path", ""))
+                if path == "/v1" or path.startswith("/v1/"):
+                    headers["Cache-Control"] = "no-store"
             await send(message)
 
         await self._app(scope, receive, send_with_correlation)
@@ -197,6 +201,7 @@ def create_app(
         dependencies=[Depends(_correlation_header)],
         lifespan=lifespan,
     )
+    app.state.clock = now
     app.include_router(build_health_router(clock=now))
     app.include_router(build_session_router())
     app.include_router(build_run_router())
@@ -316,6 +321,12 @@ async def _request_too_large(request: Request, exc: Exception) -> JSONResponse:
 
 async def _internal_error(request: Request, exc: Exception) -> JSONResponse:
     del exc
+    clock = cast(Callable[[], datetime], request.app.state.clock)
+    signals = cast(OperationalTelemetry, request.app.state.telemetry)
+    signals.unexpected_error(
+        correlation_id=_correlation_id(request),
+        at=clock(),
+    )
     return _error_response(
         request,
         500,
@@ -343,6 +354,8 @@ def _error_response(
     )
     response_headers = {} if headers is None else dict(headers)
     response_headers["X-Correlation-ID"] = envelope.error.correlation_id
+    if request.url.path == "/v1" or request.url.path.startswith("/v1/"):
+        response_headers["Cache-Control"] = "no-store"
     return JSONResponse(
         content=envelope.model_dump(mode="json"),
         status_code=status_code,

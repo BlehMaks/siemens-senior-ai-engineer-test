@@ -127,8 +127,14 @@ def validate_public_answer(value: object) -> ScopedAnswer:
         raise ValueError("public answer exceeds the citation limit")
     if answer.assistance is not None and len(answer.assistance.follow_up_queries) > 8:
         raise ValueError("public answer exceeds the follow-up query limit")
+    _reject_sensitive_text(answer.answer_text)
     for citation in answer.citations:
+        _reject_sensitive_text(citation.claim)
         _require_public_source_url(str(citation.source_url))
+    if answer.assistance is not None:
+        _reject_sensitive_text(answer.assistance.offer)
+        for query in answer.assistance.follow_up_queries:
+            _reject_sensitive_text(query)
     return answer
 
 

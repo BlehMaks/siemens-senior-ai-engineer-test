@@ -266,6 +266,39 @@ async def test_expired_execution_and_sse_leases_cannot_be_renewed(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("lifecycle", ["revoked", "expired"])
+async def test_inactive_key_cannot_renew_an_existing_sse_lease(
+    tmp_path: Path,
+    lifecycle: str,
+) -> None:
+    path = tmp_path / "inactive-key-stream.sqlite3"
+    await migrate(path)
+    await SQLiteTenantRepository(path).put(
+        TenantRecord(tenant_id="tenant-one", created_at=NOW)
+    )
+    manager = ApiKeyManager(SQLiteKeyHashRepository(path), FixedPepper())
+    generated = await manager.create(
+        tenant_id="tenant-one",
+        scopes=("runs:read",),
+        now=NOW,
+        expires_at=NOW + timedelta(seconds=10),
+    )
+    limiter = SQLiteQuotaLimiter(path, LimitConfig())
+    permit = await limiter.acquire_sse(
+        tenant_id="tenant-one",
+        key_id=generated.record.key_id,
+        at=NOW,
+    )
+    if lifecycle == "revoked":
+        assert await manager.revoke(
+            authorization=f"Bearer {generated.plaintext}",
+            now=NOW + timedelta(seconds=1),
+        )
+
+    assert not await limiter.renew_sse(permit, at=NOW + timedelta(seconds=20))
+
+
+@pytest.mark.asyncio
 async def test_accounting_storage_failure_fails_closed(tmp_path: Path) -> None:
     path = tmp_path / "outage.sqlite3"
     await migrate(path)

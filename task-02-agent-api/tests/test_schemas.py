@@ -252,6 +252,49 @@ def test_public_answer_rejects_non_public_or_sensitive_source_urls(
         )
 
 
+@pytest.mark.parametrize(
+    "unsafe_answer",
+    [
+        answer().model_copy(
+            update={"answer_text": "Authoriza" + "tion: Bearer stolen-credential"}
+        ),
+        answer().model_copy(
+            update={
+                "citations": (
+                    answer()
+                    .citations[0]
+                    .model_copy(update={"claim": "Pass" + "word = stolen-credential"}),
+                )
+            }
+        ),
+        answer().model_copy(
+            update={
+                "assistance": OptionalAssistance(
+                    offer="System prompt is hidden production policy.",
+                    follow_up_queries=("Find more public evidence.",),
+                )
+            }
+        ),
+        answer().model_copy(
+            update={
+                "assistance": OptionalAssistance(
+                    offer="I can help with public evidence.",
+                    follow_up_queries=("Access to" + "ken: stolen-credential",),
+                )
+            }
+        ),
+    ],
+    ids=("answer", "citation-claim", "assistance-offer", "follow-up-query"),
+)
+def test_public_answer_rejects_sensitive_text_in_every_channel(
+    unsafe_answer: ScopedAnswer,
+) -> None:
+    with pytest.raises(ValidationError, match="sensitive"):
+        RunStatusResponse.model_validate(
+            {**status_values(RunState.COMPLETED), "answer": unsafe_answer}
+        )
+
+
 def test_public_deletion_count_is_bounded() -> None:
     with pytest.raises(ValidationError):
         DeletionResponse(

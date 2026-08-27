@@ -43,6 +43,7 @@ _WORK_OUTCOMES = frozenset(
     }
 )
 _LEASE_OUTCOMES = frozenset({"acquired", "blocked", "lost", "released", "renewed"})
+_AUTH_OUTCOMES = frozenset({"authenticated", "unauthenticated", "forbidden"})
 _USAGE_FIELDS = (
     "iterations",
     "search_queries",
@@ -69,6 +70,8 @@ _METRIC_SCHEMA: dict[str, dict[str, frozenset[str]]] = {
     "api_worker_outcomes_total": {"outcome": _WORK_OUTCOMES},
     "api_lease_outcomes_total": {"outcome": _LEASE_OUTCOMES},
     "api_readiness_checks_total": {"outcome": frozenset({"ready", "not_ready"})},
+    "api_auth_outcomes_total": {"outcome": _AUTH_OUTCOMES},
+    "api_unexpected_errors_total": {},
     "api_telemetry_failures_total": {"component": frozenset({"audit", "logging"})},
 }
 
@@ -262,6 +265,33 @@ class OperationalTelemetry:
         outcome = "ready" if ready else "not_ready"
         self._increment("api_readiness_checks_total", outcome=outcome)
         self._emit("service.readiness", at=at, outcome=outcome)
+
+    def auth_outcome(
+        self,
+        *,
+        outcome: str,
+        correlation_id: OpaqueId,
+        tenant_id: OpaqueId | None,
+        at: datetime,
+    ) -> None:
+        if outcome not in _AUTH_OUTCOMES:
+            raise ValueError("auth outcome is not a bounded telemetry label")
+        self._increment("api_auth_outcomes_total", outcome=outcome)
+        fields: dict[str, object] = {
+            "outcome": outcome,
+            "correlation_id": correlation_id,
+        }
+        if tenant_id is not None:
+            fields["tenant"] = self._pseudonym("tenant", tenant_id)
+        self._emit("auth.outcome", at=at, **fields)
+
+    def unexpected_error(self, *, correlation_id: OpaqueId, at: datetime) -> None:
+        self._increment("api_unexpected_errors_total")
+        self._emit(
+            "request.unexpected_error",
+            at=at,
+            correlation_id=correlation_id,
+        )
 
     def snapshot(self) -> tuple[MetricSample, ...]:
         with self._metric_lock:
