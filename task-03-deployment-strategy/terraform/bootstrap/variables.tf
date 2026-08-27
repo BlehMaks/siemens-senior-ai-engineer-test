@@ -85,6 +85,16 @@ variable "github_repository" {
   }
 }
 
+variable "github_repository_id" {
+  description = "Immutable numeric GitHub repository ID allowed to federate."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*$", var.github_repository_id))
+    error_message = "github_repository_id must be a positive numeric GitHub repository ID."
+  }
+}
+
 variable "github_branch" {
   description = "Git branch allowed to federate through GitHub OIDC."
   type        = string

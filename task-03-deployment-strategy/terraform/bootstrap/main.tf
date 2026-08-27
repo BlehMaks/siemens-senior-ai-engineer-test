@@ -43,13 +43,15 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   display_name                       = "GitHub Actions provider"
   description                        = "Repository-scoped GitHub OIDC provider."
   attribute_mapping = {
-    "google.subject"       = "assertion.sub"
-    "attribute.actor"      = "assertion.actor"
-    "attribute.environment" = "assertion.environment"
-    "attribute.ref"        = "assertion.ref"
-    "attribute.repository" = "assertion.repository"
+    "google.subject"          = "assertion.sub"
+    "attribute.actor"         = "assertion.actor"
+    "attribute.environment"   = "assertion.environment"
+    "attribute.ref"           = "assertion.ref"
+    "attribute.repository"    = "assertion.repository"
+    "attribute.repository_id" = "assertion.repository_id"
   }
   attribute_condition = join(" && ", compact([
+    "attribute.repository_id == \"${var.github_repository_id}\"",
     "attribute.repository == \"${var.github_repository}\"",
     "attribute.ref == \"refs/heads/${var.github_branch}\"",
     var.github_environment == "" ? "" : "attribute.environment == \"${var.github_environment}\"",
@@ -66,12 +68,12 @@ module "identity" {
     name => identity if name != "deployer"
   }
 
-  source       = "../modules/identity"
-  project_id   = var.project_id
-  account_id   = each.value.account_id
-  display_name = each.value.display_name
-  description  = each.value.description
-  labels       = local.common_labels
+  source        = "../modules/identity"
+  project_id    = var.project_id
+  account_id    = each.value.account_id
+  display_name  = each.value.display_name
+  description   = each.value.description
+  labels        = local.common_labels
   project_roles = each.value.project_roles
   workload_identity_members = (
     each.key == "ci" && local.github_principal != null ? [local.github_principal] : []
@@ -83,12 +85,12 @@ module "identity" {
 }
 
 module "deployer_identity" {
-  source       = "../modules/identity"
-  project_id   = var.project_id
-  account_id   = local.identities.deployer.account_id
-  display_name = local.identities.deployer.display_name
-  description  = local.identities.deployer.description
-  labels       = local.common_labels
+  source        = "../modules/identity"
+  project_id    = var.project_id
+  account_id    = local.identities.deployer.account_id
+  display_name  = local.identities.deployer.display_name
+  description   = local.identities.deployer.description
+  labels        = local.common_labels
   project_roles = local.identities.deployer.project_roles
   service_account_user_members = [
     "serviceAccount:${module.identity["ci"].email}",

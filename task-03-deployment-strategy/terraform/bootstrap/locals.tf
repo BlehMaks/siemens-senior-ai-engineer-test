@@ -18,9 +18,9 @@ locals {
   )
 
   github_principal = var.enable_github_wif ? format(
-    "principalSet://iam.googleapis.com/%s/attribute.repository/%s",
+    "principalSet://iam.googleapis.com/%s/attribute.repository_id/%s",
     google_iam_workload_identity_pool.github[0].name,
-    var.github_repository,
+    var.github_repository_id,
   ) : null
 
   bootstrap_roles = toset([
@@ -33,33 +33,33 @@ locals {
 
   identities = {
     api = {
-      account_id   = "${var.system_code}-${var.environment}-api"
-      display_name = "Assessment API runtime"
-      description  = "Runtime identity for the assignment API service."
+      account_id    = "${var.system_code}-${var.environment}-api"
+      display_name  = "Assessment API runtime"
+      description   = "Runtime identity for the assignment API service."
       project_roles = []
     }
     worker = {
-      account_id   = "${var.system_code}-${var.environment}-worker"
-      display_name = "Assessment worker runtime"
-      description  = "Runtime identity for the assignment worker service."
+      account_id    = "${var.system_code}-${var.environment}-worker"
+      display_name  = "Assessment worker runtime"
+      description   = "Runtime identity for the assignment worker service."
       project_roles = []
     }
     tasks = {
-      account_id   = "${var.system_code}-${var.environment}-tasks"
-      display_name = "Assessment Cloud Tasks caller"
-      description  = "OIDC caller identity for Cloud Tasks HTTP delivery."
+      account_id    = "${var.system_code}-${var.environment}-tasks"
+      display_name  = "Assessment Cloud Tasks caller"
+      description   = "OIDC caller identity for Cloud Tasks HTTP delivery."
       project_roles = []
     }
     deployer = {
-      account_id   = "${var.system_code}-${var.environment}-deploy"
-      display_name = "Terraform deployer"
-      description  = "Identity that applies reviewed Terraform for assignment resources."
+      account_id    = "${var.system_code}-${var.environment}-deploy"
+      display_name  = "Terraform deployer"
+      description   = "Identity that applies reviewed Terraform for assignment resources."
       project_roles = local.bootstrap_roles
     }
     ci = {
-      account_id   = "${var.system_code}-${var.environment}-ci"
-      display_name = "GitHub Actions federation target"
-      description  = "Identity impersonated by GitHub Actions through workload identity federation."
+      account_id    = "${var.system_code}-${var.environment}-ci"
+      display_name  = "GitHub Actions federation target"
+      description   = "Identity impersonated by GitHub Actions through workload identity federation."
       project_roles = []
     }
   }

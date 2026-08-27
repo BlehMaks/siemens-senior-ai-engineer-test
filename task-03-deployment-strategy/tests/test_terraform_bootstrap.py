@@ -12,6 +12,7 @@ def read(path: Path) -> str:
 
 def test_c03_expected_files_exist() -> None:
     expected = {
+        BOOTSTRAP / ".terraform.lock.hcl",
         BOOTSTRAP / "README.md",
         BOOTSTRAP / "locals.tf",
         BOOTSTRAP / "main.tf",
@@ -35,6 +36,16 @@ def test_versions_are_pinned_and_bootstrap_stays_backend_free() -> None:
     assert 'version = "~> 6.47.0"' in versions
     assert 'source  = "hashicorp/google-beta"' in versions
     assert 'backend "' not in versions
+
+
+def test_provider_selections_are_locked_for_supported_platforms() -> None:
+    lock = read(BOOTSTRAP / ".terraform.lock.hcl")
+
+    assert 'provider "registry.terraform.io/hashicorp/google"' in lock
+    assert 'provider "registry.terraform.io/hashicorp/google-beta"' in lock
+    assert lock.count('version     = "6.47.0"') == 2
+    assert lock.count('constraints = "~> 6.47.0"') == 2
+    assert lock.count("h1:") >= 4
 
 
 def test_bootstrap_enables_only_c03_foundational_services() -> None:
@@ -72,14 +83,20 @@ def test_workload_inventory_and_impersonation_chain_are_explicit() -> None:
         assert f"{name} =" in locals_tf
 
     assert 'serviceAccount:${module.identity["ci"].email}' in main_tf
-    assert '"principalSet://iam.googleapis.com/%s/attribute.repository/%s"' in locals_tf
+    assert (
+        '"principalSet://iam.googleapis.com/%s/attribute.repository_id/%s"' in locals_tf
+    )
 
 
-def test_provider_condition_is_repo_and_branch_scoped() -> None:
+def test_provider_condition_uses_immutable_id_repo_and_branch_scope() -> None:
     main_tf = read(BOOTSTRAP / "main.tf")
+    variables_tf = read(BOOTSTRAP / "variables.tf")
 
+    assert '"attribute.repository_id" = "assertion.repository_id"' in main_tf
+    assert 'attribute.repository_id == \\"${var.github_repository_id}\\"' in main_tf
     assert 'attribute.repository == \\"${var.github_repository}\\"' in main_tf
     assert 'attribute.ref == \\"refs/heads/${var.github_branch}\\"' in main_tf
+    assert 'regex("^[1-9][0-9]*$", var.github_repository_id)' in variables_tf
     assert "token.actions.githubusercontent.com" in main_tf
 
 
@@ -97,8 +114,8 @@ def test_no_keys_or_wildcard_principals_are_defined() -> None:
     )
 
     assert "google_service_account_key" not in terraform_sources
-    assert 'role    = "roles/owner"' not in role_assignments.lower()
-    assert 'role    = "roles/editor"' not in role_assignments.lower()
+    for role in ("owner", "editor", "viewer"):
+        assert f'role    = "roles/{role}"' not in role_assignments.lower()
     assert "allUsers" not in terraform_sources
     assert "allAuthenticatedUsers" not in terraform_sources
     assert "principalSet://iam.googleapis.com/*" not in terraform_sources
@@ -107,6 +124,7 @@ def test_no_keys_or_wildcard_principals_are_defined() -> None:
 
 def test_deployer_project_roles_match_reviewed_allowlist() -> None:
     locals_tf = read(BOOTSTRAP / "locals.tf")
+    identity_variables = read(IDENTITY / "variables.tf")
 
     expected_roles = {
         "roles/iam.serviceAccountAdmin",
@@ -125,6 +143,9 @@ def test_deployer_project_roles_match_reviewed_allowlist() -> None:
         if line.strip().startswith('"roles/')
     }
     assert role_lines == expected_roles
+    assert "project_roles = local.bootstrap_roles" in locals_tf
+    assert "setunion(local.bootstrap_roles" not in locals_tf
+    assert '["roles/owner", "roles/editor", "roles/viewer"]' in identity_variables
 
 
 def test_example_tfvars_are_secret_free_and_realistic() -> None:
@@ -132,6 +153,7 @@ def test_example_tfvars_are_secret_free_and_realistic() -> None:
 
     assert "example-assignment-dev" in example
     assert "siemens-senior-ai-engineer-test" in example
+    assert 'github_repository_id = "123456789"' in example
     assert "secret" not in example.lower()
     assert "token" not in example.lower()
     assert "private_key" not in example.lower()

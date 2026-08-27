@@ -37,7 +37,10 @@ variable "project_roles" {
   validation {
     condition = alltrue([
       for role in var.project_roles :
-      startswith(role, "roles/") && !contains(["roles/owner", "roles/editor"], lower(role))
+      startswith(role, "roles/") && !contains(
+        ["roles/owner", "roles/editor", "roles/viewer"],
+        lower(role),
+      )
     ])
     error_message = "project_roles must use non-primitive predefined roles."
   }

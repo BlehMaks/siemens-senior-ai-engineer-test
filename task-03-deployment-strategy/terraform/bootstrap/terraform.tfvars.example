@@ -3,10 +3,11 @@ region             = "europe-west3"
 environment        = "dev"
 system_code        = "sai"
 state_bucket_name  = "example-assignment-dev-tf-state"
-enable_github_wif  = true
-github_repository  = "example-org/siemens-senior-ai-engineer-test"
-github_branch      = "main"
-github_environment = "dev"
+enable_github_wif    = true
+github_repository    = "example-org/siemens-senior-ai-engineer-test"
+github_repository_id = "123456789"
+github_branch        = "main"
+github_environment   = "dev"
 
 labels = {
   owner = "platform"
