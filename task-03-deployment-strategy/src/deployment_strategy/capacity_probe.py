@@ -458,6 +458,7 @@ def _result(
         "accepted": len(accepted),
         "duplicate_status_code": duplicate["status_code"],
         "duplicate_run_id_matches": duplicate["run_id"] == accepted[0]["run_id"],
+        "first_event_samples": len(first_events),
         "p95_first_event_ms": _p95(event["elapsed_ms"] for event in first_events),
         "p95_submit_ms": _p95(item["elapsed_ms"] for item in submissions),
         "queue_oldest_age_ms": oldest_queue_age_ms,

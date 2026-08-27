@@ -34,6 +34,7 @@ async def test_capacity_probe_exercises_required_local_paths() -> None:
     assert result["measurements"]["rejected"] == 4
     assert result["measurements"]["duplicate_status_code"] == 202
     assert result["measurements"]["duplicate_run_id_matches"] is True
+    assert result["measurements"]["first_event_samples"] == 8
     assert result["measurements"]["recovery_accepted"] is True
     assert result["measurements"]["terminal"] == {
         "budget_exhausted": 1,
