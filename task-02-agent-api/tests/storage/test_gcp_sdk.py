@@ -26,7 +26,9 @@ class FakeSnapshot:
 
 
 class FakeDocumentReference:
-    def __init__(self, store: FakeAsyncClient, collection: str, document_id: str) -> None:
+    def __init__(
+        self, store: FakeAsyncClient, collection: str, document_id: str
+    ) -> None:
         self._store = store
         self.collection = collection
         self.document_id = document_id
@@ -125,14 +127,18 @@ class FakeAsyncTransaction:
         for row in self._store.query_rows(ref_or_query):
             yield FakeSnapshot(row)
 
-    def set(self, reference: FakeDocumentReference, document_data: dict[str, object]) -> None:
+    def set(
+        self, reference: FakeDocumentReference, document_data: dict[str, object]
+    ) -> None:
         self._store.documents.setdefault(reference.collection, {})[
             reference.document_id
         ] = dict(document_data)
         self.writes.append(("set", reference.document_id, dict(document_data)))
 
     def delete(self, reference: FakeDocumentReference) -> None:
-        self._store.documents.get(reference.collection, {}).pop(reference.document_id, None)
+        self._store.documents.get(reference.collection, {}).pop(
+            reference.document_id, None
+        )
         self.writes.append(("delete", reference.document_id))
 
 
@@ -144,7 +150,9 @@ class FakeAsyncClient:
     def collection(self, collection: str) -> FakeCollectionReference:
         return FakeCollectionReference(self, collection)
 
-    def transaction(self, max_attempts: int = 5, read_only: bool = False) -> FakeAsyncTransaction:
+    def transaction(
+        self, max_attempts: int = 5, read_only: bool = False
+    ) -> FakeAsyncTransaction:
         assert max_attempts == 5
         assert read_only is False
         self.last_transaction = FakeAsyncTransaction(self)
@@ -209,9 +217,21 @@ class FakeCloudTasksAsyncClient:
 async def test_firestore_store_builds_filtered_ordered_query() -> None:
     client = FakeAsyncClient()
     client.documents["sessions"] = {
-        "1": {"tenant_id": "t", "created_at": "2026-01-01T00:00:00+00:00", "session_id": "a"},
-        "2": {"tenant_id": "t", "created_at": "2026-01-02T00:00:00+00:00", "session_id": "b"},
-        "3": {"tenant_id": "u", "created_at": "2026-01-03T00:00:00+00:00", "session_id": "c"},
+        "1": {
+            "tenant_id": "t",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "session_id": "a",
+        },
+        "2": {
+            "tenant_id": "t",
+            "created_at": "2026-01-02T00:00:00+00:00",
+            "session_id": "b",
+        },
+        "3": {
+            "tenant_id": "u",
+            "created_at": "2026-01-03T00:00:00+00:00",
+            "session_id": "c",
+        },
     }
 
     store = GoogleFirestoreDocumentStore(cast(gcp_storage._FirestoreClient, client))
@@ -241,7 +261,7 @@ async def test_firestore_store_uses_async_transactional_wrapper(
     calls: list[FakeAsyncTransaction] = []
 
     def fake_async_transactional(
-        function: Callable[[FakeAsyncTransaction], Awaitable[None]]
+        function: Callable[[FakeAsyncTransaction], Awaitable[None]],
     ) -> Callable[[FakeAsyncTransaction], Awaitable[None]]:
         async def wrapped(transaction: FakeAsyncTransaction) -> None:
             calls.append(transaction)
@@ -249,7 +269,9 @@ async def test_firestore_store_uses_async_transactional_wrapper(
 
         return wrapped
 
-    monkeypatch.setattr("agent_api.storage.gcp.async_transactional", fake_async_transactional)
+    monkeypatch.setattr(
+        "agent_api.storage.gcp.async_transactional", fake_async_transactional
+    )
 
     async def write_run(tx: object) -> None:
         await cast(Callable[..., Awaitable[None]], tx.set)(  # type: ignore[attr-defined]
@@ -289,7 +311,9 @@ async def test_firestore_transaction_get_and_delete_translate_missing_documents(
 @pytest.mark.asyncio
 async def test_cloud_tasks_create_requires_target_url() -> None:
     client = FakeCloudTasksAsyncClient()
-    queue = GoogleCloudTaskClient(cast(gcp_storage._CloudTasksClient, client), "queues/main", None)
+    queue = GoogleCloudTaskClient(
+        cast(gcp_storage._CloudTasksClient, client), "queues/main", None
+    )
 
     with pytest.raises(ValueError, match="target URL"):
         await queue.create(
@@ -348,7 +372,9 @@ async def test_cloud_tasks_translate_already_exists_and_not_found() -> None:
             )
         )
 
-    assert await queue.get(name="projects/p/locations/l/queues/main/tasks/work-1") is None
+    assert (
+        await queue.get(name="projects/p/locations/l/queues/main/tasks/work-1") is None
+    )
     assert (
         await queue.delete(name="projects/p/locations/l/queues/main/tasks/work-1")
         is False

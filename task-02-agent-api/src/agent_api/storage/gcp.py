@@ -74,7 +74,9 @@ class GoogleFirestoreDocumentStore(DocumentStore):
 
 
 class _GoogleFirestoreTransaction(DocumentStoreTransaction):
-    def __init__(self, client: _FirestoreClient, transaction: _FirestoreTransaction) -> None:
+    def __init__(
+        self, client: _FirestoreClient, transaction: _FirestoreTransaction
+    ) -> None:
         self._client = client
         self._transaction = transaction
 
@@ -260,7 +262,9 @@ class _FirestoreDocumentReference(Protocol):
 
 
 class _FirestoreQuery(Protocol):
-    def where(self, field_path: str, op_string: str, value: object) -> _FirestoreQuery: ...
+    def where(
+        self, field_path: str, op_string: str, value: object
+    ) -> _FirestoreQuery: ...
 
     def order_by(
         self, field_path: str, direction: str = "ASCENDING"
@@ -294,7 +298,9 @@ class _FirestoreTransaction(Protocol):
 class _FirestoreClient(Protocol):
     def collection(self, collection: str) -> _FirestoreCollectionReference: ...
 
-    def transaction(self, max_attempts: int = 5, read_only: bool = False) -> _FirestoreTransaction: ...
+    def transaction(
+        self, max_attempts: int = 5, read_only: bool = False
+    ) -> _FirestoreTransaction: ...
 
 
 class _CloudTasksClient(Protocol):
