@@ -38,6 +38,7 @@ _DOCUMENTED_CREDENTIAL_TOKENS = (
     "ABIA1234567890ABCDEF",
     "ASIA1234567890ABCDEF",
     "sk-admin-1234abcd",
+    f"sk-admin-{'A' * 24}",
     *(
         f"{prefix}-{'A' * 24}"
         for prefix in (
@@ -341,6 +342,7 @@ def test_public_answer_rejects_non_public_or_sensitive_source_urls(
         "https://example.com/companies/sk-telecom-sustainability-report",
         "https://example.com/reports/sk-admin-dashboard",
         "https://example.com/reports/sk-admin-dashboard-v2",
+        "https://example.com/reports/sk-admin-dashboard-version-2026",
         "https://example.com/r%C3%A9sum%C3%A9?q=cafe%CC%81",
         "https://example.com/report?completion=100%25",
     ],
