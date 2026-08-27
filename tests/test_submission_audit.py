@@ -160,3 +160,43 @@ def test_symbolic_credential_expressions_are_not_secret_literals(
     git(repository, "add", target.name)
 
     assert audit_repository(repository) == []
+
+
+@pytest.mark.parametrize(
+    ("path", "content"),
+    [
+        ("runtime.env", seed("api_", "key=abcdefghijklmnop\n").decode()),
+        (
+            "runtime.env",
+            seed("export service_", "token=p@ssw0rd!VeryLong\n").decode(),
+        ),
+        ("runtime.env", seed("# TOK", "EN=abcdefghijklmnop\n").decode()),
+        ("config.yaml", seed("tok", "en: eyJhbGciOi!abc.def\n").decode()),
+        ("config.yaml", seed("tok", "en: |\n  abcdefghijklmnop\n").decode()),
+        ("settings.py", seed("API_", 'KEY = b"abcdefghijklmnop"\n').decode()),
+        ("settings.py", seed("TOK", 'EN = """abcdefghijklmnop"""\n').decode()),
+        (
+            "settings.toml",
+            seed("tok", 'en = """abcdefghijklmnop"""\n').decode(),
+        ),
+    ],
+)
+def test_additional_literal_credential_forms_fail(
+    repository: Path, path: str, content: str
+) -> None:
+    target = repository / path
+    target.write_text(content, encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert any("credential assignment" in item for item in audit_repository(repository))
+
+
+def test_terraform_interpolation_is_not_a_secret_literal(repository: Path) -> None:
+    target = repository / "main.tf"
+    target.write_text(
+        seed("sec", 'ret = "${var.api_key_pepper_secret_id}"\n').decode(),
+        encoding="utf-8",
+    )
+    git(repository, "add", target.name)
+
+    assert audit_repository(repository) == []

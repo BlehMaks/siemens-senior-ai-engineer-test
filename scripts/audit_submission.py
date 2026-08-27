@@ -31,20 +31,6 @@ CONTENT_RULES = (
         "private key",
         re.compile(rb"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----"),
     ),
-    (
-        "credential assignment",
-        re.compile(
-            rb"(?:"
-            rb"(?i:[\"']?(?:api[_-]?key|password|secret|token)[\"']?\s*[:=]\s*"
-            rb"[\"'][^\"'\r\n]{8,}[\"'])"
-            rb"|(?i:[\"']?(?:api[_-]?key|password|secret|token)[\"']?\s*:\s*"
-            rb"[A-Za-z0-9_+/=@.-]{16,})(?=\s*(?:#|$))"
-            rb"|(?m:^[ \t]*(?:export[ \t]+)?[A-Z0-9_-]*"
-            rb"(?:API[_-]?KEY|PASSWORD|SECRET|TOKEN)[A-Z0-9_-]*"
-            rb"[ \t]*=[ \t]*[A-Za-z0-9_+/=@.-]{16,})(?=[ \t]*(?:#|$))"
-            rb")"
-        ),
-    ),
     ("OpenRouter credential", re.compile(rb"OPENROUTER_(?:API_)?KEY")),
     (
         "private council artifact",
@@ -59,6 +45,24 @@ CONTENT_RULES = (
             rb"|(?i:[A-Z]:\\Users\\[A-Za-z0-9._-]+\\))"
         ),
     ),
+)
+
+CREDENTIAL_ASSIGNMENT = re.compile(
+    r"(?:^|(?<=[{,]))[ \t]*(?:\#[ \t]*)?(?:export[ \t]+)?"
+    r"(?P<key_quote>[\"']?)(?P<key>(?:[A-Za-z0-9]+[_-])*"
+    r"(?:api[_-]?key|password|secret|token))(?P=key_quote)"
+    r"[ \t]*[:=][ \t]*(?P<value>.*)$",
+    re.IGNORECASE,
+)
+QUOTED_VALUE = re.compile(r"(?i:[bruf]{0,3})(?P<quote>\"\"\"|'''|\"|')")
+SYMBOLIC_VALUE = re.compile(
+    r"(?:"
+    r"\$\{[^{}\r\n]+\}|\$[A-Za-z_][A-Za-z0-9_]*|"
+    r"(?:var|local|module|data|settings|google_[A-Za-z0-9_]*|"
+    r"aws_[A-Za-z0-9_]*|azurerm_[A-Za-z0-9_]*)\.[A-Za-z0-9_.\[\]\"'-]+|"
+    r"[A-Za-z_][A-Za-z0-9_.]*\s*\(.*\)(?:\.[A-Za-z_][A-Za-z0-9_]*\(.*\))*"
+    r")",
+    re.DOTALL,
 )
 
 
@@ -107,6 +111,79 @@ def _path_findings(path: str) -> list[str]:
     return findings
 
 
+def _strip_inline_comment(value: str) -> str:
+    """Remove a trailing configuration comment without excluding `#` in a secret."""
+
+    return re.split(r"[ \t]+#", value, maxsplit=1)[0].strip()
+
+
+def _is_literal(value: str, *, minimum_length: int) -> bool:
+    candidate = value.strip()
+    if len(candidate) < minimum_length or SYMBOLIC_VALUE.fullmatch(candidate):
+        return False
+    if candidate.startswith("$(") or ") ->" in candidate:
+        return False
+    return re.match(r"[A-Za-z_][A-Za-z0-9_.]*\s*\(", candidate) is None
+
+
+def _quoted_literal(value: str, following_lines: list[str]) -> str | None:
+    quote_match = QUOTED_VALUE.match(value)
+    if quote_match is None:
+        return None
+
+    quote = quote_match.group("quote")
+    remainder = value[quote_match.end() :]
+    if quote in remainder:
+        return remainder.split(quote, maxsplit=1)[0]
+    if len(quote) == 1:
+        return None
+
+    chunks = [remainder]
+    for line in following_lines:
+        if quote in line:
+            chunks.append(line.split(quote, maxsplit=1)[0])
+            return "\n".join(chunks)
+        chunks.append(line)
+    return None
+
+
+def _contains_credential_assignment(content: bytes) -> bool:
+    """Recognize committed credential literals while ignoring symbolic references."""
+
+    lines = content.decode("utf-8", errors="replace").splitlines()
+    for index, line in enumerate(lines):
+        assignment = CREDENTIAL_ASSIGNMENT.search(line)
+        if assignment is None:
+            continue
+
+        value = assignment.group("value").strip()
+        if re.fullmatch(r"[|>][+-]?[1-9]?", value):
+            base_indent = len(line) - len(line.lstrip())
+            block_lines: list[str] = []
+            for part in lines[index + 1 :]:
+                if not part.strip():
+                    block_lines.append("")
+                    continue
+                if len(part) - len(part.lstrip()) <= base_indent:
+                    break
+                block_lines.append(part.strip())
+            block = "\n".join(block_lines)
+            if _is_literal(block, minimum_length=16):
+                return True
+            continue
+
+        quoted = _quoted_literal(value, lines[index + 1 :])
+        if quoted is not None:
+            if _is_literal(quoted, minimum_length=8):
+                return True
+            continue
+
+        if _is_literal(_strip_inline_comment(value), minimum_length=16):
+            return True
+
+    return False
+
+
 def audit_repository(repo: Path) -> list[str]:
     """Audit the exact Git index and report non-ignored untracked files."""
 
@@ -123,6 +200,8 @@ def audit_repository(repo: Path) -> list[str]:
         if len(content) > MAX_PUBLIC_FILE_BYTES:
             findings.append(f"oversized tracked file: {path}")
             continue
+        if _contains_credential_assignment(content):
+            findings.append(f"credential assignment: {path}")
         for label, rule in CONTENT_RULES:
             if rule.search(content):
                 findings.append(f"{label}: {path}")
