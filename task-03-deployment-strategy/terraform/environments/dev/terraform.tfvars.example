@@ -1,0 +1,12 @@
+project_id                    = "replace-with-assessment-project-id"
+project_number                = "123456789012"
+region                        = "europe-west3"
+system_code                   = "sai"
+billing_account_id            = "ABC123-DEF456-GHI789"
+budget_notification_emails    = ["cloud-budgets@example.com"]
+api_service_account_email     = "sai-dev-api@replace-with-assessment-project-id.iam.gserviceaccount.com"
+worker_service_account_email  = "sai-dev-worker@replace-with-assessment-project-id.iam.gserviceaccount.com"
+deployer_service_account_email = "sai-dev-deploy@replace-with-assessment-project-id.iam.gserviceaccount.com"
+labels = {
+  owner = "platform"
+}
