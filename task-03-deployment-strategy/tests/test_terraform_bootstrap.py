@@ -178,7 +178,10 @@ def test_deployer_can_attach_only_the_three_runtime_identities() -> None:
     )[1]
     assert 'toset(["api", "tasks", "worker"])' in resource
     assert 'role               = "roles/iam.serviceAccountUser"' in resource
-    assert 'member             = "serviceAccount:${module.deployer_identity.email}"' in resource
+    assert (
+        'member             = "serviceAccount:${module.deployer_identity.email}"'
+        in resource
+    )
 
 
 def test_example_tfvars_are_secret_free_and_realistic() -> None:
