@@ -47,6 +47,16 @@ run "default_contract_is_bounded_and_digest_pinned" {
   }
 
   assert {
+    condition     = !google_cloud_run_v2_service.api.invoker_iam_disabled
+    error_message = "API must keep Cloud Run IAM checks enabled."
+  }
+
+  assert {
+    condition     = !google_cloud_run_v2_service.worker.invoker_iam_disabled
+    error_message = "Worker must keep Cloud Run IAM checks enabled."
+  }
+
+  assert {
     condition     = google_cloud_run_v2_service_iam_member.api_public_invoker["baseline"].member == "allUsers"
     error_message = "Only baseline mode should grant unauthenticated API invocation."
   }

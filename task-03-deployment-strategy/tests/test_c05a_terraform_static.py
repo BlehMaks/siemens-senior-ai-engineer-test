@@ -25,6 +25,7 @@ def read(path: Path) -> str:
 def test_run_services_keeps_worker_private_and_oidc_bound() -> None:
     source = read(RUN_SERVICES_MAIN)
 
+    assert source.count("invoker_iam_disabled = false") == 2
     assert 'ingress             = var.worker_ingress' in source
     assert 'resource "google_cloud_run_v2_service_iam_binding" "worker_invoker"' in source
     assert 'role     = "roles/run.invoker"' in source

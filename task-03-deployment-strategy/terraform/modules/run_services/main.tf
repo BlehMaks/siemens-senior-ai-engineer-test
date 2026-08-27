@@ -61,6 +61,7 @@ resource "google_cloud_run_v2_service" "api" {
   launch_stage         = "BETA"
   deletion_protection  = true
   default_uri_disabled = var.api_default_uri_disabled
+  invoker_iam_disabled = false
   labels               = local.common_labels
 
   template {
@@ -108,12 +109,13 @@ resource "google_cloud_run_v2_service" "api" {
 resource "google_cloud_run_v2_service" "worker" {
   provider = google-beta
 
-  project             = var.project_id
-  location            = var.region
-  name                = "${var.system_code}-${var.environment}-worker"
-  ingress             = var.worker_ingress
-  deletion_protection = true
-  labels              = local.common_labels
+  project              = var.project_id
+  location             = var.region
+  name                 = "${var.system_code}-${var.environment}-worker"
+  ingress              = var.worker_ingress
+  deletion_protection  = true
+  invoker_iam_disabled = false
+  labels               = local.common_labels
 
   template {
     service_account                  = var.worker_service_account_email
