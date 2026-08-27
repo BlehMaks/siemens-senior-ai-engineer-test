@@ -14,10 +14,13 @@ enterprise boundaries reviewable.
   target.
 - [C01B capacity model and local proof](architecture/capacity-model.md) provides the
   executable fake-provider load scenario and machine-readable sample result.
+- [C01A production-scale gates](architecture/production-scale.md) define the staged
+  pilot-to-global migration, placement/data/edge/recovery triggers, SLO/DR contract,
+  residency and IAM reviews, and FinOps worksheet.
 - [ADR-0001](architecture/adr/0001-gcp-reference-profiles.md) records the conditional
   GCP decision and its reversal triggers.
 - [C03 bootstrap Terraform](terraform/bootstrap/README.md) adds the executable
-  identity and remote-state foundation for later GCP stacks.
+  identity and remote-state foundation for the assessment stack.
 
 GCP is selected for the executable assessment cell because Cloud Run, Cloud Tasks,
 Firestore, Secret Manager, Artifact Registry, and Workload Identity Federation form
@@ -31,33 +34,34 @@ SLO/DR/FinOps/governance gates.
 - Deterministic fake inference is the reproducible CI and cloud-smoke default.
 - Local Ollama is the default real-model development and benchmark path.
 - Cloud GPU infrastructure is disabled by default and remains budget gated.
-- No live cloud apply, paid GPU, or public deployment is part of C01.
+- No live cloud apply, paid GPU, or public deployment has been performed or claimed.
 
 ## Delivery status
 
-| Item | Status after C01 | Required evidence |
+| Item | Current public status | Evidence boundary |
 |---|---|---|
 | Provider and service decision | Designed | Weighted scorecard, reversal triggers, and official references |
 | Assessment and enterprise topology | Designed | Container/plane and request-sequence diagrams with explicit boundaries |
-| Container | Pending C02 | Locked multi-architecture build, non-root/read-only smoke, SBOM, scans |
-| Identity and Terraform | C03 foundation shipped; C04-C07 pending | WIF/IAM, managed services, static policy, plan, rollback, teardown, budget checks |
-| Enterprise migration | Pending C01A | Residency, SLO/RTO/RPO, IAM, DR, FinOps, and approval gates |
+| Container | C02 shipped and locally verified | Locked multi-architecture build, non-root/read-only smoke, SBOM and local scans; no deployed image claim |
+| Identity and Terraform | C03-C05C shipped and credential-free validated | Bootstrap, managed services, bounded execution, cloud adapters and integration; real provider plan remains C08 |
+| Keyless delivery | C06 shipped and statically/lint verified | Pinned PR gates, WIF plan/apply, immutable digest and protected-environment contract; external GitHub settings remain operator prerequisites |
+| Operations | C07 shipped and locally verified | Preflight, bounded API smoke, existing-revision rollback and exact-plan teardown; no live project execution claim |
+| Enterprise migration | C01A shipped as gated guidance | Residency, SLO/RTO/RPO, IAM, DR, FinOps, validation owners and explicit non-claims |
 | Capacity proof | C01B local proof shipped | Repeatable fake-provider load scenario and machine-readable measurements |
+| Real assessment cell | Not executed | C08 requires a supplied project, billing budget, protected approval, evidence capture and verified cleanup |
 
 ## Verification
 
-C01 is documentation-only. Its checks cover Markdown structure, local links, diagram
-blocks, official-source reachability, score arithmetic, and the submission audit.
-Later implementation work must pass the repository gate:
+The normal repository gate covers formatting, lint, typing, tests, and the public
+submission audit:
 
 ```bash
 make check
 ```
 
-The C03 Terraform slice is intentionally bootstrap-only: it creates the state
-bucket, required APIs, workload identities, and optional GitHub federation.
-Managed services, Cloud Run, Cloud Tasks, monitoring, and budgets remain
-deferred to C04-C07.
+Terraform modules and environments additionally pass credential-free `fmt`,
+`validate`, and mock-plan contracts. Those checks prove configuration structure and
+negative policy cases; they do not replace the approval-gated real plan in C08.
 
 Operational preflight, smoke, existing-revision rollback, and guarded teardown are
 documented in [the assessment-cell runbooks](architecture/runbooks.md).
