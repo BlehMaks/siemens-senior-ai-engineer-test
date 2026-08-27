@@ -33,7 +33,10 @@ def _bundled_migration(version: int, name: str, filename: str) -> _Migration:
     return _Migration(version, name, sql)
 
 
-_MIGRATIONS = (_bundled_migration(1, "initial", "001_initial.sql"),)
+_MIGRATIONS = (
+    _bundled_migration(1, "initial", "001_initial.sql"),
+    _bundled_migration(2, "api-key-lifecycle", "002_api_key_lifecycle.sql"),
+)
 _CREATE_LEDGER = """
     CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
@@ -52,6 +55,8 @@ _REQUIRED_COLUMNS = {
         "created_at",
         "expires_at",
         "revoked_at",
+        "scopes",
+        "rotated_from_key_id",
     ),
     "sessions": ("tenant_id", "session_id", "label", "created_at", "updated_at"),
     "runs": (
@@ -210,10 +215,11 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
         rows = await (
             await connection.execute(f'PRAGMA table_info("{table}")')
         ).fetchall()
-        if not set(required) <= {row[1] for row in rows}:
+        columns = {row[1] for row in rows}
+        if not set(required) <= columns:
             raise MigrationError("database physical schema is incompatible")
 
-    foreign_keys = await (
+    reflection_foreign_keys = await (
         await connection.execute('PRAGMA foreign_key_list("run_reflections")')
     ).fetchall()
     if not any(
@@ -221,7 +227,7 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
         and row[3] == "tenant_id"
         and row[4] == "tenant_id"
         and row[6].upper() == "CASCADE"
-        for row in foreign_keys
+        for row in reflection_foreign_keys
     ):
         raise MigrationError("database reflection schema is incompatible")
 

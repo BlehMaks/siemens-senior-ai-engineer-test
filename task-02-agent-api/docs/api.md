@@ -1,9 +1,8 @@
 # Research Agent API contract
 
 This document freezes the public HTTP and event-stream contract for API v1. It
-does not define authentication, persistence, queue processing, or route
-implementations. All identifiers are opaque strings; clients must not parse
-meaning from them.
+does not define route implementations or queue processing. All identifiers are
+opaque strings; clients must not parse meaning from them.
 
 ## HTTP surface
 
@@ -26,6 +25,16 @@ Health endpoints are intentionally unversioned. The application API is under
 
 ## Request headers
 
+- `/health/live` and `/health/ready` are public. Future `/v1/**` route
+  implementations require `Authorization: Bearer <api-key>`.
+- API keys are created once by local bootstrap tooling and are never persisted
+  as plaintext. Stored key material is a versioned HMAC-SHA256 digest with an
+  operator-provided pepper of at least 32 bytes.
+- The verified key derives the tenant. A request body, path, query parameter,
+  cursor, or idempotency key never supplies tenant identity.
+- Missing, malformed, unknown, expired, or revoked credentials return the same
+  safe `401` envelope. A verified credential that lacks a required scope returns
+  a safe `403` envelope.
 - `X-Correlation-ID` is optional on every operation. It is an opaque ID used
   for support correlation. A generated or accepted correlation ID is returned
   in the safe error envelope.
@@ -38,6 +47,22 @@ Health endpoints are intentionally unversioned. The application API is under
 
 Header values reject whitespace, signs, padding, and unbounded numeric values.
 Neither an idempotency key nor a cursor carries tenant or database meaning.
+
+### Local key bootstrap
+
+Set `AGENT_API_KEY_PEPPER` to an unpadded base64url value representing at least
+32 random bytes. Create a tenant key with:
+
+```text
+agent-api-key-admin --db ./agent-api.sqlite3 create \
+  --tenant-id tenant-one --scope sessions:read --scope sessions:write
+```
+
+The command prints the new key once. Store it in the caller's secret store. For
+rotation or revocation, put `Bearer <api-key>` in `AGENT_API_AUTHORIZATION` and
+run the corresponding subcommand. Credentials are intentionally never accepted
+as command-line values, where process listings and shell history could expose
+them. The bootstrap command is local administration tooling, not an HTTP route.
 
 ## Sessions and pagination
 
@@ -175,4 +200,5 @@ Public schemas forbid extra fields. They expose no authenticated tenant ID,
 prompt, chain-of-thought, raw page, raw provider response, internal exception,
 traceback, lease, worker, queue, database, or storage identifier. Authorization,
 tenant scoping, idempotent persistence, event retention, and cancellation
-execution are deliberately deferred to later implementation units.
+execution belong to their implementation units; this document only states the
+public contract they must preserve.

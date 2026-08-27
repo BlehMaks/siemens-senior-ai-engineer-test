@@ -283,6 +283,69 @@ async def test_corrupt_key_hash_fails_safe_without_echoing_storage(
     assert sentinel not in str(error.value)
 
 
+@pytest.mark.asyncio
+async def test_corrupt_key_scopes_fail_safe_without_echoing_storage(
+    migrated_path: Path,
+) -> None:
+    await SQLiteTenantRepository(migrated_path).put(
+        TenantRecord(tenant_id="tenant-one", created_at=NOW)
+    )
+    keys = SQLiteKeyHashRepository(migrated_path)
+    await keys.put(
+        ApiKeyHashRecord(
+            tenant_id="tenant-one",
+            key_id="key-one",
+            key_hash=b"h" * 32,
+            scopes=("runs:read",),
+            created_at=NOW,
+        )
+    )
+    sentinel = "credential-private-sentinel"
+    with sqlite3.connect(migrated_path) as connection:
+        connection.execute(
+            "UPDATE api_key_hashes SET scopes = ? WHERE tenant_id = ? AND key_id = ?",
+            (f'["{sentinel}"]', "tenant-one", "key-one"),
+        )
+
+    with pytest.raises(StorageError) as error:
+        await keys.get(tenant_id="tenant-one", key_id="key-one")
+    assert sentinel not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_key_rotation_requires_the_recorded_predecessor(
+    migrated_path: Path,
+) -> None:
+    await SQLiteTenantRepository(migrated_path).put(
+        TenantRecord(tenant_id="tenant-one", created_at=NOW)
+    )
+    keys = SQLiteKeyHashRepository(migrated_path)
+    await keys.put(
+        ApiKeyHashRecord(
+            tenant_id="tenant-one",
+            key_id="key-one",
+            key_hash=b"h" * 32,
+            created_at=NOW,
+        )
+    )
+    replacement = ApiKeyHashRecord(
+        tenant_id="tenant-one",
+        key_id="key-two",
+        key_hash=b"n" * 32,
+        created_at=NOW + timedelta(seconds=1),
+        rotated_from_key_id="key-other",
+    )
+
+    with pytest.raises(ValueError, match="predecessor"):
+        await keys.rotate(
+            old_tenant_id="tenant-one",
+            old_key_id="key-one",
+            new_record=replacement,
+            at=NOW + timedelta(seconds=1),
+        )
+    assert await keys.get(tenant_id="tenant-one", key_id="key-two") is None
+
+
 def test_repositories_reject_symlink_database_paths(migrated_path: Path) -> None:
     link = migrated_path.with_name("storage-link.sqlite3")
     try:
@@ -292,6 +355,19 @@ def test_repositories_reject_symlink_database_paths(migrated_path: Path) -> None
 
     with pytest.raises(StorageError, match="regular file"):
         SQLiteTenantRepository(link)
+
+
+def test_api_key_scope_storage_bound_is_validated_before_sql() -> None:
+    scopes = tuple(f"scope{i:02d}" + "a" * 55 for i in range(64))
+
+    with pytest.raises(ValueError, match="scopes exceed"):
+        ApiKeyHashRecord(
+            tenant_id="tenant-one",
+            key_id="key-one",
+            key_hash=b"h" * 32,
+            scopes=scopes,
+            created_at=NOW,
+        )
 
 
 @pytest.mark.asyncio

@@ -47,7 +47,7 @@ from ..schemas import RunEvent, RunFailure, SessionLabel
 DisplayName = Annotated[
     str, StringConstraints(min_length=1, max_length=120, strip_whitespace=True)
 ]
-KeyHash = Annotated[bytes, Field(min_length=32, max_length=128)]
+KeyHash = Annotated[bytes, Field(min_length=32, max_length=128, repr=False)]
 AuditAction = Annotated[
     str,
     StringConstraints(
@@ -56,8 +56,17 @@ AuditAction = Annotated[
         pattern=r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
     ),
 ]
+ApiKeyScope = Annotated[
+    str,
+    StringConstraints(
+        min_length=3,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9]*(?::[a-z][a-z0-9]*)*$",
+    ),
+]
 
 _OPAQUE_ID = TypeAdapter(OpaqueId)
+_MAX_SCOPES_TEXT = 2048
 
 
 class StorageError(RuntimeError):
@@ -151,9 +160,11 @@ class ApiKeyHashRecord(StrictModel):
     tenant_id: OpaqueId
     key_id: OpaqueId
     key_hash: KeyHash
+    scopes: tuple[ApiKeyScope, ...] = ()
     created_at: datetime
     expires_at: datetime | None = None
     revoked_at: datetime | None = None
+    rotated_from_key_id: OpaqueId | None = None
 
     _created_at_is_utc = field_validator("created_at")(_utc)
     _optional_timestamps_are_utc = field_validator("expires_at", "revoked_at")(
@@ -167,13 +178,39 @@ class ApiKeyHashRecord(StrictModel):
             raise ValueError("key hash must be exact bytes")
         return value
 
+    @field_validator("scopes", mode="before")
+    @classmethod
+    def normalize_scopes(cls, value: object) -> object:
+        if isinstance(value, list):
+            value = tuple(value)
+        if type(value) is not tuple:
+            raise ValueError("scopes must be an exact tuple")
+        if len(value) > 64:
+            raise ValueError("too many key scopes")
+        if any(type(scope) is not str for scope in value):
+            raise ValueError("scopes must be exact strings")
+        normalized = tuple(sorted(set(value)))
+        if len(json.dumps(normalized, separators=(",", ":"))) > _MAX_SCOPES_TEXT:
+            raise ValueError("serialized key scopes exceed their limit")
+        return normalized
+
     @model_validator(mode="after")
     def validate_lifecycle(self) -> ApiKeyHashRecord:
         if self.expires_at is not None and self.expires_at <= self.created_at:
             raise ValueError("key expiry must follow creation")
         if self.revoked_at is not None and self.revoked_at < self.created_at:
             raise ValueError("key revocation cannot precede creation")
+        if self.rotated_from_key_id == self.key_id:
+            raise ValueError("key cannot rotate from itself")
         return self
+
+    def status_at(self, now: datetime) -> str:
+        checked_now = _utc(now)
+        if self.revoked_at is not None:
+            return "revoked"
+        if self.expires_at is not None and self.expires_at <= checked_now:
+            return "expired"
+        return "active"
 
 
 class SessionRecord(StrictModel):
@@ -264,7 +301,8 @@ class SQLiteKeyHashRepository(_PathRepository):
         async with _connection(self._path, write=True) as connection:
             row = await (
                 await connection.execute(
-                    "SELECT key_hash, created_at, expires_at, revoked_at "
+                    "SELECT key_hash, scopes, created_at, expires_at, revoked_at, "
+                    "rotated_from_key_id "
                     "FROM api_key_hashes WHERE tenant_id = ? AND key_id = ?",
                     (checked.tenant_id, checked.key_id),
                 )
@@ -275,8 +313,9 @@ class SQLiteKeyHashRepository(_PathRepository):
                 return False
             await connection.execute(
                 "INSERT INTO api_key_hashes "
-                "(tenant_id, key_id, key_hash, created_at, expires_at, revoked_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(tenant_id, key_id, key_hash, scopes, created_at, expires_at, "
+                "revoked_at, rotated_from_key_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (checked.tenant_id, checked.key_id, *values),
             )
             return True
@@ -288,13 +327,13 @@ class SQLiteKeyHashRepository(_PathRepository):
         async with _connection(self._path) as connection:
             row = await (
                 await connection.execute(
-                    "SELECT tenant_id, key_id, key_hash, created_at, expires_at, "
-                    "revoked_at FROM api_key_hashes "
+                    "SELECT tenant_id, key_id, key_hash, scopes, created_at, "
+                    "expires_at, revoked_at, rotated_from_key_id FROM api_key_hashes "
                     "WHERE tenant_id = ? AND key_id = ?",
                     scope,
                 )
             ).fetchone()
-        return None if row is None else _decode_key_hash(row)
+        return None if row is None else _decode_key(row)
 
     async def revoke(
         self, *, tenant_id: OpaqueId, key_id: OpaqueId, at: datetime
@@ -317,6 +356,53 @@ class SQLiteKeyHashRepository(_PathRepository):
                 "UPDATE api_key_hashes SET revoked_at = ? "
                 "WHERE tenant_id = ? AND key_id = ? AND revoked_at IS NULL",
                 (checked_at, *scope),
+            )
+            return cursor.rowcount == 1
+
+    async def rotate(
+        self,
+        *,
+        old_tenant_id: OpaqueId,
+        old_key_id: OpaqueId,
+        new_record: ApiKeyHashRecord,
+        at: datetime,
+    ) -> bool:
+        checked_old = (_scope_id(old_tenant_id), _scope_id(old_key_id))
+        checked_new = _checked(ApiKeyHashRecord, new_record)
+        if checked_new.tenant_id != checked_old[0]:
+            raise ValueError("rotated key must stay in the same tenant")
+        if checked_new.rotated_from_key_id != checked_old[1]:
+            raise ValueError("rotated key must identify its predecessor")
+        checked_at = _timestamp(at)
+        if checked_new.created_at != at or checked_new.revoked_at is not None:
+            raise ValueError("rotated key lifecycle is invalid")
+        values = _key_values(checked_new)
+        async with _connection(self._path, write=True) as connection:
+            old = await (
+                await connection.execute(
+                    "SELECT created_at, expires_at, revoked_at FROM api_key_hashes "
+                    "WHERE tenant_id = ? AND key_id = ?",
+                    checked_old,
+                )
+            ).fetchone()
+            if old is None:
+                return False
+            if at < _parse_timestamp(old[0]):
+                raise ValueError("key rotation cannot precede creation")
+            if old[2] is not None:
+                return False
+            if old[1] is not None and _parse_timestamp(old[1]) <= at:
+                return False
+            await connection.execute(
+                "INSERT INTO api_key_hashes "
+                "(tenant_id, key_id, key_hash, scopes, created_at, expires_at, "
+                "revoked_at, rotated_from_key_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (checked_new.tenant_id, checked_new.key_id, *values),
+            )
+            cursor = await connection.execute(
+                "UPDATE api_key_hashes SET revoked_at = ? "
+                "WHERE tenant_id = ? AND key_id = ? AND revoked_at IS NULL",
+                (checked_at, *checked_old),
             )
             return cursor.rowcount == 1
 
@@ -894,26 +980,36 @@ def _lease_expiry(now: datetime, lease_seconds: int) -> datetime | None:
 def _key_values(record: ApiKeyHashRecord) -> tuple[object, ...]:
     return (
         record.key_hash,
+        json.dumps(record.scopes, separators=(",", ":")),
         _timestamp(record.created_at),
         None if record.expires_at is None else _timestamp(record.expires_at),
         None if record.revoked_at is None else _timestamp(record.revoked_at),
+        record.rotated_from_key_id,
     )
 
 
-def _decode_key_hash(row: Sequence[object]) -> ApiKeyHashRecord:
+def _decode_key(row: Sequence[object]) -> ApiKeyHashRecord:
     try:
+        scopes_text = row[3]
+        if type(scopes_text) is not str:
+            raise ValueError("stored key scopes are not text")
+        scopes = json.loads(scopes_text)
+        if type(scopes) is not list or any(type(scope) is not str for scope in scopes):
+            raise ValueError("stored key scopes are not a string list")
         return ApiKeyHashRecord.model_validate(
             {
                 "tenant_id": row[0],
                 "key_id": row[1],
                 "key_hash": row[2],
-                "created_at": _parse_timestamp(row[3]),
-                "expires_at": None if row[4] is None else _parse_timestamp(row[4]),
-                "revoked_at": None if row[5] is None else _parse_timestamp(row[5]),
+                "scopes": tuple(scopes),
+                "created_at": _parse_timestamp(row[4]),
+                "expires_at": None if row[5] is None else _parse_timestamp(row[5]),
+                "revoked_at": None if row[6] is None else _parse_timestamp(row[6]),
+                "rotated_from_key_id": row[7],
             }
         )
     except (TypeError, ValueError):
-        raise StorageError("stored key verifier failed validation") from None
+        raise StorageError("stored key hash failed validation") from None
 
 
 def _decode_session(row: Sequence[object]) -> SessionRecord:
