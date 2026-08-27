@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from ipaddress import ip_address
 from pathlib import Path
@@ -39,7 +40,34 @@ from .contracts import (
 
 _ID_ADAPTER = TypeAdapter(OpaqueId)
 _MAX_SERIALIZED_BYTES = 64 * 1024
-_SENSITIVE_QUERY_PARTS = ("key", "password", "secret", "signature", "token")
+_SENSITIVE_QUERY_NAMES = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "apikey",
+        "auth",
+        "authorization",
+        "client_secret",
+        "credential",
+        "credentials",
+        "key",
+        "passwd",
+        "password",
+        "secret",
+        "sig",
+        "signature",
+        "token",
+    }
+)
+_SENSITIVE_QUERY_SUFFIXES = (
+    "_access_token",
+    "_api_key",
+    "_secret",
+    "_signature",
+    "_token",
+)
+# A valid plan can issue at most eight searches with five hits per search.
+_MAX_RUN_HITS = 40
 _FAILURE_CODES = {
     FailureReason.BUDGET_EXHAUSTED: FailureCode.BUDGET_EXHAUSTED,
     FailureReason.CANCELLED: FailureCode.CANCELLED,
@@ -121,8 +149,9 @@ class InMemoryReflectionRepository:
     def get(
         self, *, tenant_id: OpaqueId, session_id: OpaqueId, run_id: OpaqueId
     ) -> RunReflection | None:
-        item = self._items.get(_key(tenant_id, session_id, run_id))
-        return _validate_reflection(item) if item is not None else None
+        key = _key(tenant_id, session_id, run_id)
+        item = self._items.get(key)
+        return _validate_stored_reflection(key, item) if item is not None else None
 
     def list_session(
         self, *, tenant_id: OpaqueId, session_id: OpaqueId, limit: int = 100
@@ -130,19 +159,13 @@ class InMemoryReflectionRepository:
         checked_tenant = _scope_id(tenant_id)
         checked_session = _scope_id(session_id)
         checked_limit = _limit(limit)
-        selected = sorted(
-            (
-                reflection
-                for (
-                    stored_tenant,
-                    stored_session,
-                    _,
-                ), reflection in self._items.items()
-                if stored_tenant == checked_tenant and stored_session == checked_session
-            ),
-            key=lambda reflection: reflection.run_id,
-        )[:checked_limit]
-        return tuple(_validate_reflection(item) for item in selected)
+        selected = [
+            _validate_stored_reflection(key, reflection)
+            for key, reflection in self._items.items()
+            if key[:2] == (checked_tenant, checked_session)
+        ]
+        selected.sort(key=lambda reflection: reflection.run_id)
+        return tuple(selected[:checked_limit])
 
     def delete_run(
         self, *, tenant_id: OpaqueId, session_id: OpaqueId, run_id: OpaqueId
@@ -346,6 +369,7 @@ def _validate_run_result(result: RunResult) -> RunResult:
             or len(result.events) > 16
             or any(type(event) is not PublicEvent for event in result.events)
             or type(result.snapshot.hits) is not tuple
+            or len(result.snapshot.hits) > _MAX_RUN_HITS
             or any(type(hit) is not SearchHit for hit in result.snapshot.hits)
             or type(result.snapshot.evidence) is not tuple
             or len(result.snapshot.evidence) > 24
@@ -419,9 +443,8 @@ def _safe_public_url(raw_url: str) -> bool:
             if not address.is_global:
                 return False
         query = parse_qsl(parsed.query, keep_blank_values=True)
-        return not contains_sensitive_memory_text(parsed.fragment) and not any(
-            any(part in name.casefold() for part in _SENSITIVE_QUERY_PARTS)
-            or contains_sensitive_memory_text(value)
+        return not parsed.fragment and not any(
+            _sensitive_query_name(name) or contains_sensitive_memory_text(value)
             for name, value in query
         )
     except (TypeError, ValueError):
@@ -455,6 +478,22 @@ def _validate_reflection(reflection: RunReflection) -> RunReflection:
         return checked
     except (AttributeError, TypeError, ValidationError, ValueError):
         raise ReflectionInputError("reflection failed strict validation") from None
+
+
+def _validate_stored_reflection(
+    key: tuple[str, str, str], reflection: RunReflection
+) -> RunReflection:
+    checked = _validate_reflection(reflection)
+    if (checked.tenant_id, checked.session_id, checked.run_id) != key:
+        raise ReflectionInputError("stored reflection scope does not match its key")
+    return checked
+
+
+def _sensitive_query_name(name: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "_", name.casefold()).strip("_")
+    return normalized in _SENSITIVE_QUERY_NAMES or normalized.endswith(
+        _SENSITIVE_QUERY_SUFFIXES
+    )
 
 
 def _scope_id(value: object) -> str:

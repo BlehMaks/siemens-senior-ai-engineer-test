@@ -149,3 +149,20 @@ def test_contract_rejects_invalid_scope_and_hostile_reflection_container(
     object.__setattr__(hostile, "actions", list(hostile.actions))
     with pytest.raises(ReflectionInputError, match="strict validation"):
         repository.put(hostile)
+
+
+def test_in_memory_repository_rejects_tampered_scope() -> None:
+    repository = InMemoryReflectionRepository()
+    foreign = reflection(
+        tenant_id="tenant-two",
+        session_id="session-two",
+        run_id="run-foreign",
+    )
+    repository._items[("tenant-one", "session-one", "run-000001")] = foreign
+
+    with pytest.raises(ReflectionInputError, match="scope"):
+        repository.get(
+            tenant_id="tenant-one", session_id="session-one", run_id="run-000001"
+        )
+    with pytest.raises(ReflectionInputError, match="scope"):
+        repository.list_session(tenant_id="tenant-one", session_id="session-one")

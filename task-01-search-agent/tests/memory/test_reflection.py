@@ -136,6 +136,24 @@ def test_request_is_redacted_and_arbitrary_public_text_is_not_retained() -> None
     assert "[redacted]" in serialized
 
 
+@pytest.mark.parametrize(
+    ("raw_request", "secret"),
+    [
+        ("Find Siemens using credential=private-credential", "private-credential"),
+        ("Find Siemens using access_token=private-access", "private-access"),
+        ("Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"),
+        (
+            "Find https://alice:private-pass@example.com/report",
+            "private-pass",
+        ),
+    ],
+)
+def test_request_redacts_common_credential_forms(raw_request: str, secret: str) -> None:
+    serialized = reflect_run(completed_result(request=raw_request)).model_dump_json()
+
+    assert secret.casefold() not in serialized.casefold()
+
+
 def test_hostile_containers_subclasses_and_oversized_usage_fail_typed() -> None:
     with_list = completed_result(run_id="run-hostile-list")
     object.__setattr__(with_list, "events", list(with_list.events))
@@ -177,6 +195,20 @@ def test_hostile_containers_subclasses_and_oversized_usage_fail_typed() -> None:
     )
     with pytest.raises(ReflectionInputError, match="strict observable"):
         reflect_run(oversized)
+
+    too_many_hits = completed_result(run_id="run-hostile-hits")
+    snapshot_values = too_many_hits.snapshot.model_dump(mode="python")
+    snapshot_values["hits"] = too_many_hits.snapshot.hits * 41
+    oversized_snapshot = type(too_many_hits.snapshot).model_validate(
+        snapshot_values, strict=True
+    )
+    too_many_hits = RunResult(
+        snapshot=oversized_snapshot,
+        events=too_many_hits.events,
+        usage=too_many_hits.usage,
+    )
+    with pytest.raises(ReflectionInputError, match="strict observable"):
+        reflect_run(too_many_hits)
 
 
 def test_too_many_events_and_invalid_completion_provenance_fail() -> None:
@@ -223,6 +255,10 @@ def test_too_many_events_and_invalid_completion_provenance_fail() -> None:
         "http://metadata.google.internal/latest",
         "https://www.siemens.com/report?api_key=private-value",
         "https://www.siemens.com/report?q=Bearer%20private-value",
+        "https://www.siemens.com/report?credential=private-value",
+        "https://www.siemens.com/report?auth=private-value",
+        "https://www.siemens.com/report?sig=private-value",
+        "https://www.siemens.com/report#private-fragment",
         "https://user:password@www.siemens.com/report",
     ],
 )
@@ -233,6 +269,14 @@ def test_private_or_credentialed_completion_urls_are_not_retained(
 
     with pytest.raises(ReflectionInputError, match="safe to retain"):
         reflect_run(result)
+
+
+def test_public_completion_url_allows_benign_query_name() -> None:
+    reflected = reflect_run(
+        completed_result(source_url="https://www.siemens.com/report?monkey=business")
+    )
+
+    assert str(reflected.completion_evidence[0].source_url).endswith("monkey=business")
 
 
 def test_reflection_schema_has_no_prompt_reasoning_or_page_fields() -> None:

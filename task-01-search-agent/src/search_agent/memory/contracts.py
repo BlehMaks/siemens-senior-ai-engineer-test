@@ -17,9 +17,10 @@ ReflectionText = Annotated[
 _REDACTIONS = (
     re.compile(r"(?i)\bbearer\b[^.!?]*"),
     re.compile(
-        r"(?i)\b(?:api[\s_-]?key|password|secret|token)\b"
-        r"\s*(?::|=|\bis\b)\s*[^.!?]*"
+        r"(?i)\b(?:api[\s_-]?key|access[\s_-]?token|authorization|credential|"
+        r"password|secret|token)\b\s*(?::|=|\bis\b)\s*(?:basic\s+)?[^.!?]*"
     ),
+    re.compile(r"(?i)\bhttps?://[^/\s:@]+:[^@/\s]+@[^\s]*"),
     re.compile(r"\b(?:sk|ghp|xoxb|AIza)[-_]?[A-Za-z0-9_-]{8,}\b"),
     re.compile(r"(?i)\b(?:system|hidden)\s+prompt\b(?:\s*(?::|=|\bis\b)\s*)?[^.!?]*"),
     re.compile(
