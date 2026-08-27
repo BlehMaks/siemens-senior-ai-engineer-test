@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import math
+import os
 import sqlite3
 import sys
 import threading
@@ -89,13 +90,25 @@ class SQLiteReadinessProbe:
         if self._path.is_symlink() or not self._path.is_file():
             return False
         try:
-            async with aiosqlite.connect(
-                f"{self._path.resolve().as_uri()}?mode=ro", uri=True
-            ) as connection:
-                await validate_current_schema(connection)
+            before = self._path.stat()
+            with self._path.open("rb") as opened:
+                opened_stat = os.fstat(opened.fileno())
+                async with aiosqlite.connect(
+                    f"{self._path.resolve().as_uri()}?mode=ro", uri=True
+                ) as connection:
+                    await validate_current_schema(connection)
+                after = self._path.stat()
         except (MigrationError, OSError, sqlite3.Error):
             return False
-        return True
+        # This bounds the probe's snapshot; a later replacement is caught next time.
+        return (
+            (
+                before.st_dev,
+                before.st_ino,
+            )
+            == (opened_stat.st_dev, opened_stat.st_ino)
+            == (after.st_dev, after.st_ino)
+        )
 
 
 @dataclass(frozen=True, slots=True)

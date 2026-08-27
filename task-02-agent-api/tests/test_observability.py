@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -9,10 +10,12 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
+import aiosqlite
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+import agent_api.observability as observability_module
 from agent_api.app import create_app
 from agent_api.observability import OperationalTelemetry, SQLiteReadinessProbe
 from agent_api.ports import RunFailureCode, RunState
@@ -295,6 +298,37 @@ async def test_sqlite_readiness_is_read_only_and_checks_runtime_tables(
         )
     replacement.replace(path)
     assert not await probe.ready()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_readiness_rejects_replacement_during_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "runtime.sqlite3"
+    await migrate(path)
+    probe = SQLiteReadinessProbe(path)
+    opened = asyncio.Event()
+    resume = asyncio.Event()
+    original = observability_module.validate_current_schema
+
+    async def delayed_validation(connection: aiosqlite.Connection) -> None:
+        opened.set()
+        await resume.wait()
+        await original(connection)
+
+    monkeypatch.setattr(
+        observability_module, "validate_current_schema", delayed_validation
+    )
+    checking = asyncio.create_task(probe.ready())
+    await asyncio.wait_for(opened.wait(), timeout=1)
+    replacement = tmp_path / "replacement.sqlite3"
+    with sqlite3.connect(replacement):
+        pass
+    replacement.replace(path)
+    resume.set()
+
+    assert not await asyncio.wait_for(checking, timeout=1)
 
 
 @pytest.mark.asyncio

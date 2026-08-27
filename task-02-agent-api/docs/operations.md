@@ -36,10 +36,18 @@ failure counter but cannot change request or worker behavior.
 ## Health probes
 
 - `GET /health/live` returns `200` while the process can serve HTTP.
-- `GET /health/ready` performs read-only checks for the migrated run, queue, and
-  quota tables. It returns `200 {"status":"ok",...}` when dependencies are usable
-  and a bounded `503 {"status":"not_ready",...}` otherwise.
+- `GET /health/ready` verifies the migration ledger, physical SQLite schema, and
+  stable file identity during its read-only snapshot. It returns
+  `200 {"status":"ok",...}` when dependencies are usable and a bounded
+  `503 {"status":"not_ready",...}` otherwise. A replacement after the completed
+  snapshot is detected by the next probe; no filesystem probe can close that later
+  race.
 
 Readiness never returns table names, paths, exceptions, or storage diagnostics.
 Telemetry exporter failure does not make the service unready. The local SQLite
 probe is replaceable by a cloud dependency probe without changing the HTTP contract.
+
+Once cancellation has durably made a run terminal, queue deletion is best-effort:
+the request truthfully returns `202 changed=true`, while a retry or terminal worker
+delivery removes stale dispatch. The terminal state prevents that dispatch from
+executing and terminal telemetry is emitted exactly once for the applied transition.

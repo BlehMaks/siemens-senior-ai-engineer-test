@@ -299,10 +299,10 @@ class LocalWorker:
                     next_state=RunState.FAILED,
                     failure_code=RunFailureCode.EXECUTION_FAILED,
                 ),
+                usage=None,
             )
             if terminal is not None:
                 self._observe_work(item, "failed")
-                await self._observe_terminal(terminal, usage=None)
             return
         except Exception:
             terminal = await self._finish_terminal(
@@ -312,10 +312,10 @@ class LocalWorker:
                     next_state=RunState.FAILED,
                     failure_code=RunFailureCode.EXECUTION_FAILED,
                 ),
+                usage=None,
             )
             if terminal is not None:
                 self._observe_work(item, "failed")
-                await self._observe_terminal(terminal, usage=None)
             return
         try:
             projection = _projection_from_result(result, run=current)
@@ -326,13 +326,19 @@ class LocalWorker:
                 failure_code=RunFailureCode.EXECUTION_FAILED,
             )
             result_usage = None
-        terminal = await self._finish_result(item, current, projection)
+        terminal = await self._finish_result(
+            item, current, projection, usage=result_usage
+        )
         if terminal is not None:
             self._observe_work(item, terminal.state.value)
-            await self._observe_terminal(terminal, usage=result_usage)
 
     async def _finish_result(
-        self, item: WorkItem, run: RunRecord, projection: _TerminalProjection
+        self,
+        item: WorkItem,
+        run: RunRecord,
+        projection: _TerminalProjection,
+        *,
+        usage: RunUsage | None,
     ) -> RunRecord | None:
         current = await self._repository.get(tenant_id=run.tenant_id, run_id=run.run_id)
         if current is None:
@@ -346,7 +352,7 @@ class LocalWorker:
             return None
         if not _owns(current, worker_id=self._worker_id, lease_id=_lease_id(run)):
             return None
-        return await self._finish_terminal(item, current, projection)
+        return await self._finish_terminal(item, current, projection, usage=usage)
 
     async def _finish_cancellation(self, item: WorkItem, run: RunRecord) -> None:
         if run.state in TERMINAL_RUN_STATES:
@@ -374,7 +380,12 @@ class LocalWorker:
             await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
 
     async def _finish_terminal(
-        self, item: WorkItem, run: RunRecord, projection: _TerminalProjection
+        self,
+        item: WorkItem,
+        run: RunRecord,
+        projection: _TerminalProjection,
+        *,
+        usage: RunUsage | None,
     ) -> RunRecord | None:
         write = await self._repository.compare_and_set(
             StateUpdate(
@@ -392,8 +403,9 @@ class LocalWorker:
             )
         )
         if write.disposition is WriteDisposition.APPLIED:
-            await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
             assert write.run is not None
+            await self._observe_terminal(write.run, usage=usage)
+            await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
             return write.run
         if (
             write.run is not None

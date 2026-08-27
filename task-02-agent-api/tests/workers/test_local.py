@@ -112,7 +112,8 @@ class FakeQueue:
     async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int:
         async with self._lock:
             if self._cancel_error is not None:
-                raise self._cancel_error
+                error, self._cancel_error = self._cancel_error, None
+                raise error
             keys = [
                 work_id
                 for work_id, item in self._items.items()
@@ -497,10 +498,10 @@ async def test_worker_emits_safe_failed_run_diagnostics(
     payloads = [json.loads(record.message) for record in caplog.records]
     assert [payload["event"] for payload in payloads] == [
         "worker.outcome",
-        "worker.outcome",
         "run.terminal",
+        "worker.outcome",
     ]
-    terminal = payloads[-1]
+    terminal = payloads[1]
     assert terminal["state"] == "failed"
     assert terminal["failure"] == "search_failed"
     assert (
@@ -691,6 +692,57 @@ async def test_applied_cancellation_is_observed_before_queue_cleanup_failure() -
         and dict(sample.labels)["state"] == "cancelled"
     ]
     assert len(terminal) == 1 and terminal[0].value == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("build_executor", "expected_state", "expected_action"),
+    [
+        (
+            lambda: ScriptedExecutor(result=completed_result()),
+            RunState.COMPLETED,
+            "run.completed",
+        ),
+        (
+            lambda: ScriptedExecutor(error=RuntimeError("private executor failure")),
+            RunState.FAILED,
+            "run.failed",
+        ),
+    ],
+)
+async def test_applied_result_is_observed_before_queue_cleanup_failure(
+    build_executor: Callable[[], ScriptedExecutor],
+    expected_state: RunState,
+    expected_action: str,
+) -> None:
+    repository = FakeRunRepository(queued_run())
+    queue = FakeQueue(work_item(), cancel_error=RuntimeError("cleanup unavailable"))
+    audit = AuditRecorder()
+    telemetry = OperationalTelemetry(pseudonym_key=b"t" * 32, audit=audit)
+    worker = LocalWorker(
+        repository=cast(RunRepository, repository),
+        queue=queue,
+        executor=build_executor(),
+        worker_id="worker-one",
+        clock=MutableClock(NOW),
+        lease_id_factory=lambda: "lease-one",
+        telemetry=telemetry,
+    )
+
+    with pytest.raises(RuntimeError, match="cleanup unavailable"):
+        await worker.process_one()
+    await worker.process(work_item())
+
+    stored = await repository.get(tenant_id="tenant-one", run_id="run-one")
+    assert stored is not None and stored.state is expected_state
+    terminal = [
+        sample
+        for sample in telemetry.snapshot()
+        if sample.name == "api_runs_terminal_total"
+        and dict(sample.labels)["state"] == expected_state.value
+    ]
+    assert len(terminal) == 1 and terminal[0].value == 1
+    assert [entry.action for entry in audit.entries].count(expected_action) == 1
 
 
 @pytest.mark.asyncio

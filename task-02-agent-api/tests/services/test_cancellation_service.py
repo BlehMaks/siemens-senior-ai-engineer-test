@@ -68,10 +68,11 @@ async def test_retry_repairs_queue_after_persisted_cancellation(
         query="Find the documented answer.",
     )
 
-    with pytest.raises(StorageError, match="private queue cancellation failure"):
-        await service.cancel(tenant_id="tenant-one", run_id="run-one")
+    cancelled = await service.cancel(tenant_id="tenant-one", run_id="run-one")
     persisted = await repository.get(tenant_id="tenant-one", run_id="run-one")
     assert persisted is not None and persisted.state is RunState.CANCELLED
+    assert cancelled.state is RunState.CANCELLED
+    assert cancelled.changed is True
 
     repaired = await service.cancel(tenant_id="tenant-one", run_id="run-one")
 

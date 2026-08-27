@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import secrets
 from collections.abc import Callable
 from datetime import datetime
@@ -142,9 +143,11 @@ class RunService:
         if run is None:
             raise RunNotFound
         # Queued and lease-expired cancellations are terminal immediately. Removing
-        # their durable dispatch is idempotent, so a retry repairs a prior queue error.
+        # their dispatch is best-effort: terminal state blocks duplicate execution,
+        # and a retry or worker delivery repairs cleanup without changing the result.
         if run.state is RunState.CANCELLED:
-            await self._queue.cancel(tenant_id=tenant_id, run_id=run_id)
+            with contextlib.suppress(Exception):
+                await self._queue.cancel(tenant_id=tenant_id, run_id=run_id)
         return CancellationResponse(
             run_id=run.run_id,
             state=run.state,

@@ -13,8 +13,9 @@ from openapi_contract import build_contract_app
 from pydantic import AnyHttpUrl
 
 from agent_api.app import create_app
-from agent_api.ports import ClaimRequest, RunState, StateUpdate
+from agent_api.ports import ClaimRequest, EnqueueResult, RunState, StateUpdate, WorkItem
 from agent_api.schemas import RunEventType
+from agent_api.services import RunService
 from agent_api.storage import (
     SessionRecord,
     SQLiteAuditRepository,
@@ -34,6 +35,21 @@ CORRELATION_ID = "corr-cancel-client-0001"
 class FixedPepper:
     def pepper(self) -> bytes:
         return b"p" * 32
+
+
+class FailOnceCleanupQueue:
+    def __init__(self, delegate: SQLiteWorkQueue) -> None:
+        self._delegate = delegate
+        self._failed = False
+
+    async def enqueue(self, item: WorkItem) -> EnqueueResult:
+        return await self._delegate.enqueue(item)
+
+    async def cancel(self, *, tenant_id: str, run_id: str) -> int:
+        if not self._failed:
+            self._failed = True
+            raise RuntimeError("queue cleanup unavailable")
+        return await self._delegate.cancel(tenant_id=tenant_id, run_id=run_id)
 
 
 @dataclass(frozen=True)
@@ -176,6 +192,48 @@ async def test_queued_cancellation_is_persisted_idempotent_and_emitted_once(
     assert stored.cancellation_requested_at == NOW
     assert work is None
     assert [event.event_type for event in events].count(RunEventType.CANCELLED) == 1
+    terminal = [
+        sample
+        for sample in cancellation_context.app.state.telemetry.snapshot()
+        if sample.name == "api_runs_terminal_total"
+        and dict(sample.labels)["state"] == "cancelled"
+    ]
+    assert len(terminal) == 1 and terminal[0].value == 1
+    audit = await SQLiteAuditRepository(cancellation_context.database_path).list(
+        tenant_id="tenant-one"
+    )
+    assert [entry.action for entry in audit].count("run.cancelled") == 1
+
+
+@pytest.mark.asyncio
+async def test_queued_cancellation_observability_survives_cleanup_retry(
+    cancellation_context: CancellationContext,
+) -> None:
+    authorization = await tenant_key(
+        cancellation_context,
+        tenant_id="tenant-one",
+        scopes=("runs:write",),
+        create_session=True,
+    )
+    run_id = await submit(cancellation_context, authorization)
+    durable_queue = SQLiteWorkQueue(cancellation_context.database_path)
+    cancellation_context.app.state.run_service = RunService(
+        SQLiteRunRepository(cancellation_context.database_path),
+        FailOnceCleanupQueue(durable_queue),
+        clock=lambda: NOW,
+    )
+
+    first = await cancellation_context.client.post(
+        f"/v1/runs/{run_id}/cancel", headers=headers(authorization)
+    )
+    repaired = await cancellation_context.client.post(
+        f"/v1/runs/{run_id}/cancel", headers=headers(authorization)
+    )
+
+    assert first.status_code == repaired.status_code == 202
+    assert first.json()["changed"] is True
+    assert repaired.json()["changed"] is False
+    assert await durable_queue.receive(now=NOW, visibility_seconds=30) is None
     terminal = [
         sample
         for sample in cancellation_context.app.state.telemetry.snapshot()
