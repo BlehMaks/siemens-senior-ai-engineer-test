@@ -76,10 +76,15 @@ resource "google_secret_manager_secret" "managed" {
 }
 
 resource "google_secret_manager_secret_iam_member" "api_pepper_reader" {
+  for_each = toset([
+    local.api_member,
+    local.worker_member,
+  ])
+
   project   = var.project_id
   secret_id = google_secret_manager_secret.managed["api_key_pepper"].secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = local.api_member
+  member    = each.value
 }
 
 resource "google_secret_manager_secret_iam_member" "task_hmac_reader" {
@@ -122,6 +127,74 @@ resource "google_project_iam_member" "firestore_user" {
   project = var.project_id
   role    = "roles/datastore.user"
   member  = each.value
+}
+
+resource "google_firestore_index" "sessions" {
+  project    = var.project_id
+  database   = google_firestore_database.assessment.name
+  collection = "sessions"
+
+  fields {
+    field_path = "tenant_id"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "created_at"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "session_id"
+    order      = "ASCENDING"
+  }
+}
+
+resource "google_firestore_index" "runs" {
+  project    = var.project_id
+  database   = google_firestore_database.assessment.name
+  collection = "runs"
+
+  fields {
+    field_path = "tenant_id"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "session_id"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "created_at"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "run_id"
+    order      = "ASCENDING"
+  }
+}
+
+resource "google_firestore_index" "run_events" {
+  project    = var.project_id
+  database   = google_firestore_database.assessment.name
+  collection = "run_events"
+
+  fields {
+    field_path = "tenant_id"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "run_id"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "sequence"
+    order      = "ASCENDING"
+  }
 }
 
 resource "google_logging_project_bucket_config" "application" {

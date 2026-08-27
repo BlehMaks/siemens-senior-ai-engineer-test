@@ -142,7 +142,7 @@ class GoogleCloudTaskClient(CloudTaskClient):
         if type(self._target_url) is not str or not self._target_url:
             raise ValueError("cloud task target URL is required")
         try:
-            created = await self._client.create_task(
+            await self._client.create_task(
                 parent=self._queue_name,
                 task=Task(
                     {
@@ -155,11 +155,11 @@ class GoogleCloudTaskClient(CloudTaskClient):
                             "body": task.body,
                         },
                     }
-                ),
+                )
             )
         except AlreadyExists as exc:
             raise CloudTaskAlreadyExistsError(task.name) from exc
-        return _decode_task(created)
+        return task
 
     async def get(self, *, name: str) -> CloudTask | None:
         try:

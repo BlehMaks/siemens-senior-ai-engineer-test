@@ -165,6 +165,17 @@ resource "google_cloud_run_v2_service" "worker" {
       }
 
       env {
+        name = "AGENT_API_KEY_PEPPER"
+
+        value_source {
+          secret_key_ref {
+            secret  = var.api_key_pepper_secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
         name = "AGENT_API_TASK_SIGNING_HMAC"
 
         value_source {

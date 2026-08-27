@@ -62,10 +62,14 @@ def test_secret_and_artifact_access_is_resource_specific() -> None:
     }
     assert 'resource "google_secret_manager_secret_iam_member" "api_pepper_reader"' in main
     assert 'secret_id = google_secret_manager_secret.managed["api_key_pepper"].secret_id' in main
-    assert "member    = local.api_member" in main
+    assert "local.worker_member" in main
+    assert "member    = each.value" in main
     assert 'resource "google_secret_manager_secret_iam_member" "task_hmac_reader"' in main
     assert "for_each = local.workload_members" in main
     assert 'repository = google_artifact_registry_repository.containers.name' in main
+    assert 'resource "google_firestore_index" "sessions"' in main
+    assert 'resource "google_firestore_index" "runs"' in main
+    assert 'resource "google_firestore_index" "run_events"' in main
     assert "allUsers" not in main
     assert "allAuthenticatedUsers" not in main
     assert 'member = "*"' not in main

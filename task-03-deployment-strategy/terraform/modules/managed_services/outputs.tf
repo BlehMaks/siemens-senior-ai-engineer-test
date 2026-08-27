@@ -8,6 +8,11 @@ output "firestore" {
     delete_protection_state = google_firestore_database.assessment.delete_protection_state
     deletion_policy         = google_firestore_database.assessment.deletion_policy
     pitr                    = google_firestore_database.assessment.point_in_time_recovery_enablement
+    composite_indexes = sort([
+      google_firestore_index.run_events.collection,
+      google_firestore_index.runs.collection,
+      google_firestore_index.sessions.collection,
+    ])
   }
 }
 
@@ -48,9 +53,10 @@ output "workload_access" {
       binding.member
     ])
     secret_accessors = {
-      api_key_pepper = [
-        google_secret_manager_secret_iam_member.api_pepper_reader.member,
-      ]
+      api_key_pepper = sort([
+        for binding in google_secret_manager_secret_iam_member.api_pepper_reader :
+        binding.member
+      ])
       task_signing_hmac = sort([
         for binding in google_secret_manager_secret_iam_member.task_hmac_reader :
         binding.member

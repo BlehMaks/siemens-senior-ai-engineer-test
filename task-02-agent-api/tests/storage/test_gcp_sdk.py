@@ -179,19 +179,22 @@ class FakeAsyncClient:
 class FakeCloudTasksAsyncClient:
     def __init__(self) -> None:
         self.created_parent: str | None = None
-        self.created_task: dict[str, object] | None = None
+        self.created_task: Task | None = None
         self.task: Task | None = None
         self.raise_create: Exception | None = None
         self.raise_get: Exception | None = None
         self.raise_delete: Exception | None = None
         self.raise_queue: Exception | None = None
+        self.return_basic_response = False
 
-    async def create_task(self, *, parent: str, task: dict[str, object]) -> Task:
+    async def create_task(self, *, parent: str, task: Task) -> Task:
         if self.raise_create is not None:
             raise self.raise_create
         self.created_parent = parent
         self.created_task = task
-        created = Task(task)
+        created = Task(name=task.name, schedule_time=task.schedule_time)
+        if not self.return_basic_response:
+            created = Task(task)
         self.task = created
         return created
 
@@ -348,6 +351,25 @@ async def test_cloud_tasks_create_and_get_round_trip() -> None:
     assert client.created_task is not None
     assert created == task
     assert loaded == task
+
+
+@pytest.mark.asyncio
+async def test_cloud_tasks_create_preserves_requested_task_on_basic_response() -> None:
+    client = FakeCloudTasksAsyncClient()
+    client.return_basic_response = True
+    queue = GoogleCloudTaskClient(
+        cast(gcp_storage._CloudTasksClient, client),
+        "projects/p/locations/l/queues/main",
+        "https://example.com/internal/tasks/run-delivery",
+    )
+    task = CloudTask(
+        name="projects/p/locations/l/queues/main/tasks/work-1",
+        schedule_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+        body=b'{"ok":true}',
+        headers=(("Content-Type", "application/json"), ("X-Test", "1")),
+    )
+
+    assert await queue.create(task) == task
 
 
 @pytest.mark.asyncio

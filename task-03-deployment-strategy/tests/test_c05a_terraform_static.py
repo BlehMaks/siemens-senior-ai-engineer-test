@@ -43,7 +43,7 @@ def test_run_services_keeps_worker_private_and_oidc_bound() -> None:
 def test_run_services_uses_secret_refs_and_not_secret_payloads() -> None:
     source = read(RUN_SERVICES_MAIN)
 
-    assert source.count('name = "AGENT_API_KEY_PEPPER"') == 1
+    assert source.count('name = "AGENT_API_KEY_PEPPER"') == 2
     assert 'name = "AGENT_API_TASK_SIGNING_HMAC"' in source
     assert 'version = "latest"' in source
     assert "secret_data" not in source

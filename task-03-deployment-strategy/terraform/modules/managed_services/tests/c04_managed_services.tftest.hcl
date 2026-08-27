@@ -67,10 +67,11 @@ run "default_contract_is_low_cost_and_container_only" {
   }
 
   assert {
-    condition = output.workload_access.secret_accessors.api_key_pepper == [
+    condition = toset(output.workload_access.secret_accessors.api_key_pepper) == toset([
       "serviceAccount:sai-dev-api@contract-assignment-dev.iam.gserviceaccount.com",
-    ]
-    error_message = "Only the API identity may read the API-key pepper."
+      "serviceAccount:sai-dev-worker@contract-assignment-dev.iam.gserviceaccount.com",
+    ])
+    error_message = "Only the API and worker identities may read the API-key pepper."
   }
 
   assert {
@@ -79,6 +80,15 @@ run "default_contract_is_low_cost_and_container_only" {
       "serviceAccount:sai-dev-worker@contract-assignment-dev.iam.gserviceaccount.com",
     ])
     error_message = "Only the signing and verifying workloads may read the task HMAC."
+  }
+
+  assert {
+    condition = toset(output.firestore.composite_indexes) == toset([
+      "run_events",
+      "runs",
+      "sessions",
+    ])
+    error_message = "Managed Firestore must provision the composite indexes required by repository queries."
   }
 
   assert {
