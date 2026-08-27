@@ -34,8 +34,15 @@ CONTENT_RULES = (
     (
         "credential assignment",
         re.compile(
-            rb"(?i)[\"']?(?:api[_-]?key|password|secret|token)[\"']?\s*[:=]\s*"
-            rb"(?:[\"'][^\"'\r\n]{8,}[\"']|[^\s#,}\]]{16,})"
+            rb"(?:"
+            rb"(?i:[\"']?(?:api[_-]?key|password|secret|token)[\"']?\s*[:=]\s*"
+            rb"[\"'][^\"'\r\n]{8,}[\"'])"
+            rb"|(?i:[\"']?(?:api[_-]?key|password|secret|token)[\"']?\s*:\s*"
+            rb"[A-Za-z0-9_+/=@.-]{16,})(?=\s*(?:#|$))"
+            rb"|(?m:^[ \t]*(?:export[ \t]+)?[A-Z0-9_-]*"
+            rb"(?:API[_-]?KEY|PASSWORD|SECRET|TOKEN)[A-Z0-9_-]*"
+            rb"[ \t]*=[ \t]*[A-Za-z0-9_+/=@.-]{16,})(?=[ \t]*(?:#|$))"
+            rb")"
         ),
     ),
     ("OpenRouter credential", re.compile(rb"OPENROUTER_(?:API_)?KEY")),

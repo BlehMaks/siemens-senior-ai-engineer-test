@@ -55,6 +55,11 @@ def test_clean_index_passes(repository: Path) -> None:
             "credential",
         ),
         (
+            "runtime.env",
+            seed("API_", "KEY=abcdefghijklmnop\n"),
+            "credential",
+        ),
+        (
             "punctuation.env",
             seed("pass", 'word = "P@ssw0rd!VeryLong"\n'),
             "credential",
@@ -135,5 +140,23 @@ def test_http_url_is_not_a_machine_path(repository: Path) -> None:
     link = repository / "links.md"
     link.write_text("https://example.test/home/alice/report\n", encoding="utf-8")
     git(repository, "add", link.name)
+
+    assert audit_repository(repository) == []
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        'signing_secret = EnvPepperProvider("AGENT_API_TASK_SIGNING_HMAC").pepper()\n',
+        "secret = var.api_key_pepper_secret_id\n",
+        'secret = base64.urlsafe_b64encode(b"s" * 32).decode()\n',
+    ],
+)
+def test_symbolic_credential_expressions_are_not_secret_literals(
+    repository: Path, content: str
+) -> None:
+    target = repository / "config.py"
+    target.write_text(content, encoding="utf-8")
+    git(repository, "add", target.name)
 
     assert audit_repository(repository) == []
