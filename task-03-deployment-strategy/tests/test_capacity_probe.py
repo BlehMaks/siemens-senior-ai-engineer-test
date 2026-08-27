@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from pathlib import Path
 
 import pytest
 
+from deployment_strategy import capacity_probe
 from deployment_strategy.capacity_probe import (
     ProbeConfig,
     ProbeThresholds,
@@ -73,6 +76,111 @@ async def test_capacity_probe_respects_submission_count_below_queue_limit() -> N
         "cancelled": 1,
         "completed": 2,
     }
+
+
+@pytest.mark.asyncio
+async def test_recovery_threshold_includes_recovery_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_drain = capacity_probe._drain
+    calls = 0
+
+    async def delayed_recovery_drain(database_path: Path) -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            await asyncio.sleep(0.1)
+        return await original_drain(database_path)
+
+    monkeypatch.setattr(capacity_probe, "_drain", delayed_recovery_drain)
+
+    result = await run_probe(
+        ProbeConfig(
+            thresholds=ProbeThresholds(
+                p95_submit_ms=1_000,
+                p95_first_event_ms=1_000,
+                recovery_ms=50,
+            )
+        )
+    )
+
+    assert result["measurements"]["recovery_terminal_success"] is True
+    assert result["assertions"]["recovery_within_threshold"] is False
+
+
+@pytest.mark.asyncio
+async def test_first_event_latency_ignores_later_recovery_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_drain = capacity_probe._drain
+    calls = 0
+
+    async def delayed_recovery_drain(database_path: Path) -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            await asyncio.sleep(0.3)
+        return await original_drain(database_path)
+
+    monkeypatch.setattr(capacity_probe, "_drain", delayed_recovery_drain)
+
+    result = await run_probe(
+        ProbeConfig(
+            thresholds=ProbeThresholds(
+                p95_submit_ms=1_000,
+                p95_first_event_ms=1_000,
+                recovery_ms=1_000,
+            )
+        )
+    )
+
+    assert result["assertions"]["sse_p95_within_threshold"] is True
+    assert result["measurements"]["recovery_ms"] >= 300
+
+
+@pytest.mark.asyncio
+async def test_queue_age_starts_after_client_side_submit_delay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_post = capacity_probe.AsyncClient.post
+    original_queue_age = capacity_probe._oldest_queue_age_ms
+    observed_first_api_attempt: float | None = None
+    age_observed_at: float | None = None
+
+    async def delayed_submit(self, url, *args, **kwargs):
+        nonlocal observed_first_api_attempt
+        key = kwargs.get("headers", {}).get("Idempotency-Key", "")
+        if str(url).endswith("/runs") and key.startswith("capacity-"):
+            await asyncio.sleep(0.1)
+            now = time.perf_counter()
+            if observed_first_api_attempt is None or now < observed_first_api_attempt:
+                observed_first_api_attempt = now
+        return await original_post(self, url, *args, **kwargs)
+
+    monkeypatch.setattr(capacity_probe.AsyncClient, "post", delayed_submit)
+
+    def captured_queue_age(database_path: Path, *, wall_started: float) -> float:
+        nonlocal age_observed_at
+        age_observed_at = time.perf_counter()
+        return original_queue_age(database_path, wall_started=wall_started)
+
+    monkeypatch.setattr(capacity_probe, "_oldest_queue_age_ms", captured_queue_age)
+    result = await run_probe(
+        ProbeConfig(
+            thresholds=ProbeThresholds(
+                p95_submit_ms=1_000,
+                p95_first_event_ms=1_000,
+                recovery_ms=1_500,
+            )
+        )
+    )
+
+    assert observed_first_api_attempt is not None
+    assert age_observed_at is not None
+    assert (
+        result["measurements"]["queue_oldest_age_ms"]
+        <= (age_observed_at - observed_first_api_attempt) * 1_000 + 10
+    )
 
 
 def test_design_envelopes_label_enterprise_scale_as_unmeasured() -> None:

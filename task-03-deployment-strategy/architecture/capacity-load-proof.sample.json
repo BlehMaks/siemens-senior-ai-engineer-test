@@ -51,20 +51,20 @@
     "duplicate_run_id_matches": true,
     "duplicate_status_code": 202,
     "first_event_samples": 8,
-    "p95_first_event_ms": 287.066,
-    "p95_submit_ms": 110.344,
-    "queue_oldest_age_ms": 175.222,
+    "p95_first_event_ms": 265.427,
+    "p95_submit_ms": 106.179,
+    "queue_oldest_age_ms": 167.226,
     "recovery_accepted": true,
-    "recovery_ms": 55.584,
+    "recovery_ms": 13.987,
     "recovery_terminal_state": "completed",
     "recovery_terminal_success": true,
     "rejected": 4,
     "resource_usage": {
-      "elapsed_ms": 334.146,
-      "max_rss_delta": 4931584,
+      "elapsed_ms": 333.519,
+      "max_rss_delta": 4915200,
       "max_rss_unit": "platform_ru_maxrss",
-      "system_cpu_seconds_delta": 0.10873,
-      "user_cpu_seconds_delta": 0.132264
+      "system_cpu_seconds_delta": 0.101452,
+      "user_cpu_seconds_delta": 0.12919
     },
     "terminal": {
       "budget_exhausted": 1,

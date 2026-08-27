@@ -20,7 +20,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Request
 from pydantic import AnyHttpUrl
 
 from agent_api.app import create_app
@@ -109,6 +109,13 @@ async def run_probe(config: ProbeConfig | None = None) -> dict[str, Any]:
     config = ProbeConfig() if config is None else config
     with TemporaryDirectory(prefix="siemens-capacity-") as workspace:
         database_path = Path(workspace) / "capacity.sqlite3"
+        initial_submit_reached_at: list[float] = []
+
+        async def record_initial_submit(request: Request) -> None:
+            key = request.headers.get("Idempotency-Key", "")
+            if request.method == "POST" and key.startswith("capacity-"):
+                initial_submit_reached_at.append(time.perf_counter())
+
         app = create_app(
             database_path=database_path,
             pepper_provider=FixedPepper(),
@@ -132,6 +139,7 @@ async def run_probe(config: ProbeConfig | None = None) -> dict[str, Any]:
             AsyncClient(
                 transport=ASGITransport(app=app),
                 base_url="http://capacity.local",
+                event_hooks={"request": [record_initial_submit]},
                 timeout=5.0,
             ) as client,
         ):
@@ -156,27 +164,9 @@ async def run_probe(config: ProbeConfig | None = None) -> dict[str, Any]:
             )
             oldest_queue_age_ms = _oldest_queue_age_ms(
                 database_path,
-                wall_started=min(item["_submitted_at"] for item in accepted),
+                wall_started=min(initial_submit_reached_at),
             )
-            recovery_started = time.perf_counter()
-            drained = await _drain(database_path)
-            recovery = await _submit_one(
-                client,
-                authorization,
-                idempotency_key="capacity-recovery",
-                query=_QUERY,
-            )
-            recovery_ms = (time.perf_counter() - recovery_started) * 1_000
-            recovery_terminal: dict[str, Any] = {
-                "failure_code": None,
-                "run_id": recovery["run_id"],
-                "state": None,
-            }
-            if recovery["status_code"] == 202:
-                drained += await _drain(database_path)
-                recovery_terminal = await _get_status(
-                    client, authorization, recovery["run_id"]
-                )
+            initial_drained = await _drain(database_path)
             first_events = [first_event]
             for item in accepted:
                 if item["run_id"] != first_event["run_id"]:
@@ -189,6 +179,26 @@ async def run_probe(config: ProbeConfig | None = None) -> dict[str, Any]:
                         )
                     )
             terminal = await _terminal_summary(client, authorization, accepted)
+            recovery_started = time.perf_counter()
+            recovery = await _submit_one(
+                client,
+                authorization,
+                idempotency_key="capacity-recovery",
+                query=_QUERY,
+            )
+            recovery_drained = 0
+            recovery_terminal: dict[str, Any] = {
+                "failure_code": None,
+                "run_id": recovery["run_id"],
+                "state": None,
+            }
+            if recovery["status_code"] == 202:
+                recovery_drained = await _drain(database_path)
+                recovery_terminal = await _get_status(
+                    client, authorization, recovery["run_id"]
+                )
+            recovery_ms = (time.perf_counter() - recovery_started) * 1_000
+            drained = initial_drained + recovery_drained
 
         elapsed_ms = (time.perf_counter() - started) * 1_000
         after = resource.getrusage(resource.RUSAGE_SELF)
