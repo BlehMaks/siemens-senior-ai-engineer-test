@@ -20,6 +20,7 @@ from binary_classification.modeling import (
     choose_threshold,
     cross_validate_candidates,
     infer_feature_schema,
+    metrics_at_threshold,
     prepare_features,
     select_candidate,
     split_train_holdout,
@@ -215,6 +216,31 @@ def test_threshold_minimizes_declared_business_cost() -> None:
     assert low_fn_cost.threshold == pytest.approx(0.9)
     assert high_fn_cost.threshold == pytest.approx(0.4)
     assert high_fn_cost.false_negative == 0
+
+
+def test_threshold_can_choose_all_negative_at_probability_boundary() -> None:
+    target = pd.Series([True, False])
+    probabilities = np.array([1.0, 1.0], dtype="float64")
+
+    choice = choose_threshold(
+        target,
+        probabilities,
+        false_negative_cost=1.0,
+        false_positive_cost=10.0,
+    )
+    metrics = metrics_at_threshold(target, probabilities, choice.threshold)
+
+    assert choice.threshold == np.nextafter(1.0, np.inf)
+    assert choice.total_cost == 1.0
+    assert choice.false_negative == 1
+    assert choice.false_positive == 0
+    assert metrics.recall == 0.0
+    with pytest.raises(ValueError, match="supported decision range"):
+        metrics_at_threshold(
+            target,
+            probabilities,
+            np.nextafter(choice.threshold, np.inf),
+        )
 
 
 @pytest.mark.parametrize(

@@ -34,6 +34,7 @@ from binary_classification.analysis import binary_target, feature_group_ids
 TARGET_COLUMN = "Class"
 ID_COLUMN = "id"
 CANDIDATE_NAMES = ("dummy", "logistic", "weighted_logistic")
+_ALL_NEGATIVE_THRESHOLD = float(np.nextafter(1.0, np.inf))
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,8 +235,8 @@ def metrics_at_threshold(
     probabilities: NDArray[np.float64],
     threshold: float,
 ) -> BinaryMetrics:
-    if not 0.0 <= threshold <= 1.0:
-        raise ValueError("threshold must be between 0 and 1")
+    if not 0.0 <= threshold <= _ALL_NEGATIVE_THRESHOLD:
+        raise ValueError("threshold is outside the supported decision range")
     truth, scores = _validate_probabilities(target, probabilities)
     if np.unique(truth).size != 2:
         raise ValueError("metrics require both target classes")
@@ -333,7 +334,9 @@ def choose_threshold(
     ):
         raise ValueError("misclassification costs must be finite and positive")
     truth, scores = _validate_probabilities(target, probabilities)
-    candidates = np.unique(np.concatenate(([0.0], scores, [1.0])))
+    candidates = np.unique(
+        np.concatenate(([0.0], scores, [1.0, _ALL_NEGATIVE_THRESHOLD]))
+    )
     choices: list[ThresholdChoice] = []
     for threshold in candidates:
         predicted = scores >= threshold
