@@ -84,6 +84,11 @@ identity is never supplied or returned in an HTTP body.
 An absent resource and a resource outside the authenticated tenant scope return
 the same `404` envelope so identifiers cannot be enumerated.
 
+Session deletion physically removes its runs, events, and persisted memory.
+Repeating it therefore receives the same `404` as any absent session. Memory
+deletion removes only persisted reflections: the session remains available and
+repeating the operation returns `deleted_count: 0`.
+
 ## Runs
 
 Run submission accepts one bounded query:

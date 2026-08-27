@@ -450,20 +450,52 @@ class SQLiteSessionRepository(_PathRepository):
         return None if row is None else _decode_session(row)
 
     async def list(
-        self, *, tenant_id: OpaqueId, limit: int = 100
+        self,
+        *,
+        tenant_id: OpaqueId,
+        limit: int = 100,
+        after: tuple[datetime, OpaqueId] | None = None,
     ) -> tuple[SessionRecord, ...]:
         checked_tenant = _scope_id(tenant_id)
-        checked_limit = _limit(limit)
+        if type(limit) is not int or not 1 <= limit <= 101:
+            raise ValueError("session list limit must be between 1 and 101")
+        if after is None:
+            statement = (
+                "SELECT tenant_id, session_id, label, created_at, updated_at "
+                "FROM sessions WHERE tenant_id = ? "
+                "ORDER BY created_at, session_id LIMIT ?"
+            )
+            parameters: tuple[str | int, ...] = (checked_tenant, limit)
+        else:
+            if type(after) is not tuple or len(after) != 2:
+                raise ValueError("session cursor must be a timestamp and session id")
+            timestamp = _timestamp(after[0])
+            session_id = _scope_id(after[1])
+            statement = (
+                "SELECT tenant_id, session_id, label, created_at, updated_at "
+                "FROM sessions WHERE tenant_id = ? AND "
+                "(created_at > ? OR (created_at = ? AND session_id > ?)) "
+                "ORDER BY created_at, session_id LIMIT ?"
+            )
+            parameters = (
+                checked_tenant,
+                timestamp,
+                timestamp,
+                session_id,
+                limit,
+            )
         async with _connection(self._path) as connection:
-            rows = await (
-                await connection.execute(
-                    "SELECT tenant_id, session_id, label, created_at, updated_at "
-                    "FROM sessions WHERE tenant_id = ? "
-                    "ORDER BY created_at, session_id LIMIT ?",
-                    (checked_tenant, checked_limit),
-                )
-            ).fetchall()
+            rows = await (await connection.execute(statement, parameters)).fetchall()
         return tuple(_decode_session(row) for row in rows)
+
+    async def delete_memory(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> int:
+        scope = (_scope_id(tenant_id), _scope_id(session_id))
+        async with _connection(self._path, write=True) as connection:
+            cursor = await connection.execute(
+                "DELETE FROM run_reflections WHERE tenant_id = ? AND session_id = ?",
+                scope,
+            )
+            return cursor.rowcount
 
     async def delete(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> bool:
         scope = (_scope_id(tenant_id), _scope_id(session_id))
