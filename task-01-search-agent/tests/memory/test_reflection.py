@@ -319,6 +319,7 @@ def test_too_many_events_and_invalid_completion_provenance_fail() -> None:
         "https://user:password@www.siemens.com/report",
         "https://sk-admin-1234abcd.example.com/report",
         f"https://sk-admin-{'A1' * 10}.example.com/report",
+        f"https://leak-sk-admin-{'A1' * 10}.example.com/report",
         "https://www.siemens.com/reports/sk-admin-1234%E2%80%8Babcd",
     ],
 )
