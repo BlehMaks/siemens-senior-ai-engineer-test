@@ -38,6 +38,7 @@ def test_dockerfile_is_locked_minimal_and_runtime_hardened() -> None:
     )
     assert "docker/dockerfile:1.7@sha256:" in dockerfile
     assert "pip install" not in dockerfile
+    assert "/root/" not in dockerfile
     for security_revision in (
         "libcrypto3=3.5.8-r0",
         "libssl3=3.5.8-r0",
@@ -46,7 +47,8 @@ def test_dockerfile_is_locked_minimal_and_runtime_hardened() -> None:
         assert security_revision in dockerfile
     assert "UV_PROJECT_ENVIRONMENT=/opt/venv" in dockerfile
     assert "uv sync --frozen --no-dev --no-editable" in dockerfile
-    assert "COPY --from=builder --chown=65532:65532 /opt/venv /opt/venv" in dockerfile
+    assert "COPY --from=builder /opt/venv /opt/venv" in dockerfile
+    assert "--chown" not in dockerfile
     assert "USER 65532:65532" in dockerfile
     assert "STOPSIGNAL SIGTERM" in dockerfile
     assert "HEALTHCHECK" in dockerfile

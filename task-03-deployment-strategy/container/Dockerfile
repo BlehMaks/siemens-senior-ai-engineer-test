@@ -21,7 +21,7 @@ COPY task-02-agent-api/pyproject.toml task-02-agent-api/pyproject.toml
 COPY task-02-agent-api/src task-02-agent-api/src
 COPY task-03-deployment-strategy/pyproject.toml task-03-deployment-strategy/pyproject.toml
 COPY task-03-deployment-strategy/src task-03-deployment-strategy/src
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=cache,target=/tmp/uv-cache \
     uv sync --frozen --no-dev --no-editable --package siemens-deployment-strategy
 
 FROM ${PYTHON_IMAGE} AS runtime
@@ -47,7 +47,7 @@ RUN apk add --no-cache --upgrade \
     libssl3=3.5.8-r0 \
     sqlite-libs=3.53.4-r0
 
-COPY --from=builder --chown=65532:65532 /opt/venv /opt/venv
+COPY --from=builder /opt/venv /opt/venv
 
 USER 65532:65532
 WORKDIR /app
