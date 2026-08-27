@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Body, Path, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, Path, Query, Request, Response
 
 from search_agent.contracts import OpaqueId
 
@@ -39,9 +39,9 @@ def build_session_router() -> APIRouter:
     async def create_session(
         http_request: Request,
         request: Annotated[CreateSessionRequest, Body()],
+        principal: Annotated[AuthenticatedApiKey, Depends(_write_principal)],
     ) -> SessionResponse:
         service = _service(http_request)
-        principal = await _authenticate(http_request, "sessions:write", service)
         record = await service.create(
             tenant_id=principal.tenant_id, label=request.label
         )
@@ -55,11 +55,11 @@ def build_session_router() -> APIRouter:
     )
     async def list_sessions(
         http_request: Request,
+        principal: Annotated[AuthenticatedApiKey, Depends(_read_principal)],
         cursor: Annotated[PageCursor | None, Query()] = None,
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
     ) -> SessionListResponse:
         service = _service(http_request)
-        principal = await _authenticate(http_request, "sessions:read", service)
         records, next_cursor = await service.list(
             tenant_id=principal.tenant_id,
             limit=limit,
@@ -79,9 +79,9 @@ def build_session_router() -> APIRouter:
     async def get_session(
         http_request: Request,
         session_id: Annotated[OpaqueId, Path()],
+        principal: Annotated[AuthenticatedApiKey, Depends(_read_principal)],
     ) -> SessionResponse:
         service = _service(http_request)
-        principal = await _authenticate(http_request, "sessions:read", service)
         return _public_session(
             await service.get(tenant_id=principal.tenant_id, session_id=session_id)
         )
@@ -96,9 +96,9 @@ def build_session_router() -> APIRouter:
     async def delete_session(
         http_request: Request,
         session_id: Annotated[OpaqueId, Path()],
+        principal: Annotated[AuthenticatedApiKey, Depends(_write_principal)],
     ) -> Response:
         service = _service(http_request)
-        principal = await _authenticate(http_request, "sessions:write", service)
         await service.delete(tenant_id=principal.tenant_id, session_id=session_id)
         return Response(status_code=204)
 
@@ -111,9 +111,9 @@ def build_session_router() -> APIRouter:
     async def delete_memory(
         http_request: Request,
         session_id: Annotated[OpaqueId, Path()],
+        principal: Annotated[AuthenticatedApiKey, Depends(_memory_principal)],
     ) -> DeletionResponse:
         service = _service(http_request)
-        principal = await _authenticate(http_request, "memory:delete", service)
         deleted_count = await service.delete_memory(
             tenant_id=principal.tenant_id, session_id=session_id
         )
@@ -125,17 +125,28 @@ def build_session_router() -> APIRouter:
     return router
 
 
-async def _authenticate(
-    request: Request, required_scope: str, service: SessionService
-) -> AuthenticatedApiKey:
+async def _authenticate(request: Request, required_scope: str) -> AuthenticatedApiKey:
     values = request.headers.getlist("authorization")
     authorization = values[0] if len(values) == 1 else None
     manager = cast(ApiKeyManager, request.app.state.auth_manager)
     return await manager.authenticate(
         authorization=authorization,
         required_scope=required_scope,
-        now=service.now(),
+        now=_service(request).now(),
     )
+
+
+# Route dependencies authenticate before FastAPI validates handler inputs.
+async def _read_principal(request: Request) -> AuthenticatedApiKey:
+    return await _authenticate(request, "sessions:read")
+
+
+async def _write_principal(request: Request) -> AuthenticatedApiKey:
+    return await _authenticate(request, "sessions:write")
+
+
+async def _memory_principal(request: Request) -> AuthenticatedApiKey:
+    return await _authenticate(request, "memory:delete")
 
 
 def _service(request: Request) -> SessionService:

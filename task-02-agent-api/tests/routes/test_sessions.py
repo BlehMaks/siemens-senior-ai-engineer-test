@@ -381,6 +381,58 @@ async def test_invalid_limit_cursor_and_id_are_rejected_safely(
         message="Request validation failed.",
     )
 
+    encoded_slash = await client.get(
+        "/v1/sessions/session%2Fescape",
+        headers=_headers(authorization),
+    )
+    assert encoded_slash.status_code == 404
+    _assert_error(
+        encoded_slash.json(),
+        code="not_found",
+        message="Resource was not found.",
+    )
+
+    method_not_allowed = await client.patch(
+        "/v1/sessions",
+        headers=_headers(authorization),
+    )
+    assert method_not_allowed.status_code == 405
+    _assert_error(
+        method_not_allowed.json(),
+        code="invalid_request",
+        message="Method is not allowed.",
+    )
+    assert method_not_allowed.headers["allow"] in {"GET", "POST"}
+
+
+@pytest.mark.asyncio
+async def test_authentication_precedes_request_validation(
+    session_context: SessionContext,
+) -> None:
+    client = session_context.client
+    responses = (
+        await client.post(
+            "/v1/sessions",
+            json={"label": ""},
+            headers=_headers(None),
+        ),
+        await client.get(
+            "/v1/sessions?limit=0",
+            headers=_headers(None),
+        ),
+        await client.get(
+            "/v1/sessions/not-an-opaque id",
+            headers=_headers(None),
+        ),
+    )
+    for response in responses:
+        assert response.status_code == 401
+        _assert_error(
+            response.json(),
+            code="unauthenticated",
+            message="Authentication failed.",
+        )
+
 
 @pytest.mark.asyncio
 async def test_missing_and_wrong_scopes_map_to_401_and_403(

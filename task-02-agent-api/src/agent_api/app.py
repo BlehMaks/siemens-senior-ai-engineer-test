@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import secrets
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,6 +13,7 @@ from typing import Annotated, cast
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import TypeAdapter, ValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
 
 from search_agent.contracts import OpaqueId
@@ -72,10 +73,11 @@ def create_app(
     app.include_router(build_session_router())
     app.add_exception_handler(ApiKeyAuthError, _auth_error)
     app.add_exception_handler(SessionNotFound, _not_found)
-    app.add_exception_handler(InvalidCursor, _invalid_cursor)
+    app.add_exception_handler(InvalidCursor, _invalid_request)
     app.add_exception_handler(SessionUnavailable, _unavailable)
     app.add_exception_handler(StorageError, _unavailable)
     app.add_exception_handler(RequestValidationError, _invalid_request)
+    app.add_exception_handler(StarletteHTTPException, _http_error)
     app.add_exception_handler(Exception, _internal_error)
     return app
 
@@ -94,17 +96,37 @@ async def _not_found(request: Request, exc: Exception) -> JSONResponse:
     return _error_response(request, 404, ErrorCode.NOT_FOUND, "Session was not found.")
 
 
-async def _invalid_cursor(request: Request, exc: Exception) -> JSONResponse:
+async def _invalid_request(request: Request, exc: Exception) -> JSONResponse:
     del exc
     return _error_response(
         request, 422, ErrorCode.INVALID_REQUEST, "Request validation failed."
     )
 
 
-async def _invalid_request(request: Request, exc: Exception) -> JSONResponse:
-    del exc
+async def _http_error(request: Request, exc: Exception) -> JSONResponse:
+    error = cast(StarletteHTTPException, exc)
+    if error.status_code == 404:
+        return _error_response(
+            request,
+            404,
+            ErrorCode.NOT_FOUND,
+            "Resource was not found.",
+            headers=error.headers,
+        )
+    if error.status_code == 405:
+        return _error_response(
+            request,
+            405,
+            ErrorCode.INVALID_REQUEST,
+            "Method is not allowed.",
+            headers=error.headers,
+        )
     return _error_response(
-        request, 422, ErrorCode.INVALID_REQUEST, "Request validation failed."
+        request,
+        error.status_code,
+        ErrorCode.INVALID_REQUEST if error.status_code < 500 else ErrorCode.INTERNAL,
+        "Request could not be completed.",
+        headers=error.headers,
     )
 
 
@@ -136,6 +158,7 @@ def _error_response(
     message: str,
     *,
     retryable: bool = False,
+    headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
     envelope = ErrorEnvelope(
         error=ErrorDetail(
@@ -146,7 +169,9 @@ def _error_response(
         )
     )
     return JSONResponse(
-        content=envelope.model_dump(mode="json"), status_code=status_code
+        content=envelope.model_dump(mode="json"),
+        status_code=status_code,
+        headers=headers,
     )
 
 
