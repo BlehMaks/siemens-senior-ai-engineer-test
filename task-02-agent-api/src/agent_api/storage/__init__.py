@@ -13,6 +13,7 @@ from .cloud import (
     SignedWorkItemCodec,
     TaskDeliveryAuthError,
 )
+from .gcp import GoogleCloudTaskClient, GoogleFirestoreDocumentStore
 from .repositories import (
     ApiKeyHashRecord,
     ApiKeyScope,
@@ -45,6 +46,8 @@ __all__ = [
     "FirestoreEventRepository",
     "FirestoreRunRepository",
     "FirestoreSessionRepository",
+    "GoogleCloudTaskClient",
+    "GoogleFirestoreDocumentStore",
     "MigrationError",
     "SQLiteAuditRepository",
     "SQLiteEventRepository",
