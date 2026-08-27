@@ -39,6 +39,14 @@ run "default_contract_is_low_cost_and_container_only" {
   }
 
   assert {
+    condition = alltrue([
+      for secret in google_secret_manager_secret.managed :
+      secret.deletion_protection
+    ])
+    error_message = "Secret containers must survive routine Terraform destroy."
+  }
+
+  assert {
     condition     = output.artifact_registry.immutable_tags
     error_message = "Artifact Registry must pin immutable tags."
   }
@@ -146,13 +154,10 @@ run "invalid_resource_and_identity_names_fail_closed" {
   command = plan
 
   variables {
-    project_id                     = "INVALID_PROJECT"
-    region                         = "global"
-    environment                    = "qa"
-    system_code                    = "TOO_LONG_SYSTEM"
-    api_service_account_email      = "api@example.com"
-    worker_service_account_email   = "worker@example.com"
-    deployer_service_account_email = "deployer@example.com"
+    project_id  = "INVALID_PROJECT"
+    region      = "global"
+    environment = "qa"
+    system_code = "TOO_LONG_SYSTEM"
   }
 
   expect_failures = [
@@ -160,8 +165,31 @@ run "invalid_resource_and_identity_names_fail_closed" {
     var.region,
     var.environment,
     var.system_code,
+  ]
+}
+
+run "invalid_identity_syntax_fails_closed" {
+  command = plan
+
+  variables {
+    api_service_account_email    = "api@example.com"
+    worker_service_account_email = "worker@example.com"
+  }
+
+  expect_failures = [
     var.api_service_account_email,
     var.worker_service_account_email,
+  ]
+}
+
+run "invalid_deployer_identity_syntax_fails_closed" {
+  command = plan
+
+  variables {
+    deployer_service_account_email = "deployer@example.com"
+  }
+
+  expect_failures = [
     var.deployer_service_account_email,
   ]
 }
@@ -188,5 +216,62 @@ run "invalid_policy_inputs_fail_closed" {
     var.secret_ids,
     var.budget_alert_thresholds,
     var.budget_notification_emails,
+  ]
+}
+
+run "external_project_identities_fail_closed" {
+  command = plan
+
+  variables {
+    api_service_account_email    = "external-api@attacker-project.iam.gserviceaccount.com"
+    worker_service_account_email = "external-worker@attacker-project.iam.gserviceaccount.com"
+  }
+
+  expect_failures = [
+    var.api_service_account_email,
+    var.worker_service_account_email,
+  ]
+}
+
+run "external_project_deployer_fails_closed" {
+  command = plan
+
+  variables {
+    deployer_service_account_email = "external-deploy@attacker-project.iam.gserviceaccount.com"
+  }
+
+  expect_failures = [
+    var.deployer_service_account_email,
+  ]
+}
+
+run "collapsed_workload_identities_fail_closed" {
+  command = plan
+
+  variables {
+    api_service_account_email      = "shared-runtime@contract-assignment-dev.iam.gserviceaccount.com"
+    worker_service_account_email   = "shared-runtime@contract-assignment-dev.iam.gserviceaccount.com"
+    deployer_service_account_email = "shared-runtime@contract-assignment-dev.iam.gserviceaccount.com"
+  }
+
+  expect_failures = [var.deployer_service_account_email]
+}
+
+run "resource_collisions_and_label_overflow_fail_closed" {
+  command = plan
+
+  variables {
+    labels = {
+      for index in range(62) : "label_${index}" => "value"
+    }
+    secret_ids = {
+      api_key_pepper    = "same-secret"
+      task_signing_hmac = "same-secret"
+    }
+  }
+
+  expect_failures = [
+    var.labels,
+    var.secret_ids,
   ]
 }

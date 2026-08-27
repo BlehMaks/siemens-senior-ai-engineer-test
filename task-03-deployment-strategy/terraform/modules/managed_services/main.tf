@@ -59,9 +59,10 @@ resource "google_firestore_database" "assessment" {
 resource "google_secret_manager_secret" "managed" {
   for_each = var.secret_ids
 
-  project   = var.project_id
-  secret_id = each.value
-  labels    = local.common_labels
+  project             = var.project_id
+  secret_id           = each.value
+  labels              = local.common_labels
+  deletion_protection = true
 
   replication {
     user_managed {

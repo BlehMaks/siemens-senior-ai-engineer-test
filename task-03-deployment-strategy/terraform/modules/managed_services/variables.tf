@@ -55,12 +55,16 @@ variable "labels" {
   default     = {}
 
   validation {
-    condition = alltrue([
-      for key, value in var.labels :
-      can(regex("^[a-z][a-z0-9_-]{0,62}$", key)) &&
-      can(regex("^[a-z0-9_-]{1,63}$", value))
-    ])
-    error_message = "labels must use short lowercase label-compatible keys and values."
+    condition = (
+      length(var.labels) <= 61 &&
+      alltrue([
+        for key, value in var.labels :
+        can(regex("^[a-z][a-z0-9_-]{0,62}$", key)) &&
+        can(regex("^[a-z0-9_-]{1,63}$", value)) &&
+        !contains(["environment", "managed_by", "system"], key)
+      ])
+    )
+    error_message = "labels may contain at most 61 entries and must not override reserved module labels."
   }
 }
 
@@ -112,11 +116,14 @@ variable "secret_ids" {
   }
 
   validation {
-    condition = alltrue([
-      for secret_id in [var.secret_ids.api_key_pepper, var.secret_ids.task_signing_hmac] :
-      can(regex("^[a-z][a-z0-9-]{2,254}$", secret_id))
-    ])
-    error_message = "Every secret ID must satisfy Secret Manager naming rules."
+    condition = (
+      length(toset([var.secret_ids.api_key_pepper, var.secret_ids.task_signing_hmac])) == 2 &&
+      alltrue([
+        for secret_id in [var.secret_ids.api_key_pepper, var.secret_ids.task_signing_hmac] :
+        can(regex("^[a-z][a-z0-9-]{2,254}$", secret_id))
+      ])
+    )
+    error_message = "Secret IDs must be unique and satisfy Secret Manager naming rules."
   }
 }
 
@@ -228,7 +235,10 @@ variable "api_service_account_email" {
   type        = string
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\\.iam\\.gserviceaccount\\.com$", var.api_service_account_email))
+    condition = (
+      can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\\.iam\\.gserviceaccount\\.com$", var.api_service_account_email)) &&
+      endswith(var.api_service_account_email, "@${var.project_id}.iam.gserviceaccount.com")
+    )
     error_message = "api_service_account_email must be a GCP service-account email."
   }
 }
@@ -238,7 +248,10 @@ variable "worker_service_account_email" {
   type        = string
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\\.iam\\.gserviceaccount\\.com$", var.worker_service_account_email))
+    condition = (
+      can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\\.iam\\.gserviceaccount\\.com$", var.worker_service_account_email)) &&
+      endswith(var.worker_service_account_email, "@${var.project_id}.iam.gserviceaccount.com")
+    )
     error_message = "worker_service_account_email must be a GCP service-account email."
   }
 }
@@ -248,7 +261,15 @@ variable "deployer_service_account_email" {
   type        = string
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\\.iam\\.gserviceaccount\\.com$", var.deployer_service_account_email))
-    error_message = "deployer_service_account_email must be a GCP service-account email."
+    condition = (
+      can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\\.iam\\.gserviceaccount\\.com$", var.deployer_service_account_email)) &&
+      endswith(var.deployer_service_account_email, "@${var.project_id}.iam.gserviceaccount.com") &&
+      length(toset([
+        var.api_service_account_email,
+        var.worker_service_account_email,
+        var.deployer_service_account_email,
+      ])) == 3
+    )
+    error_message = "deployer_service_account_email must belong to the project and all workload identities must be distinct."
   }
 }
