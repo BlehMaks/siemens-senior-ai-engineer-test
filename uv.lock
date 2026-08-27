@@ -919,6 +919,16 @@ source = { editable = "task-06-category-consolidation" }
 name = "siemens-deployment-strategy"
 version = "0.1.0"
 source = { editable = "task-03-deployment-strategy" }
+dependencies = [
+    { name = "siemens-agent-api" },
+    { name = "siemens-search-agent" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "siemens-agent-api", editable = "task-02-agent-api" },
+    { name = "siemens-search-agent", editable = "task-01-search-agent" },
+]
 
 [[package]]
 name = "siemens-material-similarity"

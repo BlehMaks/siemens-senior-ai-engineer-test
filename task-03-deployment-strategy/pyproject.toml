@@ -3,7 +3,14 @@ name = "siemens-deployment-strategy"
 version = "0.1.0"
 description = "Executable deployment assets and capacity checks"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "siemens-agent-api==0.1.0",
+    "siemens-search-agent==0.1.0",
+]
+
+[tool.uv.sources]
+siemens-agent-api = { workspace = true }
+siemens-search-agent = { workspace = true }
 
 [build-system]
 requires = ["uv_build>=0.12.6,<0.13"]
