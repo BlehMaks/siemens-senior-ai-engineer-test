@@ -53,6 +53,7 @@ def test_dockerfile_is_locked_minimal_and_runtime_hardened() -> None:
     assert dockerfile.index("WORKDIR /app") < dockerfile.index("USER 65532:65532")
     assert "STOPSIGNAL SIGTERM" in dockerfile
     assert "HEALTHCHECK" in dockerfile
+    assert 'CMD ["python", "-I", "-B", "-c"' in dockerfile
     assert (
         'ENTRYPOINT ["python", "-I", "-u", "-B", "-m", '
         '"deployment_strategy.container"]' in dockerfile

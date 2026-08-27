@@ -54,6 +54,6 @@ USER 65532:65532
 EXPOSE 8080
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
-    CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"PORT\"]}/health/ready', timeout=2).read()"]
+    CMD ["python", "-I", "-B", "-c", "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"PORT\"]}/health/ready', timeout=2).read()"]
 
 ENTRYPOINT ["python", "-I", "-u", "-B", "-m", "deployment_strategy.container"]
