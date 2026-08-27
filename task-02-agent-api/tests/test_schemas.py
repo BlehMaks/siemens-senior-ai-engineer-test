@@ -258,6 +258,13 @@ def test_nested_public_answer_collections_are_bounded() -> None:
         "http://127.0.0.1:8080/private",
         "https://example.com/report#access-token",
         "https://example.com/report?api_key=private",
+        "https://example.com/report/password=stolen-production-credential",
+        "https://example.com/report/password%253Dstolen-production-credential",
+        "https://example.com/report/pass%EF%B8%8Fword=stolen-production-credential",
+        "https://example.com/report?q=password%253Dstolen-production-credential",
+        "https://example.com/report?client_secret=stolen-production-credential",
+        "https://example.com/report?client%255fsecret=stolen-production-credential",
+        "https://example.com/report?q=sk-testcredential12345678",
     ],
 )
 def test_public_answer_rejects_non_public_or_sensitive_source_urls(

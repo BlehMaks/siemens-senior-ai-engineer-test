@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Annotated, Literal
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, unquote_plus, urlsplit
 
 from pydantic import (
     AfterValidator,
@@ -72,16 +72,26 @@ _SENSITIVE_QUERY_NAMES = frozenset(
         "accesstoken",
         "auth",
         "authorization",
+        "clientassertion",
+        "clientsecret",
         "credential",
         "credentials",
+        "idtoken",
         "key",
         "passwd",
         "password",
+        "privatekey",
+        "refreshtoken",
         "secret",
+        "sessiontoken",
         "sig",
         "signature",
         "token",
+        "xamzcredential",
+        "xamzsecuritytoken",
         "xamzsignature",
+        "xgoogcredential",
+        "xgoogsignature",
     }
 )
 _PUBLIC_MESSAGE_PATTERNS = (
@@ -176,10 +186,41 @@ def _require_public_source_url(value: str) -> None:
             raise ValueError("citation URL is not public")
     if parsed.fragment:
         raise ValueError("citation URL fragments are not public")
-    for name, _ in parse_qsl(parsed.query, keep_blank_values=True):
-        normalized_name = re.sub(r"[^a-z0-9]", "", name.lower())
+    _validated_public_url_component(parsed.path, plus=False)
+    _validated_public_url_component(parsed.query, plus=True)
+    for name, query_value in parse_qsl(parsed.query, keep_blank_values=True):
+        decoded_name = _validated_public_url_component(name, plus=True)
+        normalized_name = re.sub(r"[^a-z0-9]", "", decoded_name.lower())
         if normalized_name in _SENSITIVE_QUERY_NAMES:
             raise ValueError("citation URL contains a sensitive query field")
+        _validated_public_url_component(query_value, plus=True)
+
+
+def _validated_public_url_component(value: str, *, plus: bool) -> str:
+    try:
+        decoded = _fully_decode_url_component(value, plus=plus)
+        _reject_sensitive_text(decoded)
+    except ValueError:
+        raise ValueError("citation URL contains sensitive material") from None
+    return decoded
+
+
+def _fully_decode_url_component(value: str, *, plus: bool) -> str:
+    """Expose nested percent encoding before applying the disclosure boundary."""
+
+    decode = unquote_plus if plus else unquote
+    decoded = value
+    # Every effective decoding pass shortens a percent-encoded component. The input
+    # length is therefore a strict termination bound even for nested encodings.
+    try:
+        for _ in range(len(value) + 1):
+            candidate = decode(decoded, errors="strict")
+            if candidate == decoded:
+                return decoded
+            decoded = candidate
+    except UnicodeDecodeError:
+        raise ValueError("citation URL encoding is not public") from None
+    raise ValueError("citation URL encoding exceeds the public bound")
 
 
 def _reject_private_field_path(value: str) -> str:
