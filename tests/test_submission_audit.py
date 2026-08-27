@@ -314,3 +314,49 @@ def test_additional_symbolic_and_structural_values_pass(
     git(repository, "add", target.name)
 
     assert audit_repository(repository) == []
+
+
+@pytest.mark.parametrize(
+    ("path", "content"),
+    [
+        ("settings.py", seed("pass", 'word = "Hardcoded$Secret123"\n').decode()),
+        ("runtime.sh", seed("pass", "word='Hardcoded$Secret123'\n").decode()),
+        ("main.tf", seed("pass", 'word = "Hardcoded$Secret123"\n').decode()),
+    ],
+)
+def test_literal_dollar_credentials_do_not_bypass_audit(
+    repository: Path, path: str, content: str
+) -> None:
+    target = repository / path
+    target.write_text(content, encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert any("credential assignment" in item for item in audit_repository(repository))
+
+
+@pytest.mark.parametrize(
+    ("path", "content"),
+    [
+        ("bin/deploy", '#!/usr/bin/env bash\ntoken="Bearer-$TOKEN"\n'),
+        (
+            "main.tf.json",
+            seed(
+                '{"sec', 'ret": "projects/${var.project}/secrets/${var.secret}"}\n'
+            ).decode(),
+        ),
+        (
+            "settings.py",
+            'secret = "projects/{project}/secrets/{name}".format('
+            "project=project_id, name=secret_id)\n",
+        ),
+    ],
+)
+def test_additional_language_specific_symbolic_values_pass(
+    repository: Path, path: str, content: str
+) -> None:
+    target = repository / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    git(repository, "add", path)
+
+    assert audit_repository(repository) == []

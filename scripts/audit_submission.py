@@ -64,9 +64,11 @@ SYMBOLIC_VALUE = re.compile(
     r")",
     re.DOTALL,
 )
-DOLLAR_INTERPOLATION = re.compile(r"\$\{[^{}\r\n]+\}|\$[A-Za-z_][A-Za-z0-9_]*")
+SHELL_INTERPOLATION = re.compile(r"\$\{[^{}\r\n]+\}|\$[A-Za-z_][A-Za-z0-9_]*")
+TERRAFORM_INTERPOLATION = re.compile(r"\$\{[^{}\r\n]+\}")
 BRACED_INTERPOLATION = re.compile(r"\{[A-Za-z_][^{}\r\n]*\}")
-EXPRESSION_SUFFIXES = {".bash", ".hcl", ".py", ".sh", ".tf", ".zsh"}
+SHELL_SUFFIXES = {".bash", ".sh", ".zsh"}
+SHELL_SHEBANG = re.compile(r"^#![^\r\n]*(?:ba|z)?sh(?:[ \t]|$)")
 
 
 def _git(repo: Path, *args: str) -> bytes:
@@ -124,14 +126,14 @@ def _is_literal(
     value: str,
     *,
     minimum_length: int,
-    expression_context: bool = False,
+    interpolation: re.Pattern[str] | None = None,
     reference_context: bool = False,
     braced_interpolation: bool = False,
 ) -> bool:
     candidate = value.strip()
     if len(candidate) < minimum_length or SYMBOLIC_VALUE.fullmatch(candidate):
         return False
-    if expression_context and DOLLAR_INTERPOLATION.search(candidate):
+    if interpolation is not None and interpolation.search(candidate):
         return False
     if braced_interpolation and BRACED_INTERPOLATION.search(candidate):
         return False
@@ -164,7 +166,9 @@ def _closing_quote_index(value: str, quote: str) -> int | None:
         offset = index + len(quote)
 
 
-def _quoted_literal(value: str, following_lines: list[str]) -> tuple[str, str] | None:
+def _quoted_literal(
+    value: str, following_lines: list[str]
+) -> tuple[str, str, str, str] | None:
     quote_match = QUOTED_VALUE.match(value)
     if quote_match is None:
         return None
@@ -177,14 +181,25 @@ def _quoted_literal(value: str, following_lines: list[str]) -> tuple[str, str] |
     closing_index = _closing_quote_index(candidate, quote)
     if closing_index is None:
         return None
-    return candidate[:closing_index], quote_match.group("prefix").lower()
+    return (
+        candidate[:closing_index],
+        quote_match.group("prefix").lower(),
+        quote,
+        candidate[closing_index + len(quote) :].strip(),
+    )
 
 
 def _contains_credential_assignment(path: str, content: bytes) -> bool:
     """Recognize committed credential literals while ignoring symbolic references."""
 
-    expression_context = Path(path).suffix.lower() in EXPRESSION_SUFFIXES
     lines = content.decode("utf-8", errors="replace").splitlines()
+    suffix = Path(path).suffix.lower()
+    shell_context = suffix in SHELL_SUFFIXES or bool(
+        lines and SHELL_SHEBANG.match(lines[0])
+    )
+    terraform_context = suffix in {".hcl", ".tf"} or path.lower().endswith(".tf.json")
+    python_context = suffix == ".py"
+    reference_context = shell_context or terraform_context or python_context
     for index, line in enumerate(lines):
         for assignment in CREDENTIAL_ASSIGNMENT.finditer(line):
             value = line[assignment.end() :].strip()
@@ -211,12 +226,20 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
 
             quoted = _quoted_literal(value, lines[index + 1 :])
             if quoted is not None:
-                literal, prefix = quoted
+                literal, prefix, quote, trailing = quoted
+                interpolation = None
+                if shell_context and quote != "'":
+                    interpolation = SHELL_INTERPOLATION
+                elif terraform_context:
+                    interpolation = TERRAFORM_INTERPOLATION
                 if _is_literal(
                     literal,
                     minimum_length=8,
-                    expression_context=expression_context,
-                    braced_interpolation="f" in prefix,
+                    interpolation=interpolation,
+                    braced_interpolation=(
+                        "f" in prefix
+                        or (python_context and trailing.startswith(".format("))
+                    ),
                 ):
                     return True
                 continue
@@ -225,8 +248,14 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
             if _is_literal(
                 unquoted,
                 minimum_length=16,
-                expression_context=expression_context,
-                reference_context=expression_context,
+                interpolation=(
+                    SHELL_INTERPOLATION
+                    if shell_context
+                    else TERRAFORM_INTERPOLATION
+                    if terraform_context
+                    else None
+                ),
+                reference_context=reference_context,
             ):
                 return True
 
