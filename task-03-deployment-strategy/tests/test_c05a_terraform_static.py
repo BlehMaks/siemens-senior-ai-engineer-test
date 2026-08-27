@@ -26,8 +26,9 @@ def test_run_services_keeps_worker_private_and_oidc_bound() -> None:
     source = read(RUN_SERVICES_MAIN)
 
     assert 'ingress             = var.worker_ingress' in source
+    assert 'resource "google_cloud_run_v2_service_iam_binding" "worker_invoker"' in source
     assert 'role     = "roles/run.invoker"' in source
-    assert 'member   = "serviceAccount:${var.tasks_service_account_email}"' in source
+    assert 'members  = ["serviceAccount:${var.tasks_service_account_email}"]' in source
     assert 'role     = "roles/cloudtasks.enqueuer"' in source
     assert 'member   = "serviceAccount:${var.api_service_account_email}"' in source
     assert 'role               = "roles/iam.serviceAccountTokenCreator"' in source
@@ -59,6 +60,8 @@ def test_run_services_is_digest_pinned_and_bounded() -> None:
     assert 'max_dispatches_per_second = var.queue_max_dispatches_per_second' in source
     assert 'max_concurrent_dispatches = var.queue_max_concurrent_dispatches' in source
     assert 'max_attempts       = var.queue_max_attempts' in source
+    assert "prevent_destroy = true" in source
+    assert "var.queue_max_retry_seconds >= 1" in variables
 
 
 def test_run_services_resolves_cloud_tasks_service_agent_from_project() -> None:
@@ -95,6 +98,7 @@ def test_c05a_docs_and_tests_cover_baseline_and_hardened_modes() -> None:
     assert "Worker ingress is never public" in readme
     assert "api_allow_unauthenticated" in ingress_test
     assert "public_invoker_with_disabled_api_url_fails_closed" in run_test
+    assert "unbounded_retry_window_fails_closed" in run_test
     assert "invalid_digest_fails_closed" in run_test
     assert "invalid_worker_path_fails_closed" in run_test
 

@@ -157,12 +157,12 @@ resource "google_cloud_run_v2_service" "worker" {
   depends_on = [google_project_service.required]
 }
 
-resource "google_cloud_run_v2_service_iam_member" "worker_invoker" {
+resource "google_cloud_run_v2_service_iam_binding" "worker_invoker" {
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_service.worker.name
   role     = "roles/run.invoker"
-  member   = "serviceAccount:${var.tasks_service_account_email}"
+  members  = ["serviceAccount:${var.tasks_service_account_email}"]
 }
 
 resource "google_cloud_run_v2_service_iam_member" "api_public_invoker" {
@@ -179,6 +179,10 @@ resource "google_cloud_tasks_queue" "dispatch" {
   project  = var.project_id
   location = var.region
   name     = "${var.system_code}-${var.environment}-run-dispatch"
+
+  lifecycle {
+    prevent_destroy = true
+  }
 
   rate_limits {
     max_dispatches_per_second = var.queue_max_dispatches_per_second

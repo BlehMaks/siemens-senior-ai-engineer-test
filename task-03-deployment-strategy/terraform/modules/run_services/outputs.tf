@@ -27,8 +27,8 @@ output "worker_service" {
     concurrency     = google_cloud_run_v2_service.worker.template[0].max_instance_request_concurrency
     timeout         = google_cloud_run_v2_service.worker.template[0].timeout
     dispatch_path   = var.worker_dispatch_path
-    invoker_member  = google_cloud_run_v2_service_iam_member.worker_invoker.member
-    invoker_role    = google_cloud_run_v2_service_iam_member.worker_invoker.role
+    invoker_members = google_cloud_run_v2_service_iam_binding.worker_invoker.members
+    invoker_role    = google_cloud_run_v2_service_iam_binding.worker_invoker.role
   }
 }
 
@@ -55,8 +55,8 @@ output "iam_contract" {
   value = {
     api_queue_enqueuer_role        = google_cloud_tasks_queue_iam_member.api_enqueuer.role
     api_queue_enqueuer_member      = google_cloud_tasks_queue_iam_member.api_enqueuer.member
-    worker_invoker_member          = google_cloud_run_v2_service_iam_member.worker_invoker.member
-    worker_invoker_role            = google_cloud_run_v2_service_iam_member.worker_invoker.role
+    worker_invoker_members         = google_cloud_run_v2_service_iam_binding.worker_invoker.members
+    worker_invoker_role            = google_cloud_run_v2_service_iam_binding.worker_invoker.role
     tasks_service_agent_member     = google_service_account_iam_member.tasks_service_agent_token_creator.member
     tasks_service_agent_token_role = google_service_account_iam_member.tasks_service_agent_token_creator.role
   }

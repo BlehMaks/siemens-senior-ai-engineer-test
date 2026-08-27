@@ -346,8 +346,8 @@ variable "queue_max_retry_seconds" {
   default     = 900
 
   validation {
-    condition     = floor(var.queue_max_retry_seconds) == var.queue_max_retry_seconds && var.queue_max_retry_seconds >= 0 && var.queue_max_retry_seconds <= 3600
-    error_message = "queue_max_retry_seconds must be a whole number from 0 to 3600."
+    condition     = floor(var.queue_max_retry_seconds) == var.queue_max_retry_seconds && var.queue_max_retry_seconds >= 1 && var.queue_max_retry_seconds <= 3600
+    error_message = "queue_max_retry_seconds must be a whole number from 1 to 3600."
   }
 }
 

@@ -52,7 +52,7 @@ run "default_contract_is_bounded_and_digest_pinned" {
   }
 
   assert {
-    condition     = output.worker_service.invoker_member == "serviceAccount:sai-dev-tasks@contract-assignment-dev.iam.gserviceaccount.com"
+    condition     = output.worker_service.invoker_members == toset(["serviceAccount:sai-dev-tasks@contract-assignment-dev.iam.gserviceaccount.com"])
     error_message = "Only the Cloud Tasks caller identity should invoke the worker."
   }
 
@@ -240,4 +240,14 @@ run "inverted_queue_backoff_fails_closed" {
   }
 
   expect_failures = [var.queue_max_backoff_seconds]
+}
+
+run "unbounded_retry_window_fails_closed" {
+  command = plan
+
+  variables {
+    queue_max_retry_seconds = 0
+  }
+
+  expect_failures = [var.queue_max_retry_seconds]
 }
