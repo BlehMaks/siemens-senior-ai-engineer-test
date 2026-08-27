@@ -55,6 +55,7 @@ async def worker_lifespan(
         except asyncio.CancelledError:
             if not worker_ended:
                 raise
+            owner.uncancel()
     finally:
         unexpected_exit = worker_ended or task.done()
         stopping = True

@@ -196,6 +196,9 @@ async def test_worker_lifespan_remains_bounded_if_cancellation_is_suppressed() -
 
 @pytest.mark.asyncio
 async def test_worker_lifespan_propagates_worker_crash_to_owner() -> None:
+    owner = asyncio.current_task()
+    assert owner is not None
+    initial_cancellations = owner.cancelling()
     error = RuntimeError("simulated worker crash")
 
     with pytest.raises(RuntimeError) as caught:
@@ -203,6 +206,7 @@ async def test_worker_lifespan_propagates_worker_crash_to_owner() -> None:
             await asyncio.Event().wait()
 
     assert caught.value is error
+    assert owner.cancelling() == initial_cancellations
 
 
 @pytest.mark.asyncio
