@@ -76,6 +76,21 @@ async def test_migration_adopts_an_existing_task1_memory_database(
 
 
 @pytest.mark.asyncio
+async def test_migration_rejects_an_incompatible_legacy_reflection_table(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "incompatible-reflections.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE run_reflections ("
+            "tenant_id TEXT, session_id TEXT, run_id TEXT, payload BLOB)"
+        )
+
+    with pytest.raises(MigrationError, match="reflection schema is incompatible"):
+        await migrate(path)
+
+
+@pytest.mark.asyncio
 async def test_tampered_and_future_migration_history_is_rejected(
     tmp_path: Path,
 ) -> None:

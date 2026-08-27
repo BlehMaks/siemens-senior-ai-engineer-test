@@ -74,6 +74,12 @@ _REQUIRED_COLUMNS = {
     "run_reflections": ("tenant_id", "session_id", "run_id", "payload"),
     "audit_entries": ("tenant_id", "entry_id", "action", "occurred_at"),
 }
+_LEGACY_REFLECTION_SCHEMA = (
+    ("tenant_id", "TEXT", 1, 1),
+    ("session_id", "TEXT", 1, 2),
+    ("run_id", "TEXT", 1, 3),
+    ("payload", "TEXT", 1, 0),
+)
 
 
 async def migrate(path: Path) -> None:
@@ -96,6 +102,8 @@ async def migrate(path: Path) -> None:
                     ).fetchall()
                 )
                 _validate_ledger(rows)
+                if not rows:
+                    await _validate_legacy_reflection_schema(connection)
                 applied = len(rows)
                 for migration in _MIGRATIONS[applied:]:
                     for statement in _statements(migration.sql):
@@ -152,6 +160,27 @@ def _statements(script: str) -> tuple[str, ...]:
     if pending.strip():
         raise MigrationError("bundled migration is incomplete")
     return tuple(statements)
+
+
+async def _validate_legacy_reflection_schema(
+    connection: aiosqlite.Connection,
+) -> None:
+    """Accept only the Task 1 table shape before migration takes ownership."""
+
+    existing = await (
+        await connection.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'run_reflections'"
+        )
+    ).fetchone()
+    if existing is None:
+        return
+    rows = await (
+        await connection.execute('PRAGMA table_info("run_reflections")')
+    ).fetchall()
+    schema = tuple((row[1], row[2], row[3], row[5]) for row in rows)
+    if schema != _LEGACY_REFLECTION_SCHEMA:
+        raise MigrationError("database reflection schema is incompatible")
 
 
 async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
