@@ -355,6 +355,43 @@ def test_pure_dollar_credentials_follow_language_quoting_rules(
 @pytest.mark.parametrize(
     ("path", "content"),
     [
+        ("settings.py", seed("pass", 'word = "${Secret123}"\n').decode()),
+        ("runtime.sh", seed("pass", "word='${Secret123}'\n").decode()),
+        ("main.tf", seed("pass", 'word = "$${Secret123}"\n').decode()),
+    ],
+)
+def test_braced_dollar_credentials_follow_language_escaping_rules(
+    repository: Path, path: str, content: str
+) -> None:
+    target = repository / path
+    target.write_text(content, encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert any("credential assignment" in item for item in audit_repository(repository))
+
+
+@pytest.mark.parametrize(
+    ("path", "content"),
+    [
+        ("config.json", seed('{"tok', 'en": "${RUNTIME_TOKEN}"}\n').decode()),
+        ("config.yaml", seed("tok", "en: ${RUNTIME_TOKEN}\n").decode()),
+        ("settings.toml", seed("tok", 'en = "${RUNTIME_TOKEN}"\n').decode()),
+        ("runtime.env", seed("TOK", "EN=${RUNTIME_TOKEN}\n").decode()),
+    ],
+)
+def test_structured_config_interpolation_is_symbolic(
+    repository: Path, path: str, content: str
+) -> None:
+    target = repository / path
+    target.write_text(content, encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert audit_repository(repository) == []
+
+
+@pytest.mark.parametrize(
+    ("path", "content"),
+    [
         ("bin/deploy", '#!/usr/bin/env bash\ntoken="Bearer-$TOKEN"\n'),
         (
             "main.tf.json",

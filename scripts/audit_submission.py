@@ -57,7 +57,6 @@ CREDENTIAL_ASSIGNMENT = re.compile(
 QUOTED_VALUE = re.compile(r"(?P<prefix>(?i:[bruf]{0,3}))(?P<quote>\"\"\"|'''|\"|')")
 SYMBOLIC_VALUE = re.compile(
     r"(?:"
-    r"\$\{[^{}\r\n]+\}|"
     r"(?:var|local|module|data|settings|google_[A-Za-z0-9_]*|"
     r"aws_[A-Za-z0-9_]*|azurerm_[A-Za-z0-9_]*)\.[A-Za-z0-9_.\[\]\"'-]+|"
     r"[A-Za-z_][A-Za-z0-9_.]*\s*\(.*\)(?:\.[A-Za-z_][A-Za-z0-9_]*\(.*\))*"
@@ -65,9 +64,11 @@ SYMBOLIC_VALUE = re.compile(
     re.DOTALL,
 )
 SHELL_INTERPOLATION = re.compile(r"\$\{[^{}\r\n]+\}|\$[A-Za-z_][A-Za-z0-9_]*")
-TERRAFORM_INTERPOLATION = re.compile(r"\$\{[^{}\r\n]+\}")
+TEMPLATE_INTERPOLATION = re.compile(r"(?<!\$)\$\{[^{}\r\n]+\}")
+TERRAFORM_INTERPOLATION = TEMPLATE_INTERPOLATION
 BRACED_INTERPOLATION = re.compile(r"\{[A-Za-z_][^{}\r\n]*\}")
 SHELL_SUFFIXES = {".bash", ".sh", ".zsh"}
+TEMPLATE_SUFFIXES = {".env", ".json", ".toml", ".yaml", ".yml"}
 SHELL_SHEBANG = re.compile(r"^#![^\r\n]*(?:ba|z)?sh(?:[ \t]|$)")
 
 
@@ -232,6 +233,8 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
                     interpolation = SHELL_INTERPOLATION
                 elif terraform_context:
                     interpolation = TERRAFORM_INTERPOLATION
+                elif suffix in TEMPLATE_SUFFIXES:
+                    interpolation = TEMPLATE_INTERPOLATION
                 if _is_literal(
                     literal,
                     minimum_length=8,
@@ -253,6 +256,8 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
                     if shell_context
                     else TERRAFORM_INTERPOLATION
                     if terraform_context
+                    else TEMPLATE_INTERPOLATION
+                    if suffix in TEMPLATE_SUFFIXES
                     else None
                 ),
                 reference_context=reference_context,
