@@ -1,0 +1,56 @@
+{
+  "paths": {
+    "/health/live": [
+      "get"
+    ],
+    "/health/ready": [
+      "get"
+    ],
+    "/v1/runs/{run_id}": [
+      "get"
+    ],
+    "/v1/runs/{run_id}/cancel": [
+      "post"
+    ],
+    "/v1/runs/{run_id}/events": [
+      "get"
+    ],
+    "/v1/sessions": [
+      "get",
+      "post"
+    ],
+    "/v1/sessions/{session_id}": [
+      "delete",
+      "get"
+    ],
+    "/v1/sessions/{session_id}/memory": [
+      "delete"
+    ],
+    "/v1/sessions/{session_id}/runs": [
+      "post"
+    ]
+  },
+  "schemas": [
+    "CancellationResponse",
+    "Citation",
+    "CreateSessionRequest",
+    "DeletionResponse",
+    "ErrorCode",
+    "ErrorDetail",
+    "ErrorEnvelope",
+    "FieldIssue",
+    "HealthResponse",
+    "HealthState",
+    "OptionalAssistance",
+    "RunAcceptedResponse",
+    "RunFailure",
+    "RunFailureCode",
+    "RunState",
+    "RunStatusResponse",
+    "RunSubmitRequest",
+    "ScopedAnswer",
+    "SessionListResponse",
+    "SessionResponse"
+  ],
+  "sha256": "d2c8b4def8c54eda36dba455677b72a182d27bdfa840b7b15110ed7a605fa630"
+}
