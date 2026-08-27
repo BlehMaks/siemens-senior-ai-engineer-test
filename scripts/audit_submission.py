@@ -54,7 +54,7 @@ CREDENTIAL_ASSIGNMENT = re.compile(
     r"[ \t]*[:=][ \t]*",
     re.IGNORECASE,
 )
-QUOTED_VALUE = re.compile(r"(?P<prefix>(?i:[bruf]{0,3}))(?P<quote>\"\"\"|'''|\"|')")
+QUOTED_VALUE = re.compile(r"(?P<prefix>\$|(?i:[bruf]{0,3}))(?P<quote>\"\"\"|'''|\"|')")
 SYMBOLIC_VALUE = re.compile(
     r"(?:"
     r"(?:var|local|module|data|settings|google_[A-Za-z0-9_]*|"
@@ -64,7 +64,13 @@ SYMBOLIC_VALUE = re.compile(
     re.DOTALL,
 )
 SHELL_INTERPOLATION = re.compile(
-    r"(?<!\\)(?:\\\\)*(?:\$\{[^{}\r\n]+\}|\$[A-Za-z_][A-Za-z0-9_]*)"
+    r"(?<!\\)(?:\\\\)*(?:"
+    r"\$\{[^{}\r\n]+\}|"
+    r"\$[A-Za-z_][A-Za-z0-9_]*|"
+    r"\$[-0-9@*#?$!]|"
+    r"\$\(|"
+    r"`[^`\r\n]+`"
+    r")"
 )
 TEMPLATE_INTERPOLATION = re.compile(r"(?<!\$)\$\{[^{}\r\n]+\}")
 TERRAFORM_INTERPOLATION = TEMPLATE_INTERPOLATION

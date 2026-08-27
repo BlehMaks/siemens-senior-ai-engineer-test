@@ -402,6 +402,35 @@ def test_even_shell_backslashes_preserve_interpolation(
     assert audit_repository(repository) == []
 
 
+def test_shell_ansi_c_quoted_dollar_is_literal(repository: Path) -> None:
+    target = repository / "runtime.sh"
+    target.write_text(
+        seed("pass", "word=$'Hardcoded$Secret123'\n").decode(),
+        encoding="utf-8",
+    )
+    git(repository, "add", target.name)
+
+    assert any("credential assignment" in item for item in audit_repository(repository))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        '"Bearer-$1"',
+        '"Bearer-$?"',
+        '"Bearer-$(gcloud auth print-access-token)"',
+        '"Bearer-$((TOKEN_OFFSET + 1))"',
+        '"Bearer-`gcloud auth print-access-token`"',
+    ],
+)
+def test_shell_expansion_classes_are_symbolic(repository: Path, value: str) -> None:
+    target = repository / "runtime.sh"
+    target.write_text(seed("tok", f"en={value}\n").decode(), encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert audit_repository(repository) == []
+
+
 @pytest.mark.parametrize(
     ("path", "content"),
     [
