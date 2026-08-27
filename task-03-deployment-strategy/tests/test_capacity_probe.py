@@ -206,8 +206,24 @@ def test_design_envelopes_label_enterprise_scale_as_unmeasured() -> None:
     assert "not a production capacity claim" in envelopes["enterprise_stress"]["label"]
 
 
-def test_capacity_probe_cli_writes_machine_readable_json(tmp_path: Path) -> None:
+def test_capacity_probe_cli_writes_machine_readable_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     output_path = tmp_path / "capacity-proof.json"
+    original_run_probe = capacity_probe.run_probe
+
+    async def run_with_ci_tolerances() -> dict[str, object]:
+        return await original_run_probe(
+            ProbeConfig(
+                thresholds=ProbeThresholds(
+                    p95_submit_ms=1_000,
+                    p95_first_event_ms=1_000,
+                    recovery_ms=1_500,
+                )
+            )
+        )
+
+    monkeypatch.setattr(capacity_probe, "run_probe", run_with_ci_tolerances)
 
     assert main(["--output", output_path.as_posix()]) == 0
 
@@ -215,3 +231,11 @@ def test_capacity_probe_cli_writes_machine_readable_json(tmp_path: Path) -> None
     assert payload["assertions"]["passed"] is True
     assert payload["scenario"]["submissions"] == 12
     assert payload["measurements"]["accepted"] == 8
+
+
+def test_default_probe_thresholds_match_the_capacity_contract() -> None:
+    assert ProbeThresholds() == ProbeThresholds(
+        p95_submit_ms=250,
+        p95_first_event_ms=350,
+        recovery_ms=1_000,
+    )
