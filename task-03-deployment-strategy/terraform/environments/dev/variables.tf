@@ -4,9 +4,8 @@ variable "project_id" {
 }
 
 variable "project_number" {
-  description = "Assessment GCP project number for budget filters."
+  description = "Assessment GCP project number for Cloud Tasks and budget filters."
   type        = string
-  default     = ""
 }
 
 variable "region" {
@@ -54,4 +53,20 @@ variable "worker_service_account_email" {
 variable "deployer_service_account_email" {
   description = "Bootstrap deployer identity email."
   type        = string
+}
+
+variable "tasks_service_account_email" {
+  description = "Bootstrap Cloud Tasks caller identity email."
+  type        = string
+}
+
+variable "image_digest" {
+  description = "Immutable OCI image digest promoted into both Cloud Run services."
+  type        = string
+}
+
+variable "ingress_mode" {
+  description = "Budget baseline or hardened LB+Armor ingress posture."
+  type        = string
+  default     = "baseline"
 }

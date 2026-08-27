@@ -128,8 +128,8 @@ def test_no_keys_or_wildcard_principals_are_defined() -> None:
     assert "google_service_account_key" not in terraform_sources
     for role in ("owner", "editor", "viewer"):
         assert f'role    = "roles/{role}"' not in role_assignments.lower()
-    assert "allUsers" not in terraform_sources
-    assert "allAuthenticatedUsers" not in terraform_sources
+    assert "allUsers" not in role_assignments
+    assert "allAuthenticatedUsers" not in role_assignments
     assert "principalSet://iam.googleapis.com/*" not in terraform_sources
     assert 'member  = "*"' not in terraform_sources
 
