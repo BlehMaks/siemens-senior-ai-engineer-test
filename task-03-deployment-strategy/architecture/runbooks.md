@@ -49,6 +49,10 @@ session deletion. The final authenticated `GET` must return `404` after `DELETE
 /v1/sessions/{id}`; with the cloud configuration this exercises the Firestore
 cascade rather than an ephemeral local database.
 
+Ordinary HTTP probes have a 15-second wall-clock limit. The SSE probe has a
+30-second limit and requires HTTP `200` plus a typed `run.*` event; an event-shaped
+error response cannot pass the smoke check.
+
 Success prints one summary line. The command creates at most one session and two
 runs, then deletes the session. A failed run may leave that bounded session behind;
 inspect sessions by the `smoke-<SMOKE_ID>` label and delete it through the same API.
@@ -89,12 +93,14 @@ task-03-deployment-strategy/scripts/gcp_ops.sh teardown \
   DESTROY:contract-assessment-dev:dev
 ```
 
-The script rechecks project-number binding, creates and prints a remote-state-backed
-destroy plan, applies that exact plan, and verifies the API service, worker service,
-and dispatch queue are absent. A wrong environment, project number, relative
-Terraform root, or confirmation token fails before Terraform mutation. Do not retry
-after a partial failure until the remote state lock and cloud inventory have been
-reviewed.
+The script rechecks project-number binding, creates a remote-state-backed destroy
+plan, verifies the plan's project ID, project number, region, and system code against
+the confirmation target, prints it, and applies that exact plan. It then verifies
+the API service, worker service, and dispatch queue are absent. Inventory permission
+or transport failures stop verification instead of being treated as absence. A
+wrong environment, project number, plan binding, relative Terraform root, or
+confirmation token cannot reach `terraform apply`. Do not retry after a partial
+failure until the remote state lock and cloud inventory have been reviewed.
 
 Bootstrap WIF/state resources and any deliberately abandoned data resources are a
 separate administrator-owned boundary. Inventory and delete them only under their

@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+API_SMOKE_TEMP_DIR=""
+
 fail() {
   printf 'error: %s\n' "$1" >&2
   exit 1
+}
+
+cleanup_temp_dir() {
+  # A function trap keeps the generated path quoted as data instead of reparsing it.
+  [[ -z ${API_SMOKE_TEMP_DIR:-} ]] || rm -rf -- "$API_SMOKE_TEMP_DIR"
 }
 
 expect_status() {
@@ -14,12 +21,13 @@ expect_status() {
 request_status() {
   local output=$1
   shift
-  curl --silent --show-error --output "$output" --write-out '%{http_code}' "$@"
+  curl --silent --show-error --connect-timeout 5 --max-time 15 \
+    --output "$output" --write-out '%{http_code}' "$@"
 }
 
 main() {
   [[ $# -eq 2 ]] || fail "usage: api_smoke.sh BASE_URL SMOKE_ID"
-  local base_url=${1%/} smoke_id=$2 tmp_dir auth_a auth_b status session_id run_id cancel_run_id sse_code
+  local base_url=${1%/} smoke_id=$2 tmp_dir auth_a auth_b status session_id run_id cancel_run_id sse_code sse_status
   [[ $base_url =~ ^https://[A-Za-z0-9.-]+$ || $base_url =~ ^http://(127\.0\.0\.1|localhost):[0-9]+$ ]] || fail "BASE_URL must be HTTPS or loopback HTTP"
   [[ $smoke_id =~ ^[a-z0-9][a-z0-9-]{2,31}$ ]] || fail "SMOKE_ID must be a short lowercase opaque label"
   [[ -n ${SMOKE_API_KEY_A:-} && -n ${SMOKE_API_KEY_B:-} ]] || fail "SMOKE_API_KEY_A and SMOKE_API_KEY_B are required"
@@ -29,7 +37,8 @@ main() {
 
   umask 077
   tmp_dir=$(mktemp -d -t api-smoke.XXXXXX)
-  trap "rm -rf -- '$tmp_dir'" EXIT
+  API_SMOKE_TEMP_DIR=$tmp_dir
+  trap cleanup_temp_dir EXIT
   auth_a="$tmp_dir/auth-a.curl"
   auth_b="$tmp_dir/auth-b.curl"
   printf 'header = "Authorization: Bearer %s"\n' "$SMOKE_API_KEY_A" > "$auth_a"
@@ -65,11 +74,15 @@ main() {
   run_id=$(jq -er '.run_id | strings' "$tmp_dir/run.json")
 
   sse_code=0
+  sse_status=""
   curl --silent --show-error --no-buffer --max-time 30 \
     --config "$auth_a" \
     --output "$tmp_dir/events.txt" \
-    "$base_url/v1/runs/$run_id/events" || sse_code=$?
+    --write-out '%{http_code}' \
+    "$base_url/v1/runs/$run_id/events" >"$tmp_dir/events.status" || sse_code=$?
   [[ $sse_code -eq 0 || $sse_code -eq 28 ]] || fail "SSE request failed with curl exit $sse_code"
+  sse_status=$(<"$tmp_dir/events.status")
+  expect_status 200 "$sse_status" "SSE stream"
   grep -Eq '^event: run\.' "$tmp_dir/events.txt" || fail "SSE stream contained no typed run event"
 
   status=$(request_status "$tmp_dir/cancel-run.json" \

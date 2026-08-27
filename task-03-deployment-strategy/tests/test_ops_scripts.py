@@ -8,6 +8,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar
 
+import pytest
+
 TASK_ROOT = Path(__file__).resolve().parents[1]
 GCP_OPS = TASK_ROOT / "scripts" / "gcp_ops.sh"
 API_SMOKE = TASK_ROOT / "scripts" / "api_smoke.sh"
@@ -38,12 +40,26 @@ case "$1 $2" in
     if [[ ${3:-} == describe && " $* " == *" --format=json "* ]]; then
       printf '%s\n' "${FAKE_SERVICE_JSON}"
     elif [[ ${3:-} == describe ]]; then
-      exit "${FAKE_RESOURCE_EXISTS:-1}"
+      if [[ -n ${FAKE_RESOURCE_ERROR:-} ]]; then
+        printf '%s\n' "${FAKE_RESOURCE_ERROR}" >&2
+        exit 7
+      elif [[ ${FAKE_RESOURCE_EXISTS:-0} == 1 ]]; then
+        exit 0
+      fi
+      printf 'NOT_FOUND: service is absent\n' >&2
+      exit 1
     fi
     ;;
   "tasks queues")
     if [[ ${3:-} == describe ]]; then
-      exit "${FAKE_RESOURCE_EXISTS:-1}"
+      if [[ -n ${FAKE_RESOURCE_ERROR:-} ]]; then
+        printf '%s\n' "${FAKE_RESOURCE_ERROR}" >&2
+        exit 7
+      elif [[ ${FAKE_RESOURCE_EXISTS:-0} == 1 ]]; then
+        exit 0
+      fi
+      printf 'NOT_FOUND: queue is absent\n' >&2
+      exit 1
     fi
     ;;
   *) printf 'unexpected gcloud command: %s\n' "$*" >&2; exit 9 ;;
@@ -60,7 +76,13 @@ for argument in "$@"; do
     : > "${argument#-out=}"
   fi
 done
-if [[ " $* " == *" show "* ]]; then
+if [[ " $* " == *" show -json "* ]]; then
+  printf '{"variables":{"project_id":{"value":"%s"},"project_number":{"value":"%s"},"region":{"value":"%s"},"system_code":{"value":"%s"}}}\n' \
+    "${FAKE_PLAN_PROJECT_ID:-contract-assessment-dev}" \
+    "${FAKE_PLAN_PROJECT_NUMBER:-123456789012}" \
+    "${FAKE_PLAN_REGION:-europe-west3}" \
+    "${FAKE_PLAN_SYSTEM_CODE:-sai}"
+elif [[ " $* " == *" show "* ]]; then
   printf 'reviewed destroy plan\n'
 fi
 """,
@@ -223,6 +245,102 @@ def test_teardown_requires_exact_confirmation_and_verifies_runtime_removal(
     assert "runtime teardown verified" in passed.stdout
 
 
+def test_teardown_fails_closed_when_absence_cannot_be_verified(
+    tmp_path: Path,
+) -> None:
+    fake_bin, gcloud_log, terraform_log = _fake_tools(tmp_path)
+    environment = _ops_environment(fake_bin, gcloud_log, terraform_log)
+    environment["FAKE_RESOURCE_ERROR"] = "PERMISSION_DENIED: inventory unavailable"
+    terraform_root = tmp_path / "environment"
+    terraform_root.mkdir()
+    (terraform_root / "main.tf").write_text("terraform {}\n", encoding="utf-8")
+
+    result = _run_ops(
+        environment,
+        "teardown",
+        "contract-assessment-dev",
+        "europe-west3",
+        "dev",
+        "123456789012",
+        "sai",
+        str(terraform_root),
+        "DESTROY:contract-assessment-dev:dev",
+    )
+
+    assert result.returncode != 0
+    assert "could not verify absence" in result.stderr
+    assert "runtime teardown verified" not in result.stdout
+
+
+def test_teardown_binds_destroy_plan_to_confirmed_target(tmp_path: Path) -> None:
+    fake_bin, gcloud_log, terraform_log = _fake_tools(tmp_path)
+    environment = _ops_environment(fake_bin, gcloud_log, terraform_log)
+    environment["FAKE_PLAN_PROJECT_ID"] = "unrelated-production-project"
+    terraform_root = tmp_path / "environment"
+    terraform_root.mkdir()
+    (terraform_root / "main.tf").write_text("terraform {}\n", encoding="utf-8")
+
+    result = _run_ops(
+        environment,
+        "teardown",
+        "contract-assessment-dev",
+        "europe-west3",
+        "dev",
+        "123456789012",
+        "sai",
+        str(terraform_root),
+        "DESTROY:contract-assessment-dev:dev",
+    )
+
+    assert result.returncode != 0
+    assert "destroy plan inputs do not match" in result.stderr
+    assert " apply " not in f" {terraform_log.read_text(encoding='utf-8')} "
+
+
+@pytest.mark.parametrize("script", [GCP_OPS, API_SMOKE])
+def test_cleanup_traps_treat_hostile_tmpdir_as_data(
+    tmp_path: Path, script: Path
+) -> None:
+    marker = tmp_path / "trap-injected"
+    hostile_tmp = tmp_path / "hostile'; touch trap-injected; #"
+    hostile_tmp.mkdir()
+    fake_bin, gcloud_log, terraform_log = _fake_tools(tmp_path)
+    environment = _ops_environment(fake_bin, gcloud_log, terraform_log)
+    environment["TMPDIR"] = str(hostile_tmp)
+
+    if script == GCP_OPS:
+        terraform_root = tmp_path / "environment"
+        terraform_root.mkdir()
+        (terraform_root / "main.tf").write_text("terraform {}\n", encoding="utf-8")
+        _run_ops(
+            environment,
+            "teardown",
+            "contract-assessment-dev",
+            "europe-west3",
+            "dev",
+            "123456789012",
+            "sai",
+            str(terraform_root),
+            "DESTROY:contract-assessment-dev:dev",
+        )
+    else:
+        _executable(fake_bin / "curl", "#!/usr/bin/env bash\nexit 7\n")
+        subprocess.run(
+            [str(API_SMOKE), "http://127.0.0.1:1", "review-001"],
+            check=False,
+            capture_output=True,
+            cwd=tmp_path,
+            env={
+                **environment,
+                "SMOKE_API_KEY_A": "key-a",
+                "SMOKE_API_KEY_B": "key-b",
+            },
+            text=True,
+        )
+
+    assert not marker.exists()
+
+
 class SmokeHandler(BaseHTTPRequestHandler):
     requests: ClassVar[list[tuple[str, str, str | None]]] = []
     run_count: ClassVar[int] = 0
@@ -339,3 +457,60 @@ def test_api_smoke_fails_on_cross_tenant_visibility() -> None:
     result = _run_api_smoke(leak_cross_tenant=True)
     assert result.returncode != 0
     assert "cross-tenant isolation returned HTTP 200" in result.stderr
+
+
+def test_every_smoke_request_has_a_wall_clock_timeout() -> None:
+    source = API_SMOKE.read_text(encoding="utf-8")
+    request_helper = source.split("request_status() {", maxsplit=1)[1].split(
+        "\n}", maxsplit=1
+    )[0]
+
+    assert "--max-time" in request_helper
+    assert "--max-time 30" in source
+
+
+class ErrorSseHandler(SmokeHandler):
+    def do_GET(self) -> None:
+        if self.path != "/v1/runs/run-stream/events":
+            super().do_GET()
+            return
+        self._record()
+        body = b'event: run.failed\ndata: {"sequence":1}\n\n'
+        self.send_response(500)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def test_api_smoke_rejects_error_sse_with_event_shaped_body() -> None:
+    ErrorSseHandler.requests = []
+    ErrorSseHandler.run_count = 0
+    ErrorSseHandler.leak_cross_tenant = False
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ErrorSseHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = subprocess.run(
+            [
+                str(API_SMOKE),
+                f"http://127.0.0.1:{server.server_port}",
+                "review-001",
+            ],
+            check=False,
+            capture_output=True,
+            env={
+                **os.environ,
+                "SMOKE_API_KEY_A": "key-a",
+                "SMOKE_API_KEY_B": "key-b",
+            },
+            text=True,
+        )
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+    assert result.returncode != 0
+    assert "SSE stream returned HTTP 500" in result.stderr
+    assert "API smoke passed" not in result.stdout

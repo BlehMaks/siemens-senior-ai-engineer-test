@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+GCP_OPS_TEMP_FILE=""
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -17,6 +19,23 @@ fail() {
 
 require_tool() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
+}
+
+cleanup_temp_file() {
+  # A function trap keeps the generated path quoted as data instead of reparsing it.
+  [[ -z ${GCP_OPS_TEMP_FILE:-} ]] || rm -f -- "$GCP_OPS_TEMP_FILE"
+}
+
+assert_gcloud_resource_absent() {
+  local resource=$1 output exit_code=0
+  shift
+
+  output=$("$@" 2>&1) || exit_code=$?
+  if ((exit_code == 0)); then
+    fail "$resource remains after teardown"
+  fi
+  grep -Eq '(^|[^A-Z_])NOT_FOUND([^A-Z_]|$)|[Cc]ould not be found|[Dd]oes not exist' <<<"$output" ||
+    fail "could not verify absence of $resource"
 }
 
 validate_target() {
@@ -88,7 +107,7 @@ rollback() {
 teardown() {
   [[ $# -eq 7 ]] || { usage >&2; exit 2; }
   local project=$1 region=$2 environment=$3 project_number=$4 system_code=$5 terraform_root=$6 confirmation=$7
-  local plan_file service queue
+  local plan_file plan_json service queue
 
   [[ $system_code =~ ^[a-z][a-z0-9-]{1,18}$ ]] || fail "invalid system code"
   [[ $terraform_root == /* && -f $terraform_root/main.tf ]] || fail "Terraform root must be an absolute initialized environment root"
@@ -96,20 +115,30 @@ teardown() {
   validate_target "$project" "$region" "$environment" "$project_number"
 
   plan_file=$(mktemp -t "${system_code}-${environment}-destroy.XXXXXX")
-  trap "rm -f -- '$plan_file'" EXIT
+  GCP_OPS_TEMP_FILE=$plan_file
+  trap cleanup_temp_file EXIT
   terraform -chdir="$terraform_root" plan -destroy -input=false -lock-timeout=60s -out="$plan_file"
+  plan_json=$(terraform -chdir="$terraform_root" show -json "$plan_file")
+  jq -e \
+    --arg project "$project" \
+    --arg project_number "$project_number" \
+    --arg region "$region" \
+    --arg system_code "$system_code" \
+    '(.variables.project_id.value | tostring) == $project and
+     (.variables.project_number.value | tostring) == $project_number and
+     (.variables.region.value | tostring) == $region and
+     (.variables.system_code.value | tostring) == $system_code' \
+    <<<"$plan_json" >/dev/null || fail "destroy plan inputs do not match the confirmed target"
   terraform -chdir="$terraform_root" show -no-color "$plan_file"
   terraform -chdir="$terraform_root" apply -input=false -lock-timeout=60s "$plan_file"
 
   for service in "$system_code-$environment-api" "$system_code-$environment-worker"; do
-    if gcloud run services describe "$service" --project "$project" --region "$region" >/dev/null 2>&1; then
-      fail "Cloud Run service remains after teardown: $service"
-    fi
+    assert_gcloud_resource_absent "Cloud Run service: $service" \
+      gcloud run services describe "$service" --project "$project" --region "$region"
   done
   queue="$system_code-$environment-run-dispatch"
-  if gcloud tasks queues describe "$queue" --project "$project" --location "$region" >/dev/null 2>&1; then
-    fail "Cloud Tasks queue remains after teardown: $queue"
-  fi
+  assert_gcloud_resource_absent "Cloud Tasks queue: $queue" \
+    gcloud tasks queues describe "$queue" --project "$project" --location "$region"
   printf 'runtime teardown verified for %s/%s; review retained bootstrap and data resources separately\n' "$project" "$environment"
 }
 
