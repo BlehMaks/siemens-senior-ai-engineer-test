@@ -49,6 +49,10 @@ async def test_empty_and_repeated_migration_are_stable(tmp_path: Path) -> None:
         "sessions",
         "tenants",
         "work_items",
+        "quota_execution_leases",
+        "quota_rate_buckets",
+        "quota_run_admissions",
+        "quota_sse_leases",
     } < set(first_tables)
 
 
@@ -189,7 +193,7 @@ async def test_tampered_and_future_migration_history_is_rejected(
         connection.execute(
             "INSERT INTO schema_migrations "
             "(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
-            (4, "future", "1" * 64, "2026-08-27T10:00:00+00:00"),
+            (5, "future", "1" * 64, "2026-08-27T10:00:00+00:00"),
         )
     with pytest.raises(MigrationError, match="newer"):
         await migrate(future)
@@ -215,7 +219,7 @@ async def test_failed_migration_rolls_back_schema_and_ledger(
     path = tmp_path / "rollback.sqlite3"
     await migrate(path)
     broken = schema._Migration(
-        4,
+        5,
         "broken",
         "CREATE TABLE rollback_probe (value TEXT);\n"
         "INSERT INTO table_that_does_not_exist VALUES (1);\n",
@@ -232,7 +236,7 @@ async def test_failed_migration_rolls_back_schema_and_ledger(
         probe = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'rollback_probe'"
         ).fetchone()
-    assert versions == [(1,), (2,), (3,)]
+    assert versions == [(1,), (2,), (3,), (4,)]
     assert probe is None
 
 
@@ -270,7 +274,7 @@ async def test_api_key_lifecycle_migration_keeps_old_rows_non_authorizing(
     with sqlite3.connect(path) as connection:
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,)]
         assert connection.execute(
             "SELECT scopes, rotated_from_key_id FROM api_key_hashes "
             "WHERE tenant_id = ? AND key_id = ?",
@@ -298,7 +302,7 @@ async def test_local_work_queue_migration_adds_due_indexes_on_reopen(
             row[1] for row in connection.execute('PRAGMA table_info("work_items")')
         )
 
-    assert versions == [(1,), (2,), (3,)]
+    assert versions == [(1,), (2,), (3,), (4,)]
     assert "work_items_by_due" in indexes
     assert columns == (
         "work_id",

@@ -27,7 +27,7 @@ from search_agent.contracts import OpaqueId
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     code: {"model": ErrorEnvelope}
-    for code in (400, 401, 403, 404, 409, 422, 429, 500, 503)
+    for code in (400, 401, 403, 404, 409, 413, 422, 429, 500, 503)
 }
 
 

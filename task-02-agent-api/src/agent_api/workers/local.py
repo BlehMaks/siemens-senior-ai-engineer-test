@@ -31,6 +31,7 @@ from ..ports import (
     WriteDisposition,
 )
 from ..schemas import validate_public_answer
+from ..security.limits import ExecutionPermit, QuotaLimiter
 
 
 class QueueReceiver(Protocol):
@@ -83,6 +84,7 @@ class LocalWorker:
         heartbeat_seconds: float = 10.0,
         cancellation_drain_seconds: float = 1.0,
         lease_id_factory: Callable[[], str] | None = None,
+        limiter: QuotaLimiter | None = None,
     ) -> None:
         if not 1 <= lease_seconds <= 900:
             raise ValueError("lease_seconds must be between 1 and 900")
@@ -118,6 +120,7 @@ class LocalWorker:
             _new_lease_id if lease_id_factory is None else lease_id_factory
         )
         self._stop = asyncio.Event()
+        self._limiter = limiter
 
     async def process_one(self) -> bool:
         item = await self._queue.receive(
@@ -130,6 +133,26 @@ class LocalWorker:
         return True
 
     async def process(self, item: WorkItem) -> None:
+        permit: ExecutionPermit | None = None
+        if self._limiter is not None:
+            permit = await self._limiter.acquire_execution(
+                tenant_id=item.tenant_id,
+                run_id=item.run_id,
+                at=self._clock(),
+                lease_seconds=self._lease_seconds,
+            )
+            if permit is None:
+                return
+        try:
+            await self._process_admitted(item, permit)
+        finally:
+            if permit is not None:
+                assert self._limiter is not None
+                await self._limiter.release_execution(permit)
+
+    async def _process_admitted(
+        self, item: WorkItem, permit: ExecutionPermit | None
+    ) -> None:
         claim = await self._repository.claim(
             ClaimRequest(
                 tenant_id=item.tenant_id,
@@ -158,7 +181,7 @@ class LocalWorker:
         }:
             return
         assert run is not None
-        await self._execute(item, run)
+        await self._execute(item, run, permit)
 
     async def run_forever(self, *, poll_interval: float = 1.0) -> None:
         while not self._stop.is_set():
@@ -169,7 +192,9 @@ class LocalWorker:
     def stop(self) -> None:
         self._stop.set()
 
-    async def _execute(self, item: WorkItem, run: RunRecord) -> None:
+    async def _execute(
+        self, item: WorkItem, run: RunRecord, permit: ExecutionPermit | None
+    ) -> None:
         task = asyncio.create_task(
             self._executor.run(
                 tenant_id=run.tenant_id,
@@ -200,6 +225,20 @@ class LocalWorker:
                 )
                 if lease.disposition is LeaseDisposition.RENEWED:
                     assert lease.run is not None
+                    if (
+                        self._limiter is not None
+                        and permit is not None
+                        and not await self._limiter.renew_execution(
+                            permit,
+                            at=self._clock(),
+                            lease_seconds=self._lease_seconds,
+                        )
+                    ):
+                        task.cancel()
+                        await _drain_cancelled(
+                            task, timeout=self._cancellation_drain_seconds
+                        )
+                        return
                     current = lease.run
                     continue
                 if lease.disposition is LeaseDisposition.CANCELLATION_REQUESTED:

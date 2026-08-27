@@ -42,6 +42,7 @@ def build_run_router() -> APIRouter:
     ) -> RunAcceptedResponse:
         return await _service(http_request).submit(
             tenant_id=principal.tenant_id,
+            key_id=principal.key_id,
             session_id=session_id,
             idempotency_key=_single_idempotency_key(http_request, idempotency_key),
             query=request.query,

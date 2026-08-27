@@ -188,10 +188,34 @@ All documented JSON error responses use one envelope:
 
 Documented codes are `invalid_request`, `unauthenticated`, `forbidden`,
 `not_found`, `conflict`, `rate_limited`, `unavailable`, and `internal_error`.
-The envelope is used for `400`, `401`, `403`, `404`, `409`, `422`, `429`,
+The envelope is used for `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`,
 `500`, and `503` responses where applicable. Messages are bounded and safe for
 clients. They never contain tenant IDs, prompts, chain-of-thought, raw pages,
 credentials, traceback text, exception types, or storage/provider internals.
+
+## Quotas and retry behavior
+
+Authentication precedes application quota decisions. A valid request consumes its
+API-key token-bucket allowance even when later path, header, or body validation
+fails; malformed or duplicate credentials do not identify a bucket. Local code
+does not trust forwarded client-IP headers. Global and unauthenticated source-IP
+controls belong at the production ingress.
+
+New run work is charged once per tenant-scoped idempotency key. Retries reproduce
+the original admission, while a conflicting payload remains `409`; neither creates
+or charges another run. Queued counts follow durable run state. A reservation left
+between quota admission and run persistence blocks only for the configured short
+TTL, while its daily work charge and idempotency history remain for the UTC day.
+Concurrent execution and SSE connections use renewable SQLite leases, so another
+process sees the same cap and a crashed owner is released after its authoritative
+lease horizon. Terminal/cancelled work and closed/disconnected streams release live
+capacity.
+
+Quota exhaustion returns `429` with a decimal integer `Retry-After` header rounded
+up to at least one second. Daily exhaustion points to the next UTC day. An
+accounting outage fails closed as `503`. Request bodies are measured from actual
+ASGI chunks rather than `Content-Length`; an authenticated body over the configured
+limit returns `413` without reading unbounded data.
 
 ## Server-sent events
 

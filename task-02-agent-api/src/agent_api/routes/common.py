@@ -8,11 +8,17 @@ from typing import Any, cast
 from fastapi import Request
 
 from ..schemas import ErrorEnvelope
-from ..security import ApiKeyManager, AuthenticatedApiKey
+from ..security import (
+    ApiKeyManager,
+    AuthenticatedApiKey,
+    QuotaLimiter,
+    RequestTooLarge,
+    request_too_large,
+)
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     code: {"model": ErrorEnvelope}
-    for code in (400, 401, 403, 404, 409, 422, 429, 500, 503)
+    for code in (400, 401, 403, 404, 409, 413, 422, 429, 500, 503)
 }
 
 
@@ -22,8 +28,17 @@ async def authenticate_request(
     values = request.headers.getlist("authorization")
     authorization = values[0] if len(values) == 1 else None
     manager = cast(ApiKeyManager, request.app.state.auth_manager)
-    return await manager.authenticate(
+    principal = await manager.authenticate(
         authorization=authorization,
         required_scope=required_scope,
         now=now,
     )
+    limiter = cast(QuotaLimiter, request.app.state.quota_limiter)
+    await limiter.admit_request(
+        tenant_id=principal.tenant_id,
+        key_id=principal.key_id,
+        at=now,
+    )
+    if request_too_large(request):
+        raise RequestTooLarge
+    return principal

@@ -37,6 +37,7 @@ _MIGRATIONS = (
     _bundled_migration(1, "initial", "001_initial.sql"),
     _bundled_migration(2, "api-key-lifecycle", "002_api_key_lifecycle.sql"),
     _bundled_migration(3, "local-work-queue", "003_local_work_queue.sql"),
+    _bundled_migration(4, "quota-accounting", "004_quota_accounting.sql"),
 )
 _CREATE_LEDGER = """
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -86,6 +87,24 @@ _REQUIRED_COLUMNS = {
         "enqueued_at",
         "not_before",
     ),
+    "quota_rate_buckets": ("tenant_id", "key_id", "tokens", "last_refill"),
+    "quota_run_admissions": (
+        "tenant_id",
+        "key_id",
+        "idempotency_key",
+        "request_hash",
+        "run_id",
+        "work_day",
+        "work_units",
+        "created_at",
+    ),
+    "quota_execution_leases": (
+        "tenant_id",
+        "run_id",
+        "permit_id",
+        "expires_at",
+    ),
+    "quota_sse_leases": ("tenant_id", "key_id", "permit_id", "expires_at"),
 }
 _LEGACY_REFLECTION_SQL = (
     "CREATE TABLE run_reflections ( tenant_id TEXT NOT NULL, "

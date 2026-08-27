@@ -21,7 +21,18 @@ from search_agent.contracts import OpaqueId
 from .ports import IdempotencyConflictError
 from .routes import build_event_router, build_run_router, build_session_router
 from .schemas import ErrorCode, ErrorDetail, ErrorEnvelope
-from .security import ApiKeyAuthError, ApiKeyManager, EnvPepperProvider, PepperProvider
+from .security import (
+    ApiKeyAuthError,
+    ApiKeyManager,
+    EnvPepperProvider,
+    LimitConfig,
+    PepperProvider,
+    QuotaExceeded,
+    QuotaLimiter,
+    RequestBodyLimitMiddleware,
+    RequestTooLarge,
+    SQLiteQuotaLimiter,
+)
 from .services import (
     EventStreamService,
     InvalidRequest,
@@ -63,15 +74,24 @@ def create_app(
     run_id_factory: Callable[[], str] | None = None,
     run_executor: RunExecutor | None = None,
     worker_shutdown_seconds: float = 5.0,
+    limit_config: LimitConfig | None = None,
+    quota_limiter: QuotaLimiter | None = None,
 ) -> FastAPI:
     provider = EnvPepperProvider() if pepper_provider is None else pepper_provider
     now = _utc_now if clock is None else clock
+    limits = LimitConfig() if limit_config is None else limit_config
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await migrate(database_path)
         run_repository = SQLiteRunRepository(database_path)
         work_queue = SQLiteWorkQueue(database_path)
+        limiter = (
+            SQLiteQuotaLimiter(database_path, limits)
+            if quota_limiter is None
+            else quota_limiter
+        )
+        app.state.quota_limiter = limiter
         app.state.auth_manager = ApiKeyManager(
             SQLiteKeyHashRepository(database_path), provider
         )
@@ -85,6 +105,7 @@ def create_app(
             work_queue,
             clock=now,
             run_id_factory=run_id_factory,
+            limiter=limiter,
         )
         app.state.event_stream_service = EventStreamService(
             run_repository,
@@ -101,6 +122,7 @@ def create_app(
                 worker_id="worker-local",
                 clock=now,
                 cancellation_drain_seconds=worker_shutdown_seconds,
+                limiter=limiter,
             )
         )
         async with worker_lifespan(
@@ -118,6 +140,10 @@ def create_app(
     app.include_router(build_session_router())
     app.include_router(build_run_router())
     app.include_router(build_event_router())
+    app.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_bytes=limits.max_request_bytes,
+    )
     app.add_exception_handler(ApiKeyAuthError, _auth_error)
     app.add_exception_handler(SessionNotFound, _not_found)
     app.add_exception_handler(RunNotFound, _run_not_found)
@@ -125,6 +151,8 @@ def create_app(
     app.add_exception_handler(IdempotencyConflictError, _conflict)
     app.add_exception_handler(SessionUnavailable, _unavailable)
     app.add_exception_handler(StorageError, _unavailable)
+    app.add_exception_handler(QuotaExceeded, _quota_exceeded)
+    app.add_exception_handler(RequestTooLarge, _request_too_large)
     app.add_exception_handler(RequestValidationError, _invalid_request)
     app.add_exception_handler(StarletteHTTPException, _http_error)
     app.add_exception_handler(Exception, _internal_error)
@@ -199,6 +227,28 @@ async def _unavailable(request: Request, exc: Exception) -> JSONResponse:
         ErrorCode.UNAVAILABLE,
         "Service is temporarily unavailable.",
         retryable=True,
+    )
+
+
+async def _quota_exceeded(request: Request, exc: Exception) -> JSONResponse:
+    error = cast(QuotaExceeded, exc)
+    return _error_response(
+        request,
+        429,
+        ErrorCode.RATE_LIMITED,
+        "Request quota was exceeded.",
+        retryable=True,
+        headers={"Retry-After": str(error.retry_after)},
+    )
+
+
+async def _request_too_large(request: Request, exc: Exception) -> JSONResponse:
+    del exc
+    return _error_response(
+        request,
+        413,
+        ErrorCode.INVALID_REQUEST,
+        "Request body was too large.",
     )
 
 

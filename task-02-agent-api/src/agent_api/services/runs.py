@@ -27,6 +27,7 @@ from ..schemas import (
     RunStatusResponse,
     public_run_failure,
 )
+from ..security.limits import QuotaLimiter, RunAdmission
 from ..storage import StorageError
 from .sessions import SessionNotFound
 
@@ -43,34 +44,61 @@ class RunService:
         *,
         clock: Callable[[], datetime],
         run_id_factory: Callable[[], str] | None = None,
+        limiter: QuotaLimiter | None = None,
     ) -> None:
         self._repository = repository
         self._queue = queue
         self._clock = clock
         self._run_id_factory = _new_run_id if run_id_factory is None else run_id_factory
+        self._limiter = limiter
 
     async def submit(
         self,
         *,
         tenant_id: OpaqueId,
+        key_id: OpaqueId | None = None,
         session_id: OpaqueId,
         idempotency_key: IdempotencyKey,
         query: QueryText,
     ) -> RunAcceptedResponse:
         now = self._clock()
+        run_id = self._run_id_factory()
+        admission: RunAdmission | None = None
+        if self._limiter is not None:
+            if key_id is None:
+                raise ValueError("quota-enabled submissions require a key id")
+            admission = await self._limiter.admit_run(
+                tenant_id=tenant_id,
+                key_id=key_id,
+                session_id=session_id,
+                idempotency_key=idempotency_key,
+                query=query,
+                run_id=run_id,
+                at=now,
+            )
+            if (
+                admission.tenant_id != tenant_id
+                or admission.idempotency_key != idempotency_key
+            ):
+                raise StorageError("quota admission scope is invalid")
+            run_id = admission.run_id
         try:
             result = await self._repository.create(
                 RunSubmission(
                     tenant_id=tenant_id,
                     session_id=session_id,
-                    run_id=self._run_id_factory(),
+                    run_id=run_id,
                     idempotency_key=idempotency_key,
                     query=query,
                     created_at=now,
                 )
             )
         except RunParentNotFoundError:
+            await _release(self._limiter, admission)
             raise SessionNotFound from None
+        except BaseException:
+            await _release(self._limiter, admission)
+            raise
 
         run = result.run
         if run.state not in TERMINAL_RUN_STATES:
@@ -132,6 +160,13 @@ class RunService:
 def _new_run_id() -> str:
     encoded = base64.b32encode(secrets.token_bytes(16)).decode().lower().rstrip("=")
     return f"run-{encoded}"
+
+
+async def _release(
+    limiter: QuotaLimiter | None, admission: RunAdmission | None
+) -> None:
+    if limiter is not None and admission is not None:
+        await limiter.release_run(admission)
 
 
 def _public_status(run: RunRecord) -> RunStatusResponse:

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import AsyncIterator, Callable
+from datetime import datetime
 from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, Header, Path, Request
@@ -10,7 +13,7 @@ from starlette.responses import StreamingResponse
 from search_agent.contracts import OpaqueId
 
 from ..schemas import LastEventId, RunEvent, parse_last_event_id
-from ..security import AuthenticatedApiKey
+from ..security import AuthenticatedApiKey, QuotaLimiter, SSEPermit
 from ..services import EventStreamService, InvalidRequest
 from .common import ERROR_RESPONSES, authenticate_request
 
@@ -41,13 +44,31 @@ def build_event_router() -> APIRouter:
         ] = None,
     ) -> StreamingResponse:
         cursor = _cursor(http_request, last_event_id)
-        body = await _service(http_request).open_stream(
+        limiter = _limiter(http_request)
+        permit = await limiter.acquire_sse(
             tenant_id=principal.tenant_id,
-            run_id=run_id,
-            after_sequence=cursor,
-            disconnected=http_request.is_disconnected,
+            key_id=principal.key_id,
+            at=_service(http_request).now(),
         )
-        return StreamingResponse(body, media_type="text/event-stream")
+        try:
+            body = await _service(http_request).open_stream(
+                tenant_id=principal.tenant_id,
+                run_id=run_id,
+                after_sequence=cursor,
+                disconnected=http_request.is_disconnected,
+            )
+        except BaseException:
+            await limiter.release_sse(permit)
+            raise
+        return StreamingResponse(
+            _limited_stream(
+                body,
+                limiter=limiter,
+                permit=permit,
+                clock=_service(http_request).now,
+            ),
+            media_type="text/event-stream",
+        )
 
     return router
 
@@ -77,6 +98,30 @@ def _cursor(request: Request, validated: LastEventId | None) -> int:
 
 def _service(request: Request) -> EventStreamService:
     return cast(EventStreamService, request.app.state.event_stream_service)
+
+
+def _limiter(request: Request) -> QuotaLimiter:
+    return cast(QuotaLimiter, request.app.state.quota_limiter)
+
+
+async def _limited_stream(
+    body: AsyncIterator[bytes],
+    *,
+    limiter: QuotaLimiter,
+    permit: SSEPermit,
+    clock: Callable[[], datetime],
+) -> AsyncIterator[bytes]:
+    try:
+        async for chunk in body:
+            try:
+                if not await limiter.renew_sse(permit, at=clock()):
+                    return
+            except Exception:
+                return
+            yield chunk
+    finally:
+        with contextlib.suppress(Exception):
+            await limiter.release_sse(permit)
 
 
 __all__ = ["build_event_router"]
