@@ -155,7 +155,7 @@ class GoogleCloudTaskClient(CloudTaskClient):
                             "body": task.body,
                         },
                     }
-                )
+                ),
             )
         except AlreadyExists as exc:
             raise CloudTaskAlreadyExistsError(task.name) from exc

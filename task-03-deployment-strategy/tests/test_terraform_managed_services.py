@@ -60,13 +60,20 @@ def test_secret_and_artifact_access_is_resource_specific() -> None:
         "roles/datastore.user",
         "roles/secretmanager.secretAccessor",
     }
-    assert 'resource "google_secret_manager_secret_iam_member" "api_pepper_reader"' in main
-    assert 'secret_id = google_secret_manager_secret.managed["api_key_pepper"].secret_id' in main
+    assert (
+        'resource "google_secret_manager_secret_iam_member" "api_pepper_reader"' in main
+    )
+    assert (
+        'secret_id = google_secret_manager_secret.managed["api_key_pepper"].secret_id'
+        in main
+    )
     assert "local.worker_member" in main
     assert "member    = each.value" in main
-    assert 'resource "google_secret_manager_secret_iam_member" "task_hmac_reader"' in main
+    assert (
+        'resource "google_secret_manager_secret_iam_member" "task_hmac_reader"' in main
+    )
     assert "for_each = local.workload_members" in main
-    assert 'repository = google_artifact_registry_repository.containers.name' in main
+    assert "repository = google_artifact_registry_repository.containers.name" in main
     assert 'resource "google_firestore_index" "sessions"' in main
     assert 'resource "google_firestore_index" "runs"' in main
     assert 'resource "google_firestore_index" "run_events"' in main
@@ -79,7 +86,9 @@ def test_data_lifecycle_and_alerts_fail_safe() -> None:
     main = read(MODULE / "main.tf")
     variables = read(MODULE / "variables.tf")
 
-    assert 'point_in_time_recovery_enablement = "POINT_IN_TIME_RECOVERY_ENABLED"' in main
+    assert (
+        'point_in_time_recovery_enablement = "POINT_IN_TIME_RECOVERY_ENABLED"' in main
+    )
     assert re.search(r"location\s*=\s*var\.region", main)
     assert "length(var.budget_notification_emails) > 0" in main
     assert "disable_default_iam_recipients = true" in main
