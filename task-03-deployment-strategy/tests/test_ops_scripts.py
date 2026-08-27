@@ -55,7 +55,7 @@ case "$1 $2" in
       if [[ -n ${FAKE_RESOURCE_ERROR:-} ]]; then
         printf '%s\n' "${FAKE_RESOURCE_ERROR}" >&2
         exit 7
-      elif [[ ${FAKE_RESOURCE_EXISTS:-0} == 1 ]]; then
+      elif [[ ${FAKE_RESOURCE_EXISTS:-0} == 1 || ${FAKE_QUEUE_EXISTS:-0} == 1 ]]; then
         exit 0
       fi
       printf 'NOT_FOUND: queue is absent\n' >&2
@@ -230,6 +230,7 @@ def test_teardown_requires_exact_confirmation_and_verifies_runtime_removal(
 ) -> None:
     fake_bin, gcloud_log, terraform_log = _fake_tools(tmp_path)
     environment = _ops_environment(fake_bin, gcloud_log, terraform_log)
+    environment["FAKE_QUEUE_EXISTS"] = "1"
     terraform_root = tmp_path / "environment"
     terraform_root.mkdir()
     (terraform_root / "main.tf").write_text("terraform {}\n", encoding="utf-8")
@@ -253,7 +254,9 @@ def test_teardown_requires_exact_confirmation_and_verifies_runtime_removal(
     assert "plan -destroy" in terraform_calls
     assert " show " in f" {terraform_calls} "
     assert " apply " in f" {terraform_calls} "
-    assert "runtime teardown verified" in passed.stdout
+    assert "application teardown verified" in passed.stdout
+    assert "bootstrap-owned queue" in passed.stdout
+    assert "tasks queues describe" not in gcloud_log.read_text(encoding="utf-8")
 
 
 def test_teardown_fails_closed_when_absence_cannot_be_verified(
@@ -280,7 +283,7 @@ def test_teardown_fails_closed_when_absence_cannot_be_verified(
 
     assert result.returncode != 0
     assert "could not verify absence" in result.stderr
-    assert "runtime teardown verified" not in result.stdout
+    assert "application teardown verified" not in result.stdout
 
 
 def test_teardown_binds_destroy_plan_to_confirmed_target(tmp_path: Path) -> None:

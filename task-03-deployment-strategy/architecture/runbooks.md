@@ -79,12 +79,13 @@ workflow, changes a Git ref, or creates a rollback commit. If the revision is ab
 or unhealthy, stop and choose another existing healthy revision; rebuilding old
 source is a separate, explicitly reviewed fallback.
 
-## Reviewed environment teardown
+## Reviewed application teardown
 
-Terraform currently protects the queue, Cloud Run services, secrets, and Firestore
-from casual deletion. A full teardown therefore starts with a reviewed change that
-disables only the intended deletion-protection controls and a reviewed destroy plan.
-After that review, invoke the wrapper with the exact confirmation token:
+Terraform protects the bootstrap-owned queue, Cloud Run services, secrets, and
+Firestore from casual deletion. Application teardown starts with a reviewed change
+that disables only the Cloud Run and application-data deletion controls followed by
+a reviewed application-stack destroy plan. Invoke the wrapper with the exact
+confirmation token:
 
 ```bash
 task-03-deployment-strategy/scripts/gcp_ops.sh teardown \
@@ -96,12 +97,16 @@ task-03-deployment-strategy/scripts/gcp_ops.sh teardown \
 The script rechecks project-number binding, creates a remote-state-backed destroy
 plan, verifies the plan's project ID, project number, region, and system code against
 the confirmation target, prints it, and applies that exact plan. It then verifies
-the API service, worker service, and dispatch queue are absent. Inventory permission
-or transport failures stop verification instead of being treated as absence. A
-wrong environment, project number, plan binding, relative Terraform root, or
-confirmation token cannot reach `terraform apply`. Do not retry after a partial
-failure until the remote state lock and cloud inventory have been reviewed.
+the API and worker services are absent. Inventory permission or transport failures
+stop verification instead of being treated as absence. A wrong environment,
+project number, plan binding, relative Terraform root, or confirmation token cannot
+reach `terraform apply`. Do not retry after a partial failure until the remote state
+lock and cloud inventory have been reviewed.
 
-Bootstrap WIF/state resources and any deliberately abandoned data resources are a
-separate administrator-owned boundary. Inventory and delete them only under their
-own reviewed plan; never delete the whole project merely to make this script pass.
+The dispatch queue is intentionally not queried or deleted by this application
+command. It belongs to the bootstrap state together with WIF, identities, state
+storage, secret containers, runtime IAM, and the service-agent token grant. After
+application teardown is verified, an administrator may separately review a
+bootstrap destroy plan with queue `prevent_destroy` and the intended secret/state
+protections explicitly disabled. Never delete the whole project merely to make
+either teardown pass.

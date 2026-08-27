@@ -107,7 +107,7 @@ rollback() {
 teardown() {
   [[ $# -eq 7 ]] || { usage >&2; exit 2; }
   local project=$1 region=$2 environment=$3 project_number=$4 system_code=$5 terraform_root=$6 confirmation=$7
-  local plan_file plan_json service queue
+  local plan_file plan_json service
 
   [[ $system_code =~ ^[a-z][a-z0-9-]{1,18}$ ]] || fail "invalid system code"
   [[ $terraform_root == /* && -f $terraform_root/main.tf ]] || fail "Terraform root must be an absolute initialized environment root"
@@ -159,10 +159,7 @@ teardown() {
     assert_gcloud_resource_absent "Cloud Run service: $service" \
       gcloud run services describe "$service" --project "$project" --region "$region"
   done
-  queue="$system_code-$environment-run-dispatch"
-  assert_gcloud_resource_absent "Cloud Tasks queue: $queue" \
-    gcloud tasks queues describe "$queue" --project "$project" --location "$region"
-  printf 'runtime teardown verified for %s/%s; review retained bootstrap and data resources separately\n' "$project" "$environment"
+  printf 'application teardown verified for %s/%s; the bootstrap-owned queue and bootstrap/data resources require their own reviewed plan\n' "$project" "$environment"
 }
 
 main() {
