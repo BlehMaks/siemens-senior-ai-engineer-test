@@ -132,6 +132,10 @@ teardown() {
        if .type == "google_billing_budget" then
          ([.change.before.budget_filter[]?.projects[]?] | length) > 0 and
          all(.change.before.budget_filter[]?.projects[]?; . == "projects/" + $project_number)
+       elif .type == "google_service_account_iam_member" then
+         (.change.before.service_account_id? // "") as $service_account |
+         ($service_account | startswith("projects/" + $project + "/serviceAccounts/")) and
+         ($service_account | endswith("@" + $project + ".iam.gserviceaccount.com"))
        else
          ((.change.before.project? // .change.before.project_id? // "") | tostring) == $project
        end;

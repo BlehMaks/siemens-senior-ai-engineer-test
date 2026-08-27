@@ -77,13 +77,22 @@ for argument in "$@"; do
   fi
 done
 if [[ " $* " == *" show -json "* ]]; then
-  printf '{"variables":{"project_id":{"value":"%s"},"project_number":{"value":"%s"},"region":{"value":"%s"},"system_code":{"value":"%s"}},"resource_changes":[{"address":"module.run_services.google_cloud_run_v2_service.api","type":"google_cloud_run_v2_service","change":{"actions":["delete"],"before":{"project":"%s","location":"%s","labels":{"environment":"dev","system":"sai"}}}}]}\n' \
-    "${FAKE_PLAN_PROJECT_ID:-contract-assessment-dev}" \
-    "${FAKE_PLAN_PROJECT_NUMBER:-123456789012}" \
-    "${FAKE_PLAN_REGION:-europe-west3}" \
-    "${FAKE_PLAN_SYSTEM_CODE:-sai}" \
-    "${FAKE_PLAN_RESOURCE_PROJECT:-contract-assessment-dev}" \
-    "${FAKE_PLAN_RESOURCE_REGION:-europe-west3}"
+  if [[ ${FAKE_PLAN_RESOURCE_TYPE:-} == google_service_account_iam_member ]]; then
+    printf '{"variables":{"project_id":{"value":"%s"},"project_number":{"value":"%s"},"region":{"value":"%s"},"system_code":{"value":"%s"}},"resource_changes":[{"address":"module.run_services.google_service_account_iam_member.tasks_service_agent_token_creator","type":"google_service_account_iam_member","change":{"actions":["delete"],"before":{"service_account_id":"%s"}}}]}\n' \
+      "${FAKE_PLAN_PROJECT_ID:-contract-assessment-dev}" \
+      "${FAKE_PLAN_PROJECT_NUMBER:-123456789012}" \
+      "${FAKE_PLAN_REGION:-europe-west3}" \
+      "${FAKE_PLAN_SYSTEM_CODE:-sai}" \
+      "${FAKE_PLAN_SERVICE_ACCOUNT_ID:-projects/contract-assessment-dev/serviceAccounts/sai-dev-tasks@contract-assessment-dev.iam.gserviceaccount.com}"
+  else
+    printf '{"variables":{"project_id":{"value":"%s"},"project_number":{"value":"%s"},"region":{"value":"%s"},"system_code":{"value":"%s"}},"resource_changes":[{"address":"module.run_services.google_cloud_run_v2_service.api","type":"google_cloud_run_v2_service","change":{"actions":["delete"],"before":{"project":"%s","location":"%s","labels":{"environment":"dev","system":"sai"}}}}]}\n' \
+      "${FAKE_PLAN_PROJECT_ID:-contract-assessment-dev}" \
+      "${FAKE_PLAN_PROJECT_NUMBER:-123456789012}" \
+      "${FAKE_PLAN_REGION:-europe-west3}" \
+      "${FAKE_PLAN_SYSTEM_CODE:-sai}" \
+      "${FAKE_PLAN_RESOURCE_PROJECT:-contract-assessment-dev}" \
+      "${FAKE_PLAN_RESOURCE_REGION:-europe-west3}"
+  fi
 elif [[ " $* " == *" show "* ]]; then
   printf 'reviewed destroy plan\n'
 fi
@@ -324,6 +333,32 @@ def test_teardown_rejects_delete_from_another_project_in_state(
     assert result.returncode != 0
     assert "destroy plan does not match" in result.stderr
     assert " apply " not in f" {terraform_log.read_text(encoding='utf-8')} "
+
+
+def test_teardown_accepts_project_bound_service_account_iam_delete(
+    tmp_path: Path,
+) -> None:
+    fake_bin, gcloud_log, terraform_log = _fake_tools(tmp_path)
+    environment = _ops_environment(fake_bin, gcloud_log, terraform_log)
+    environment["FAKE_PLAN_RESOURCE_TYPE"] = "google_service_account_iam_member"
+    terraform_root = tmp_path / "environment"
+    terraform_root.mkdir()
+    (terraform_root / "main.tf").write_text("terraform {}\n", encoding="utf-8")
+
+    result = _run_ops(
+        environment,
+        "teardown",
+        "contract-assessment-dev",
+        "europe-west3",
+        "dev",
+        "123456789012",
+        "sai",
+        str(terraform_root),
+        "DESTROY:contract-assessment-dev:dev",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert " apply " in f" {terraform_log.read_text(encoding='utf-8')} "
 
 
 @pytest.mark.parametrize("script", [GCP_OPS, API_SMOKE])
