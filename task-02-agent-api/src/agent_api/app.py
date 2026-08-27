@@ -29,6 +29,7 @@ from .ports import IdempotencyConflictError
 from .routes import (
     build_event_router,
     build_health_router,
+    build_internal_task_router,
     build_run_router,
     build_session_router,
 )
@@ -55,6 +56,10 @@ from .services import (
     SessionUnavailable,
 )
 from .storage import (
+    CloudTasksWorkQueue,
+    FirestoreEventRepository,
+    FirestoreRunRepository,
+    FirestoreSessionRepository,
     SQLiteAuditRepository,
     SQLiteEventRepository,
     SQLiteKeyHashRepository,
@@ -62,9 +67,10 @@ from .storage import (
     SQLiteSessionRepository,
     SQLiteWorkQueue,
     StorageError,
+    TaskDeliveryAuthError,
     migrate,
 )
-from .workers import LocalWorker, RunExecutor, worker_lifespan
+from .workers import LocalWorker, QueueReceiver, RunExecutor, worker_lifespan
 
 _OPAQUE_ID = TypeAdapter(OpaqueId)
 
@@ -125,16 +131,66 @@ def create_app(
     quota_limiter: QuotaLimiter | None = None,
     telemetry: OperationalTelemetry | None = None,
     readiness_probe: ReadinessProbe | None = None,
+    session_repository: SQLiteSessionRepository
+    | FirestoreSessionRepository
+    | None = None,
+    run_repository: SQLiteRunRepository | FirestoreRunRepository | None = None,
+    event_repository: SQLiteEventRepository | FirestoreEventRepository | None = None,
+    work_queue: SQLiteWorkQueue | CloudTasksWorkQueue | None = None,
+    production_environment: bool = False,
+    run_state_backend: str = "sqlite",
+    queue_backend: str = "sqlite",
+    queue_delivery_path: str = "/internal/tasks/run-delivery",
+    task_delivery_enabled: bool = False,
 ) -> FastAPI:
     provider = EnvPepperProvider() if pepper_provider is None else pepper_provider
     now = _utc_now if clock is None else clock
     limits = LimitConfig() if limit_config is None else limit_config
+    durable_sessions = session_repository
+    if durable_sessions is None and isinstance(run_repository, FirestoreRunRepository):
+        durable_sessions = FirestoreSessionRepository(
+            run_repository.document_store,
+            run_repository,
+        )
+    _validate_authoritative_runtime(
+        production_environment=production_environment,
+        run_state_backend=run_state_backend,
+        queue_backend=queue_backend,
+        has_run_repository=run_repository is not None,
+        has_event_repository=event_repository is not None,
+        has_work_queue=work_queue is not None,
+        has_run_executor=run_executor is not None,
+        task_delivery_enabled=task_delivery_enabled,
+        cloud_session_repository=isinstance(
+            durable_sessions, FirestoreSessionRepository
+        ),
+        cloud_run_repository=isinstance(run_repository, FirestoreRunRepository),
+        cloud_event_repository=isinstance(event_repository, FirestoreEventRepository),
+        cloud_work_queue=isinstance(work_queue, CloudTasksWorkQueue),
+        shared_cloud_store=_share_document_store(
+            durable_sessions,
+            run_repository,
+            event_repository,
+            work_queue,
+        ),
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await migrate(database_path)
-        run_repository = SQLiteRunRepository(database_path)
-        work_queue = SQLiteWorkQueue(database_path)
+        durable_runs = (
+            SQLiteRunRepository(database_path)
+            if run_repository is None
+            else run_repository
+        )
+        durable_queue = (
+            SQLiteWorkQueue(database_path) if work_queue is None else work_queue
+        )
+        durable_events = (
+            SQLiteEventRepository(database_path)
+            if event_repository is None
+            else event_repository
+        )
         limiter = (
             SQLiteQuotaLimiter(database_path, limits)
             if quota_limiter is None
@@ -159,28 +215,35 @@ def create_app(
             SQLiteKeyHashRepository(database_path), provider
         )
         app.state.session_service = SessionService(
-            SQLiteSessionRepository(database_path),
+            (
+                SQLiteSessionRepository(database_path)
+                if durable_sessions is None
+                else durable_sessions
+            ),
             clock=now,
             id_factory=session_id_factory,
         )
         app.state.run_service = RunService(
-            run_repository,
-            work_queue,
+            durable_runs,
+            durable_queue,
             clock=now,
             run_id_factory=run_id_factory,
             limiter=limiter,
         )
         app.state.event_stream_service = EventStreamService(
-            run_repository,
-            SQLiteEventRepository(database_path),
+            durable_runs,
+            durable_events,
             clock=now,
         )
+        app.state.work_queue = durable_queue
         worker = (
             None
             if run_executor is None
             else LocalWorker(
-                repository=run_repository,
-                queue=work_queue,
+                repository=durable_runs,
+                # Signed delivery calls process() directly; receive() is reached
+                # only by the local polling lifespan, which is disabled below.
+                queue=cast(QueueReceiver, durable_queue),
                 executor=run_executor,
                 worker_id="worker-local",
                 clock=now,
@@ -189,8 +252,9 @@ def create_app(
                 telemetry=runtime_telemetry,
             )
         )
+        app.state.internal_worker = worker
         async with worker_lifespan(
-            worker,
+            None if task_delivery_enabled else worker,
             shutdown_seconds=worker_shutdown_seconds,
         ):
             yield
@@ -206,6 +270,8 @@ def create_app(
     app.include_router(build_session_router())
     app.include_router(build_run_router())
     app.include_router(build_event_router())
+    if task_delivery_enabled:
+        app.include_router(build_internal_task_router(path=queue_delivery_path))
     app.add_middleware(
         RequestBodyLimitMiddleware,
         max_bytes=limits.max_request_bytes,
@@ -220,6 +286,7 @@ def create_app(
     app.add_exception_handler(StorageError, _unavailable)
     app.add_exception_handler(QuotaExceeded, _quota_exceeded)
     app.add_exception_handler(RequestTooLarge, _request_too_large)
+    app.add_exception_handler(TaskDeliveryAuthError, _task_delivery_auth_error)
     app.add_exception_handler(RequestValidationError, _invalid_request)
     app.add_exception_handler(StarletteHTTPException, _http_error)
     app.add_exception_handler(Exception, _internal_error)
@@ -256,6 +323,13 @@ async def _invalid_request(request: Request, exc: Exception) -> JSONResponse:
     del exc
     return _error_response(
         request, 422, ErrorCode.INVALID_REQUEST, "Request validation failed."
+    )
+
+
+async def _task_delivery_auth_error(request: Request, exc: Exception) -> JSONResponse:
+    del exc
+    return _error_response(
+        request, 401, ErrorCode.UNAUTHENTICATED, "Authentication failed."
     )
 
 
@@ -386,3 +460,70 @@ def _new_correlation_id() -> OpaqueId:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _validate_authoritative_runtime(
+    *,
+    production_environment: bool,
+    run_state_backend: str,
+    queue_backend: str,
+    has_run_repository: bool,
+    has_event_repository: bool,
+    has_work_queue: bool,
+    has_run_executor: bool,
+    task_delivery_enabled: bool,
+    cloud_session_repository: bool,
+    cloud_run_repository: bool,
+    cloud_event_repository: bool,
+    cloud_work_queue: bool,
+    shared_cloud_store: bool,
+) -> None:
+    if not production_environment:
+        return
+    if run_state_backend != "firestore":
+        raise ValueError("production_environment requires Firestore run state")
+    if queue_backend != "cloud_tasks":
+        raise ValueError("production_environment requires Cloud Tasks delivery")
+    if not has_run_repository:
+        raise ValueError("production_environment requires an injected run repository")
+    if not has_event_repository:
+        raise ValueError("production_environment requires an injected event repository")
+    if not has_work_queue:
+        raise ValueError("production_environment requires an injected work queue")
+    if not cloud_session_repository:
+        raise ValueError(
+            "production_environment requires a Firestore session repository"
+        )
+    if not cloud_run_repository:
+        raise ValueError("production_environment requires a Firestore run repository")
+    if not cloud_event_repository:
+        raise ValueError("production_environment requires a Firestore event repository")
+    if not cloud_work_queue:
+        raise ValueError("production_environment requires a Cloud Tasks work queue")
+    if not shared_cloud_store:
+        raise ValueError("production cloud adapters must share the same document store")
+    if has_run_executor and not task_delivery_enabled:
+        raise ValueError("production worker requires signed task delivery")
+
+
+def _share_document_store(
+    sessions: object,
+    runs: object,
+    events: object,
+    queue: object,
+) -> bool:
+    adapters = (sessions, runs, events, queue)
+    stores = tuple(
+        adapter.document_store
+        for adapter in adapters
+        if isinstance(
+            adapter,
+            (
+                FirestoreSessionRepository,
+                FirestoreRunRepository,
+                FirestoreEventRepository,
+                CloudTasksWorkQueue,
+            ),
+        )
+    )
+    return len(stores) == 4 and all(store is stores[0] for store in stores[1:])

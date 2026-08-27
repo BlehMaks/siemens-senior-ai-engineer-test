@@ -31,13 +31,6 @@ CONTENT_RULES = (
         "private key",
         re.compile(rb"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----"),
     ),
-    (
-        "credential assignment",
-        re.compile(
-            rb"(?i)[\"']?(?:api[_-]?key|password|secret|token)[\"']?\s*[:=]\s*"
-            rb"(?:[\"'][^\"'\r\n]{8,}[\"']|[^\s#,}\]]{16,})"
-        ),
-    ),
     ("OpenRouter credential", re.compile(rb"OPENROUTER_(?:API_)?KEY")),
     (
         "private council artifact",
@@ -53,6 +46,47 @@ CONTENT_RULES = (
         ),
     ),
 )
+
+_CREDENTIAL_ASSIGNMENT_BODY = (
+    r"[ \t]*(?:-[ \t]+)?(?:\#[ \t]*)?"
+    r"(?:(?:export|local|readonly|declare|typeset)"
+    r"(?:[ \t]+(?:--|-[A-Za-z]+))*[ \t]+)?"
+    r"(?P<key_quote>[\"']?)(?P<key>[A-Za-z0-9_.-]*"
+    r"(?:api[_-]?key|password|secret|token))(?P=key_quote)"
+    r"(?:\[[^\]\r\n]+\])?[ \t]*(?::|\+?=)"
+)
+CREDENTIAL_ASSIGNMENT = re.compile(
+    r"(?:^|(?<=[{,;]))" + _CREDENTIAL_ASSIGNMENT_BODY,
+    re.IGNORECASE,
+)
+SHELL_CREDENTIAL_ASSIGNMENT = re.compile(
+    r"(?:^|(?<=[{,;( \t]))" + _CREDENTIAL_ASSIGNMENT_BODY,
+    re.IGNORECASE,
+)
+QUOTED_VALUE = re.compile(r"(?P<prefix>\$|(?i:[bruf]{0,3}))(?P<quote>\"\"\"|'''|\"|')")
+SYMBOLIC_VALUE = re.compile(
+    r"(?:"
+    r"(?:var|local|module|data|settings|google_[A-Za-z0-9_]*|"
+    r"aws_[A-Za-z0-9_]*|azurerm_[A-Za-z0-9_]*)\.[A-Za-z0-9_.\[\]\"'-]+|"
+    r"[A-Za-z_][A-Za-z0-9_.]*\s*\(.*\)(?:\.[A-Za-z_][A-Za-z0-9_]*\(.*\))*"
+    r")",
+    re.DOTALL,
+)
+SHELL_INTERPOLATION = re.compile(
+    r"(?<!\\)(?:\\\\)*(?:"
+    r"\$\{[^{}\r\n]+\}|"
+    r"\$[A-Za-z_][A-Za-z0-9_]*|"
+    r"\$[-0-9@*#?$!]|"
+    r"\$\(|"
+    r"`[^`\r\n]+`"
+    r")"
+)
+TEMPLATE_INTERPOLATION = re.compile(r"(?<!\$)\$\{[^{}\r\n]+\}")
+TERRAFORM_INTERPOLATION = TEMPLATE_INTERPOLATION
+BRACED_INTERPOLATION = re.compile(r"\{[A-Za-z_][^{}\r\n]*\}")
+SHELL_SUFFIXES = {".bash", ".sh", ".zsh"}
+TEMPLATE_SUFFIXES = {".env", ".json", ".toml", ".yaml", ".yml"}
+SHELL_SHEBANG = re.compile(r"^#![^\r\n]*(?:ba|z)?sh(?:[ \t]|$)")
 
 
 def _git(repo: Path, *args: str) -> bytes:
@@ -100,6 +134,241 @@ def _path_findings(path: str) -> list[str]:
     return findings
 
 
+def _strip_inline_comment(value: str) -> str:
+    """Remove a trailing configuration comment without excluding `#` in a secret."""
+
+    return re.split(r"[ \t]+#", value, maxsplit=1)[0].strip()
+
+
+def _is_literal(
+    value: str,
+    *,
+    minimum_length: int,
+    interpolation: re.Pattern[str] | None = None,
+    reference_context: bool = False,
+    braced_interpolation: bool = False,
+) -> bool:
+    candidate = value.strip()
+    if len(candidate) < minimum_length or SYMBOLIC_VALUE.fullmatch(candidate):
+        return False
+    if interpolation is not None and interpolation.search(candidate):
+        return False
+    if braced_interpolation and BRACED_INTERPOLATION.search(candidate):
+        return False
+    if (
+        candidate.startswith("$(")
+        or (candidate.startswith("`") and candidate.endswith("`"))
+        or ") ->" in candidate
+    ):
+        return False
+    if reference_context and re.fullmatch(
+        r"[A-Za-z_][A-Za-z0-9_.]*(?:\[[^\]\r\n]+\])*", candidate
+    ):
+        return False
+    return re.match(r"[A-Za-z_][A-Za-z0-9_.]*\s*\(", candidate) is None
+
+
+def _closing_quote_index(value: str, quote: str) -> int | None:
+    offset = 0
+    while True:
+        index = value.find(quote, offset)
+        if index < 0:
+            return None
+        preceding_slashes = 0
+        cursor = index - 1
+        while cursor >= 0 and value[cursor] == "\\":
+            preceding_slashes += 1
+            cursor -= 1
+        if preceding_slashes % 2 == 0:
+            return index
+        offset = index + len(quote)
+
+
+def _quoted_literal(
+    value: str, following_lines: list[str]
+) -> tuple[str, str, str, str] | None:
+    quote_match = QUOTED_VALUE.match(value)
+    if quote_match is None:
+        return None
+
+    quote = quote_match.group("quote")
+    remainder = value[quote_match.end() :]
+    candidate = remainder
+    if len(quote) > 1:
+        candidate = "\n".join([remainder, *following_lines])
+    closing_index = _closing_quote_index(candidate, quote)
+    if closing_index is None:
+        return None
+    return (
+        candidate[:closing_index],
+        quote_match.group("prefix").lower(),
+        quote,
+        candidate[closing_index + len(quote) :].strip(),
+    )
+
+
+def _shell_word(value: str, following_lines: list[str]) -> tuple[str, bool] | None:
+    """Return the complete first shell word and whether it performs expansion."""
+
+    source = "\n".join([value, *following_lines])
+    literal: list[str] = []
+    cursor = 0
+
+    while cursor < len(source):
+        char = source[cursor]
+        if char in " \t\r\n;":
+            break
+
+        ansi_c_quote = source.startswith("$'", cursor)
+        locale_quote = source.startswith('$"', cursor)
+        if ansi_c_quote or locale_quote:
+            quote = source[cursor + 1]
+            remainder = source[cursor + 2 :]
+            closing = _closing_quote_index(remainder, quote)
+            if closing is None:
+                return None
+            segment = remainder[:closing]
+            if locale_quote and SHELL_INTERPOLATION.search(segment):
+                return "", True
+            literal.append(segment)
+            cursor += closing + 3
+            continue
+
+        if char == "'":
+            closing = source.find("'", cursor + 1)
+            if closing < 0:
+                return None
+            literal.append(source[cursor + 1 : closing])
+            cursor = closing + 1
+            continue
+
+        if char == '"':
+            remainder = source[cursor + 1 :]
+            closing = _closing_quote_index(remainder, '"')
+            if closing is None:
+                return None
+            segment = remainder[:closing]
+            if SHELL_INTERPOLATION.search(segment):
+                return "", True
+            literal.append(segment)
+            cursor += closing + 2
+            continue
+
+        if char == "\\" and cursor + 1 < len(source):
+            escaped = source[cursor + 1]
+            if escaped != "\n":
+                literal.append(escaped)
+            cursor += 2
+            continue
+
+        if char == "`" or source.startswith(("$(", "<(", ">("), cursor):
+            return "", True
+        if char == "$" and SHELL_INTERPOLATION.match(source, cursor):
+            return "", True
+
+        literal.append(char)
+        cursor += 1
+
+    return "".join(literal), False
+
+
+def _contains_credential_assignment(path: str, content: bytes) -> bool:
+    """Recognize committed credential literals while ignoring symbolic references."""
+
+    lines = content.decode("utf-8", errors="replace").splitlines()
+    suffix = Path(path).suffix.lower()
+    shell_context = suffix in SHELL_SUFFIXES or bool(
+        lines and SHELL_SHEBANG.match(lines[0])
+    )
+    terraform_context = suffix in {".hcl", ".tf"} or path.lower().endswith(".tf.json")
+    python_context = suffix == ".py"
+    reference_context = shell_context or terraform_context or python_context
+    assignment_pattern = (
+        SHELL_CREDENTIAL_ASSIGNMENT if shell_context else CREDENTIAL_ASSIGNMENT
+    )
+    for index, line in enumerate(lines):
+        for assignment in assignment_pattern.finditer(line):
+            raw_value = line[assignment.end() :]
+            if shell_context and (not raw_value or raw_value[0] in " \t"):
+                continue
+            value = raw_value.strip()
+            if shell_context:
+                shell_word = _shell_word(value, lines[index + 1 :])
+                if shell_word is not None:
+                    literal, expands = shell_word
+                    if not expands and len(literal) >= 8:
+                        return True
+                continue
+
+            if re.fullmatch(r"[|>][+-]?[1-9]?", value):
+                base_indent = len(line) - len(line.lstrip())
+                block_lines: list[str] = []
+                block_indent: int | None = None
+                for part in lines[index + 1 :]:
+                    if not part.strip():
+                        block_lines.append("")
+                        continue
+                    part_indent = len(part) - len(part.lstrip())
+                    if block_indent is None:
+                        if part_indent <= base_indent:
+                            break
+                        block_indent = part_indent
+                    elif part_indent < block_indent:
+                        break
+                    block_lines.append(part.strip())
+                block = "\n".join(block_lines)
+                if _is_literal(
+                    block,
+                    minimum_length=16,
+                    interpolation=(
+                        TEMPLATE_INTERPOLATION if suffix in TEMPLATE_SUFFIXES else None
+                    ),
+                ):
+                    return True
+                continue
+
+            quoted = _quoted_literal(value, lines[index + 1 :])
+            if quoted is not None:
+                literal, prefix, quote, trailing = quoted
+                interpolation = None
+                if shell_context and quote != "'":
+                    interpolation = SHELL_INTERPOLATION
+                elif terraform_context:
+                    interpolation = TERRAFORM_INTERPOLATION
+                elif suffix in TEMPLATE_SUFFIXES:
+                    interpolation = TEMPLATE_INTERPOLATION
+                if _is_literal(
+                    literal,
+                    minimum_length=8,
+                    interpolation=interpolation,
+                    braced_interpolation=(
+                        "f" in prefix
+                        or (python_context and trailing.startswith(".format("))
+                    ),
+                ):
+                    return True
+                continue
+
+            unquoted = _strip_inline_comment(value).split(";", 1)[0].strip()
+            if _is_literal(
+                unquoted,
+                minimum_length=16,
+                interpolation=(
+                    SHELL_INTERPOLATION
+                    if shell_context
+                    else TERRAFORM_INTERPOLATION
+                    if terraform_context
+                    else TEMPLATE_INTERPOLATION
+                    if suffix in TEMPLATE_SUFFIXES
+                    else None
+                ),
+                reference_context=reference_context,
+            ):
+                return True
+
+    return False
+
+
 def audit_repository(repo: Path) -> list[str]:
     """Audit the exact Git index and report non-ignored untracked files."""
 
@@ -116,6 +385,8 @@ def audit_repository(repo: Path) -> list[str]:
         if len(content) > MAX_PUBLIC_FILE_BYTES:
             findings.append(f"oversized tracked file: {path}")
             continue
+        if _contains_credential_assignment(path, content):
+            findings.append(f"credential assignment: {path}")
         for label, rule in CONTENT_RULES:
             if rule.search(content):
                 findings.append(f"{label}: {path}")

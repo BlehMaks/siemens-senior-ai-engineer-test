@@ -6,6 +6,8 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "aiosqlite>=0.21,<1",
     "fastapi>=0.116,<1",
+    "google-cloud-firestore>=2.29,<3",
+    "google-cloud-tasks>=2.24,<3",
     "siemens-search-agent==0.1.0",
     "uvicorn>=0.35,<1",
 ]

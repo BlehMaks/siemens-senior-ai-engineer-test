@@ -1,0 +1,84 @@
+{
+  "assertions": {
+    "accepted_equals_queue_limit": true,
+    "cancelled_run_terminal": true,
+    "conflicting_duplicate_rejected": true,
+    "duplicate_is_idempotent": true,
+    "first_event_is_cancelled": true,
+    "model_quota_failure_observed": true,
+    "passed": true,
+    "recovery_completed": true,
+    "recovery_within_threshold": true,
+    "rejected_when_queue_full": true,
+    "sse_p95_within_threshold": true,
+    "status_after_submit_is_queued": true,
+    "submit_p95_within_threshold": true
+  },
+  "design_envelopes": [
+    {
+      "in_flight_range": "20-50",
+      "in_flight_runs": 35,
+      "label": "measured locally only for the small fake-provider proof",
+      "name": "pilot",
+      "peak_fetches_per_second": 12,
+      "required_model_tokens_per_second": 6000,
+      "runs_per_second": 1,
+      "worker_slots": 4
+    },
+    {
+      "in_flight_range": "500-1,500",
+      "in_flight_runs": 1000,
+      "label": "unmeasured design probe",
+      "name": "business_unit",
+      "peak_fetches_per_second": 400,
+      "required_model_tokens_per_second": 200000,
+      "runs_per_second": 20,
+      "worker_slots": 100
+    },
+    {
+      "in_flight_range": "5,000-15,000",
+      "in_flight_runs": 10000,
+      "label": "unmeasured design probe; not a production capacity claim",
+      "name": "enterprise_stress",
+      "peak_fetches_per_second": 3000,
+      "required_model_tokens_per_second": 1500000,
+      "runs_per_second": 100,
+      "worker_slots": 1000
+    }
+  ],
+  "measurements": {
+    "accepted": 8,
+    "duplicate_run_id_matches": true,
+    "duplicate_status_code": 202,
+    "first_event_samples": 8,
+    "p95_first_event_ms": 264.403,
+    "p95_submit_ms": 116.339,
+    "queue_oldest_age_ms": 155.131,
+    "recovery_accepted": true,
+    "recovery_ms": 18.194,
+    "recovery_terminal_state": "completed",
+    "recovery_terminal_success": true,
+    "rejected": 4,
+    "resource_usage": {
+      "elapsed_ms": 338.232,
+      "max_rss_delta": 4669440,
+      "max_rss_unit": "platform_ru_maxrss",
+      "system_cpu_seconds_delta": 0.107824,
+      "user_cpu_seconds_delta": 0.136668
+    },
+    "terminal": {
+      "budget_exhausted": 1,
+      "cancelled": 1,
+      "completed": 6
+    }
+  },
+  "scenario": {
+    "cancelled_index": 3,
+    "drained_work_items": 8,
+    "max_queued_runs": 8,
+    "model_quota_index": 6,
+    "session_id": "session-capacity",
+    "submissions": 12
+  },
+  "schema_version": 1
+}
