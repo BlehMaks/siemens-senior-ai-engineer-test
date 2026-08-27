@@ -53,7 +53,7 @@ _CREDENTIAL_ASSIGNMENT_BODY = (
     r"(?:[ \t]+(?:--|-[A-Za-z]+))*[ \t]+)?"
     r"(?P<key_quote>[\"']?)(?P<key>[A-Za-z0-9_.-]*"
     r"(?:api[_-]?key|password|secret|token))(?P=key_quote)"
-    r"[ \t]*[:=][ \t]*"
+    r"(?:\[[^\]\r\n]+\])?[ \t]*(?::|\+?=)"
 )
 CREDENTIAL_ASSIGNMENT = re.compile(
     r"(?:^|(?<=[{,;]))" + _CREDENTIAL_ASSIGNMENT_BODY,
@@ -288,7 +288,10 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
     )
     for index, line in enumerate(lines):
         for assignment in assignment_pattern.finditer(line):
-            value = line[assignment.end() :].strip()
+            raw_value = line[assignment.end() :]
+            if shell_context and (not raw_value or raw_value[0] in " \t"):
+                continue
+            value = raw_value.strip()
             if shell_context:
                 shell_word = _shell_word(value, lines[index + 1 :])
                 if shell_word is not None:

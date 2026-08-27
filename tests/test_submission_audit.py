@@ -472,6 +472,41 @@ def test_later_shell_assignments_do_not_hide_literals(
 
 
 @pytest.mark.parametrize(
+    "assignment",
+    [
+        "PASSWORD+=abcdefghijklmnop",
+        "password[0]=abcdefghijklmnop",
+        "password[name]=abcdefghijklmnop",
+    ],
+)
+def test_compound_and_indexed_shell_credentials_are_detected(
+    repository: Path, assignment: str
+) -> None:
+    target = repository / "runtime.sh"
+    target.write_text(f"{assignment}\n", encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert any("credential assignment" in item for item in audit_repository(repository))
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "PASSWORD= /usr/local/bin/harmless-command\n",
+        "PASSWORD= SAFE_ARGUMENT=abcdefghijklmnop command\n",
+    ],
+)
+def test_empty_shell_credentials_do_not_consume_the_next_word(
+    repository: Path, content: str
+) -> None:
+    target = repository / "runtime.sh"
+    target.write_text(content, encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert audit_repository(repository) == []
+
+
+@pytest.mark.parametrize(
     "value",
     [
         "'abc''defghijklmnop'",
