@@ -8,6 +8,9 @@ dependencies = [
     "scikit-learn>=1.7,<2",
 ]
 
+[project.scripts]
+material-similarity = "material_similarity.cli:main"
+
 [build-system]
 requires = ["uv_build>=0.12.6,<0.13"]
 build-backend = "uv_build"
