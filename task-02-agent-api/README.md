@@ -75,3 +75,6 @@ no pretend cloud adapter or SDK dependency.
 Operational logging, bounded metric dimensions, durable audit actions, correlation
 behavior, and health-probe semantics are documented in
 [`docs/operations.md`](docs/operations.md).
+
+The local threat model and OWASP API 2023, ASVS 5.0, LLM 2025, and Agentic risk
+decisions are recorded in [`docs/threat-model.md`](docs/threat-model.md).
