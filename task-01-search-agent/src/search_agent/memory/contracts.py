@@ -25,7 +25,7 @@ _REDACTIONS = (
     # treating every hyphenated public slug as a secret.
     re.compile(
         r"(?<![A-Za-z0-9])(?:"
-        r"sk-(?:[A-Za-z0-9]{20,}|(?:proj|svcacct)-[A-Za-z0-9_-]{20,})|"
+        r"sk-(?:[A-Za-z0-9]{20,}|(?:admin|proj|svcacct)-[A-Za-z0-9_-]{8,})|"
         r"gh[pousr]_[A-Za-z0-9]{8,}|"
         r"github_pat_[A-Za-z0-9_]{20,}|"
         r"xox[baprs]-[A-Za-z0-9-]{20,}|"

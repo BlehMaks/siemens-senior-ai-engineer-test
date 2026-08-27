@@ -176,6 +176,7 @@ def test_request_redacts_common_credential_forms(raw_request: str, secret: str) 
     [
         "ABIA1234567890ABCDEF",
         "ASIA1234567890ABCDEF",
+        "sk-admin-1234abcd",
         *(
             f"{prefix}-{'A' * 24}"
             for prefix in (
@@ -310,6 +311,9 @@ def test_too_many_events_and_invalid_completion_provenance_fail() -> None:
         "https://www.siemens.com/report?credential=private-value",
         "https://www.siemens.com/report?auth=private-value",
         "https://www.siemens.com/report?sig=private-value",
+        "https://www.siemens.com/reports/ASIA1234567890ABCDEF",
+        "https://www.siemens.com/reports/%2541SIA1234567890ABCDEF",
+        "https://www.siemens.com/report?download=%252541SIA1234567890ABCDEF",
         "https://www.siemens.com/report#private-fragment",
         "https://user:password@www.siemens.com/report",
     ],

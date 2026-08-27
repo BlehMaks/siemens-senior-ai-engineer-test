@@ -6,7 +6,7 @@ import re
 import sqlite3
 from ipaddress import ip_address
 from pathlib import Path
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, unquote_plus, urlsplit
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -445,13 +445,38 @@ def _safe_public_url(raw_url: str) -> bool:
         else:
             if not address.is_global:
                 return False
-        query = parse_qsl(parsed.query, keep_blank_values=True)
-        return not parsed.fragment and not any(
-            _sensitive_query_name(name) or contains_sensitive_memory_text(value)
-            for name, value in query
+        decoded_path = _fully_decode_url_component(parsed.path, plus=False)
+        decoded_query = _fully_decode_url_component(parsed.query, plus=True)
+        query = parse_qsl(decoded_query, keep_blank_values=True)
+        return (
+            not parsed.fragment
+            and not contains_sensitive_memory_text(decoded_path)
+            and not contains_sensitive_memory_text(decoded_query)
+            and not any(
+                _sensitive_query_name(name) or contains_sensitive_memory_text(value)
+                for name, value in query
+            )
         )
     except (TypeError, ValueError):
         return False
+
+
+def _fully_decode_url_component(value: str, *, plus: bool) -> str:
+    """Expose nested percent encoding before deciding whether a URL is retainable."""
+
+    decode = unquote_plus if plus else unquote
+    decoded = value
+    # Every effective pass shortens an encoded component, so the original length is
+    # a strict work bound even for attacker-controlled recursive encoding.
+    try:
+        for _ in range(len(value) + 1):
+            candidate = decode(decoded, errors="strict")
+            if candidate == decoded:
+                return decoded
+            decoded = candidate
+    except UnicodeDecodeError:
+        raise ValueError("URL encoding is not safe to retain") from None
+    raise ValueError("URL encoding exceeds the retention bound")
 
 
 def _validate_reflection(reflection: RunReflection) -> RunReflection:

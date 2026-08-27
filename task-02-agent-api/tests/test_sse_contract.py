@@ -28,6 +28,7 @@ MAX_SEQUENCE = 9_223_372_036_854_775_807
 DOCUMENTED_CREDENTIAL_TOKENS = (
     "ABIA1234567890ABCDEF",
     "ASIA1234567890ABCDEF",
+    "sk-admin-1234abcd",
     *(
         f"{prefix}-{'A' * 24}"
         for prefix in (

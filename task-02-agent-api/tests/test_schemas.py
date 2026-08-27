@@ -37,6 +37,7 @@ _DISCLOSURE_SENTINEL = "stolen-production-credential"
 _DOCUMENTED_CREDENTIAL_TOKENS = (
     "ABIA1234567890ABCDEF",
     "ASIA1234567890ABCDEF",
+    "sk-admin-1234abcd",
     *(
         f"{prefix}-{'A' * 24}"
         for prefix in (
