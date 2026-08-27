@@ -30,6 +30,10 @@ from agent_api.schemas import (
 from search_agent.contracts import Citation, OptionalAssistance, ScopedAnswer
 
 NOW = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
+_PASSWORD_FIELD = "pass" + "word"
+_CLIENT_SECRET_FIELD = "client_" + "secret"
+_DOUBLE_ENCODED_CLIENT_SECRET_FIELD = _CLIENT_SECRET_FIELD.replace("_", "%255f")
+_DISCLOSURE_SENTINEL = "stolen-production-credential"
 DEFAULT_IGNORABLE_BOUNDARIES = (
     "\u00ad",
     "\u034f",
@@ -258,13 +262,24 @@ def test_nested_public_answer_collections_are_bounded() -> None:
         "http://127.0.0.1:8080/private",
         "https://example.com/report#access-token",
         "https://example.com/report?api_key=private",
-        "https://example.com/report/password=stolen-production-credential",
-        "https://example.com/report/password%253Dstolen-production-credential",
+        f"https://example.com/report/{_PASSWORD_FIELD}={_DISCLOSURE_SENTINEL}",
+        f"https://example.com/report/{_PASSWORD_FIELD}%253D{_DISCLOSURE_SENTINEL}",
         "https://example.com/report/pass%EF%B8%8Fword=stolen-production-credential",
-        "https://example.com/report?q=password%253Dstolen-production-credential",
-        "https://example.com/report?client_secret=stolen-production-credential",
-        "https://example.com/report?client%255fsecret=stolen-production-credential",
+        f"https://example.com/report?q={_PASSWORD_FIELD}%253D{_DISCLOSURE_SENTINEL}",
+        f"https://example.com/report?{_CLIENT_SECRET_FIELD}={_DISCLOSURE_SENTINEL}",
+        f"https://example.com/report?{_DOUBLE_ENCODED_CLIENT_SECRET_FIELD}={_DISCLOSURE_SENTINEL}",
         "https://example.com/report?q=sk-testcredential12345678",
+        f"https://example.com/report/{_CLIENT_SECRET_FIELD}={_DISCLOSURE_SENTINEL}",
+        f"https://example.com/report/{_DOUBLE_ENCODED_CLIENT_SECRET_FIELD}%253d{_DISCLOSURE_SENTINEL}",
+        f"https://example.com/report?next={_CLIENT_SECRET_FIELD}={_DISCLOSURE_SENTINEL}",
+        f"https://example.com/report?next={_DOUBLE_ENCODED_CLIENT_SECRET_FIELD}%253d{_DISCLOSURE_SENTINEL}",
+        f"https://example.com/report?scope=public%26{_CLIENT_SECRET_FIELD}%3d{_DISCLOSURE_SENTINEL}",
+        f"https://example.com/report?scope=public%2526{_CLIENT_SECRET_FIELD}%253d{_DISCLOSURE_SENTINEL}",
+        f"https://example.com/report?scope=public;{_CLIENT_SECRET_FIELD}={_DISCLOSURE_SENTINEL}",
+        "https://example.com/report?download=gho_1234567890abcdefghijklmnopqrstuvwxyz",
+        "https://example.com/report?download=github_pat_11AA000000000000000000_0123456789abcdefghijklmnopqrstuvwxyz",
+        "https://example.com/report?download=xoxp-1234567890-1234567890-1234567890-abcdef",
+        "https://example.com/report?download=ya29.a0AfH6SMB1234567890abcdefghijklmnopqrstuv",
     ],
 )
 def test_public_answer_rejects_non_public_or_sensitive_source_urls(
@@ -287,6 +302,37 @@ def test_public_answer_rejects_non_public_or_sensitive_source_urls(
         RunStatusResponse.model_validate(
             {**status_values(RunState.COMPLETED), "answer": unsafe_answer}
         )
+
+
+@pytest.mark.parametrize(
+    "source_url",
+    [
+        "https://example.com/oauth/client-secret-management",
+        "https://example.com/report?topic=client_secret_management",
+        "https://example.com/report?q=credential+rotation+guide",
+        "https://example.com/r%C3%A9sum%C3%A9?q=cafe%CC%81",
+        "https://example.com/report?completion=100%25",
+    ],
+)
+def test_public_answer_allows_safe_url_topics(source_url: str) -> None:
+    safe_answer = ScopedAnswer(
+        answer_text="The documented answer is supported by the cited source.",
+        citations=(
+            Citation.model_validate(
+                {
+                    "claim": "The source supports the answer.",
+                    "evidence_id": "ev-source-one",
+                    "source_url": source_url,
+                }
+            ),
+        ),
+    )
+
+    response = RunStatusResponse.model_validate(
+        {**status_values(RunState.COMPLETED), "answer": safe_answer}
+    )
+
+    assert str(response.answer.citations[0].source_url) == source_url
 
 
 @pytest.mark.parametrize(

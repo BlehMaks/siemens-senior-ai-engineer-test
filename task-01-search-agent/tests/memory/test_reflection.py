@@ -146,6 +146,22 @@ def test_request_is_redacted_and_arbitrary_public_text_is_not_retained() -> None
             "Find https://alice:private-pass@example.com/report",
             "private-pass",
         ),
+        (
+            "Find gho_1234567890abcdefghijklmnopqrstuvwxyz",
+            "gho_1234567890abcdefghijklmnopqrstuvwxyz",
+        ),
+        (
+            "Find github_pat_11AA000000000000000000_0123456789abcdefghijklmnopqrstuvwxyz",
+            "github_pat_11AA000000000000000000_0123456789abcdefghijklmnopqrstuvwxyz",
+        ),
+        (
+            "Find xoxp-1234567890-1234567890-1234567890-abcdef",
+            "xoxp-1234567890-1234567890-1234567890-abcdef",
+        ),
+        (
+            "Find ya29.a0AfH6SMB1234567890abcdefghijklmnopqrstuv",
+            "ya29.a0AfH6SMB1234567890abcdefghijklmnopqrstuv",
+        ),
     ],
 )
 def test_request_redacts_common_credential_forms(raw_request: str, secret: str) -> None:

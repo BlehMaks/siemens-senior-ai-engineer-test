@@ -97,6 +97,18 @@ _SENSITIVE_QUERY_NAMES = frozenset(
 _PUBLIC_MESSAGE_PATTERNS = (
     re.compile(r"(?i)\btraceback\b"),
     re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^@\s/]+@"),
+    # URL paths and nested query values are not parsed as top-level fields. Match a
+    # sensitive label plus an assignment delimiter after decoding all separators.
+    re.compile(
+        r"(?i)(?<![a-z0-9])(?:"
+        r"api[\s._-]*key|access[\s._-]*token|auth(?:orization)?|"
+        r"client[\s._-]*(?:assertion|secret)|credentials?|"
+        r"id[\s._-]*token|pass(?:word|wd)|private[\s._-]*key|"
+        r"refresh[\s._-]*token|secret|session[\s._-]*token|"
+        r"sig(?:nature)?|token|x[\s._-]*amz[\s._-]*(?:credential|security[\s._-]*token|signature)|"
+        r"x[\s._-]*goog[\s._-]*(?:credential|signature)"
+        r")\s*(?:=|:)(?=.)"
+    ),
 )
 # Unicode Default_Ignorable ranges include marks outside category Cf; rejecting
 # the complete set prevents invisible characters from splitting credential words.
