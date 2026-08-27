@@ -89,13 +89,16 @@ class SQLiteReadinessProbe:
 
     async def ready(self) -> bool:
         try:
-            before = self._path.lstat()
-            if not stat.S_ISREG(before.st_mode):
-                return False
-            with self._path.open("rb") as opened:
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            with os.fdopen(os.open(self._path, flags), "rb") as opened:
                 opened_stat = os.fstat(opened.fileno())
+                if not stat.S_ISREG(opened_stat.st_mode):
+                    return False
+                descriptor_path = Path("/dev/fd") / str(opened.fileno())
+                if not descriptor_path.exists():
+                    return False
                 async with aiosqlite.connect(
-                    f"{self._path.resolve().as_uri()}?mode=ro", uri=True
+                    f"{descriptor_path.as_uri()}?mode=ro", uri=True
                 ) as connection:
                     await validate_current_schema(connection)
                 after = self._path.lstat()
@@ -103,9 +106,9 @@ class SQLiteReadinessProbe:
             return False
         # This bounds the probe's snapshot; a later replacement is caught next time.
         return stat.S_ISREG(after.st_mode) and (
-            before.st_dev,
-            before.st_ino,
-        ) == (opened_stat.st_dev, opened_stat.st_ino) == (after.st_dev, after.st_ino)
+            opened_stat.st_dev,
+            opened_stat.st_ino,
+        ) == (after.st_dev, after.st_ino)
 
 
 @dataclass(frozen=True, slots=True)

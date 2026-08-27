@@ -363,6 +363,42 @@ async def test_sqlite_readiness_rejects_symlink_swap_during_validation(
 
 
 @pytest.mark.asyncio
+async def test_sqlite_readiness_validates_the_opened_inode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "runtime.sqlite3"
+    with sqlite3.connect(path):
+        pass
+    original_inode = tmp_path / "original-inode.sqlite3"
+    original_inode.hardlink_to(path)
+    valid_replacement = tmp_path / "valid.sqlite3"
+    await migrate(valid_replacement)
+    real_connect = aiosqlite.connect
+    real_validate = observability_module.validate_current_schema
+
+    def connect_after_swap(
+        database: str | Path,
+        **kwargs: object,
+    ) -> aiosqlite.Connection:
+        path.unlink()
+        valid_replacement.replace(path)
+        return real_connect(database, **kwargs)
+
+    async def validate_then_restore(connection: aiosqlite.Connection) -> None:
+        await real_validate(connection)
+        path.unlink()
+        path.hardlink_to(original_inode)
+
+    monkeypatch.setattr(observability_module.aiosqlite, "connect", connect_after_swap)
+    monkeypatch.setattr(
+        observability_module, "validate_current_schema", validate_then_restore
+    )
+
+    assert not await SQLiteReadinessProbe(path).ready()
+
+
+@pytest.mark.asyncio
 async def test_metric_totals_saturate_at_a_finite_value() -> None:
     telemetry = OperationalTelemetry(
         pseudonym_key=b"k" * 32,
