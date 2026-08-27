@@ -186,6 +186,8 @@ def _require_public_source_url(value: str) -> None:
     if parsed.username is not None or parsed.password is not None or host is None:
         raise ValueError("citation URL is not safe to expose")
     normalized_host = host.rstrip(".").lower()
+    if contains_sensitive_memory_text(normalized_host):
+        raise ValueError("citation URL contains sensitive material")
     try:
         address = ipaddress.ip_address(normalized_host)
     except ValueError:

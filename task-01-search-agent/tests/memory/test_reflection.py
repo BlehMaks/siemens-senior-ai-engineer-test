@@ -316,6 +316,7 @@ def test_too_many_events_and_invalid_completion_provenance_fail() -> None:
         "https://www.siemens.com/report?download=%252541SIA1234567890ABCDEF",
         "https://www.siemens.com/report#private-fragment",
         "https://user:password@www.siemens.com/report",
+        "https://sk-admin-1234abcd.example.com/report",
     ],
 )
 def test_private_or_credentialed_completion_urls_are_not_retained(
@@ -333,6 +334,18 @@ def test_public_completion_url_allows_benign_query_name() -> None:
     )
 
     assert str(reflected.completion_evidence[0].source_url).endswith("monkey=business")
+
+
+def test_public_completion_url_allows_benign_sk_admin_topic() -> None:
+    reflected = reflect_run(
+        completed_result(
+            source_url="https://www.siemens.com/reports/sk-admin-dashboard"
+        )
+    )
+
+    assert str(reflected.completion_evidence[0].source_url).endswith(
+        "/reports/sk-admin-dashboard"
+    )
 
 
 def test_reflection_schema_has_no_prompt_reasoning_or_page_fields() -> None:

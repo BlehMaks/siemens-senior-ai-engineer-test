@@ -303,6 +303,7 @@ def test_nested_public_answer_collections_are_bounded() -> None:
         "https://example.com/report?download=github_pat_11AA000000000000000000_0123456789abcdefghijklmnopqrstuvwxyz",
         "https://example.com/report?download=xoxp-1234567890-1234567890-1234567890-abcdef",
         "https://example.com/report?download=ya29.a0AfH6SMB1234567890abcdefghijklmnopqrstuv",
+        "https://sk-admin-1234abcd.example.com/report",
         *(
             f"https://example.com/report?download={token}"
             for token in _DOCUMENTED_CREDENTIAL_TOKENS
@@ -338,6 +339,7 @@ def test_public_answer_rejects_non_public_or_sensitive_source_urls(
         "https://example.com/report?topic=client_secret_management",
         "https://example.com/report?q=credential+rotation+guide",
         "https://example.com/companies/sk-telecom-sustainability-report",
+        "https://example.com/reports/sk-admin-dashboard",
         "https://example.com/r%C3%A9sum%C3%A9?q=cafe%CC%81",
         "https://example.com/report?completion=100%25",
     ],

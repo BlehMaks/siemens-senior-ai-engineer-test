@@ -433,6 +433,7 @@ def _safe_public_url(raw_url: str) -> bool:
             or parsed.hostname is None
             or parsed.username is not None
             or parsed.password is not None
+            or contains_sensitive_memory_text(parsed.hostname)
             or parsed.port not in {None, 80, 443}
             or parsed.hostname.casefold() in {"localhost", "localhost.localdomain"}
             or not SitePolicy().evaluate(parsed.hostname).allowed
