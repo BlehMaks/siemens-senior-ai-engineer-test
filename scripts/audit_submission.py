@@ -63,7 +63,9 @@ SYMBOLIC_VALUE = re.compile(
     r")",
     re.DOTALL,
 )
-SHELL_INTERPOLATION = re.compile(r"\$\{[^{}\r\n]+\}|\$[A-Za-z_][A-Za-z0-9_]*")
+SHELL_INTERPOLATION = re.compile(
+    r"(?<!\\)(?:\\\\)*(?:\$\{[^{}\r\n]+\}|\$[A-Za-z_][A-Za-z0-9_]*)"
+)
 TEMPLATE_INTERPOLATION = re.compile(r"(?<!\$)\$\{[^{}\r\n]+\}")
 TERRAFORM_INTERPOLATION = TEMPLATE_INTERPOLATION
 BRACED_INTERPOLATION = re.compile(r"\{[A-Za-z_][^{}\r\n]*\}")
@@ -221,7 +223,13 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
                         break
                     block_lines.append(part.strip())
                 block = "\n".join(block_lines)
-                if _is_literal(block, minimum_length=16):
+                if _is_literal(
+                    block,
+                    minimum_length=16,
+                    interpolation=(
+                        TEMPLATE_INTERPOLATION if suffix in TEMPLATE_SUFFIXES else None
+                    ),
+                ):
                     return True
                 continue
 

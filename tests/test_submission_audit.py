@@ -371,6 +371,38 @@ def test_braced_dollar_credentials_follow_language_escaping_rules(
 
 
 @pytest.mark.parametrize(
+    "content",
+    [
+        seed("pass", 'word="\\$Secret123"\n').decode(),
+        seed("pass", 'word="\\${Secret123}"\n').decode(),
+    ],
+)
+def test_escaped_shell_dollars_remain_literal(repository: Path, content: str) -> None:
+    target = repository / "runtime.sh"
+    target.write_text(content, encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert any("credential assignment" in item for item in audit_repository(repository))
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        seed("tok", 'en="\\\\$RUNTIME_TOKEN"\n').decode(),
+        seed("tok", 'en="\\\\${RUNTIME_TOKEN}"\n').decode(),
+    ],
+)
+def test_even_shell_backslashes_preserve_interpolation(
+    repository: Path, content: str
+) -> None:
+    target = repository / "runtime.sh"
+    target.write_text(content, encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert audit_repository(repository) == []
+
+
+@pytest.mark.parametrize(
     ("path", "content"),
     [
         ("config.json", seed('{"tok', 'en": "${RUNTIME_TOKEN}"}\n').decode()),
@@ -384,6 +416,18 @@ def test_structured_config_interpolation_is_symbolic(
 ) -> None:
     target = repository / path
     target.write_text(content, encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert audit_repository(repository) == []
+
+
+@pytest.mark.parametrize("indicator", ["|", ">-"])
+def test_yaml_block_interpolation_is_symbolic(repository: Path, indicator: str) -> None:
+    target = repository / "config.yaml"
+    target.write_text(
+        seed("tok", f"en: {indicator}\n  ${{RUNTIME_TOKEN}}\n").decode(),
+        encoding="utf-8",
+    )
     git(repository, "add", target.name)
 
     assert audit_repository(repository) == []
