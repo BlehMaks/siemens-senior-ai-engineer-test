@@ -340,6 +340,7 @@ def test_public_answer_rejects_non_public_or_sensitive_source_urls(
         "https://example.com/report?q=credential+rotation+guide",
         "https://example.com/companies/sk-telecom-sustainability-report",
         "https://example.com/reports/sk-admin-dashboard",
+        "https://example.com/reports/sk-admin-dashboard-v2",
         "https://example.com/r%C3%A9sum%C3%A9?q=cafe%CC%81",
         "https://example.com/report?completion=100%25",
     ],

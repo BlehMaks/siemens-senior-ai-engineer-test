@@ -337,14 +337,11 @@ def test_public_completion_url_allows_benign_query_name() -> None:
 
 
 def test_public_completion_url_allows_benign_sk_admin_topic() -> None:
-    reflected = reflect_run(
-        completed_result(
-            source_url="https://www.siemens.com/reports/sk-admin-dashboard"
-        )
-    )
+    source_url = "https://www.siemens.com/reports/sk-admin-dashboard-v2"
+    reflected = reflect_run(completed_result(source_url=source_url))
 
     assert str(reflected.completion_evidence[0].source_url).endswith(
-        "/reports/sk-admin-dashboard"
+        "/reports/sk-admin-dashboard-v2"
     )
 
 
