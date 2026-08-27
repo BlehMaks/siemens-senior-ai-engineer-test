@@ -35,11 +35,8 @@ jobs:
       - name: Install the locked workspace
         run: uv sync --frozen --all-packages --dev
 
-      - name: Lint
-        run: uv run ruff check .
-
-      - name: Run the complete test suite
-        run: uv run pytest -q
+      - name: Run every blocking application gate
+        run: make check
 
   terraform:
     name: Terraform contracts
