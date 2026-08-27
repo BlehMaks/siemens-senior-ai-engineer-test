@@ -96,8 +96,20 @@ def test_provider_condition_uses_immutable_id_repo_and_branch_scope() -> None:
     assert 'attribute.repository_id == \\"${var.github_repository_id}\\"' in main_tf
     assert 'attribute.repository == \\"${var.github_repository}\\"' in main_tf
     assert 'attribute.ref == \\"refs/heads/${var.github_branch}\\"' in main_tf
+    assert 'default     = ""' in variables_tf
+    assert "!var.enable_github_wif" in variables_tf
     assert 'regex("^[1-9][0-9]*$", var.github_repository_id)' in variables_tf
     assert "token.actions.githubusercontent.com" in main_tf
+
+
+def test_federated_members_use_stable_plan_time_keys() -> None:
+    main_tf = read(BOOTSTRAP / "main.tf")
+    identity_variables = read(IDENTITY / "variables.tf")
+
+    assert identity_variables.count("type        = map(string)") >= 4
+    assert "? { github = local.github_principal }" in main_tf
+    assert "? [local.github_principal]" not in main_tf
+    assert 'ci = "serviceAccount:${module.identity["ci"].email}"' in main_tf
 
 
 def test_no_keys_or_wildcard_principals_are_defined() -> None:
@@ -146,6 +158,8 @@ def test_deployer_project_roles_match_reviewed_allowlist() -> None:
     assert "project_roles = local.bootstrap_roles" in locals_tf
     assert "setunion(local.bootstrap_roles" not in locals_tf
     assert '["roles/owner", "roles/editor", "roles/viewer"]' in identity_variables
+    assert "role == trimspace(role)" in identity_variables
+    assert 'regex("^roles/[A-Za-z0-9_.]+$", role)' in identity_variables
 
 
 def test_example_tfvars_are_secret_free_and_realistic() -> None:

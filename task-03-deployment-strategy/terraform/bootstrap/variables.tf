@@ -88,10 +88,14 @@ variable "github_repository" {
 variable "github_repository_id" {
   description = "Immutable numeric GitHub repository ID allowed to federate."
   type        = string
+  default     = ""
 
   validation {
-    condition     = can(regex("^[1-9][0-9]*$", var.github_repository_id))
-    error_message = "github_repository_id must be a positive numeric GitHub repository ID."
+    condition = (
+      (!var.enable_github_wif && var.github_repository_id == "") ||
+      can(regex("^[1-9][0-9]*$", var.github_repository_id))
+    )
+    error_message = "github_repository_id must be empty when WIF is disabled or a positive numeric GitHub repository ID."
   }
 }
 

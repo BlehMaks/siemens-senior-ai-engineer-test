@@ -37,7 +37,9 @@ variable "project_roles" {
   validation {
     condition = alltrue([
       for role in var.project_roles :
-      startswith(role, "roles/") && !contains(
+      role == trimspace(role) &&
+      can(regex("^roles/[A-Za-z0-9_.]+$", role)) &&
+      !contains(
         ["roles/owner", "roles/editor", "roles/viewer"],
         lower(role),
       )
@@ -48,18 +50,18 @@ variable "project_roles" {
 
 variable "workload_identity_members" {
   description = "Federated principals allowed to act as this service account."
-  type        = set(string)
-  default     = []
+  type        = map(string)
+  default     = {}
 }
 
 variable "service_account_user_members" {
   description = "Members allowed to attach or impersonate this identity in reviewed deploy flows."
-  type        = set(string)
-  default     = []
+  type        = map(string)
+  default     = {}
 }
 
 variable "token_creator_members" {
   description = "Members allowed to mint short-lived access tokens for this identity."
-  type        = set(string)
-  default     = []
+  type        = map(string)
+  default     = {}
 }

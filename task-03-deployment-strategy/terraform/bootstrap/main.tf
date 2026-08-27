@@ -76,10 +76,12 @@ module "identity" {
   labels        = local.common_labels
   project_roles = each.value.project_roles
   workload_identity_members = (
-    each.key == "ci" && local.github_principal != null ? [local.github_principal] : []
+    each.key == "ci" && local.github_principal != null
+    ? { github = local.github_principal }
+    : {}
   )
-  service_account_user_members = []
-  token_creator_members        = []
+  service_account_user_members = {}
+  token_creator_members        = {}
 
   depends_on = [google_project_service.required]
 }
@@ -92,12 +94,12 @@ module "deployer_identity" {
   description   = local.identities.deployer.description
   labels        = local.common_labels
   project_roles = local.identities.deployer.project_roles
-  service_account_user_members = [
-    "serviceAccount:${module.identity["ci"].email}",
-  ]
-  token_creator_members = [
-    "serviceAccount:${module.identity["ci"].email}",
-  ]
+  service_account_user_members = {
+    ci = "serviceAccount:${module.identity["ci"].email}"
+  }
+  token_creator_members = {
+    ci = "serviceAccount:${module.identity["ci"].email}"
+  }
 
   depends_on = [google_project_service.required]
 }
