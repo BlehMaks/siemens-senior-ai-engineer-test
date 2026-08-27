@@ -95,6 +95,8 @@ def test_slo_residency_iam_and_finops_reviews_have_named_owners() -> None:
         assert owner in source
     assert "quality-adjusted cost" in source
     assert "RTO" in source and "RPO" in source
+    assert "multi-region runtime/data topology" in source
+    assert "quota grant or increase" in source
 
 
 def test_addendum_keeps_enterprise_components_as_explicit_non_claims() -> None:
