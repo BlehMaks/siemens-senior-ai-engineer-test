@@ -46,6 +46,9 @@ failure counter but cannot change request or worker behavior.
 Readiness never returns table names, paths, exceptions, or storage diagnostics.
 Telemetry exporter failure does not make the service unready. The local SQLite
 probe is replaceable by a cloud dependency probe without changing the HTTP contract.
+The database file and its parent directory are trusted operator-controlled storage;
+the probe detects stable replacements and symlinks but is not a tamper boundary
+against a local process that can atomically rewrite that directory during a check.
 
 Once cancellation has durably made a run terminal, queue deletion is best-effort:
 the request truthfully returns `202 changed=true`, while a retry or terminal worker
