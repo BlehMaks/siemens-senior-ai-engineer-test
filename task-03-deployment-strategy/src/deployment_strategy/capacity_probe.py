@@ -21,6 +21,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from httpx import ASGITransport, AsyncClient
+from pydantic import AnyHttpUrl
 
 from agent_api.app import create_app
 from agent_api.security import LimitConfig
@@ -32,16 +33,21 @@ from agent_api.storage import (
 )
 from agent_api.workers.local import LocalWorker
 from search_agent import (
+    Citation,
     EventType,
+    ExtractedEvidence,
     FailureReason,
     PublicEvent,
+    QueryPlan,
     RunResult,
     RunStateGraph,
     RunUsage,
+    ScopedAnswer,
+    SearchHit,
+    SearchQuery,
+    ToolBudget,
 )
 from search_agent.contracts import QueryText
-
-from .container import FakeRunExecutor
 
 _NOW = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
 _TENANT_ID = "tenant-capacity"
@@ -49,12 +55,14 @@ _SESSION_ID = "session-capacity"
 _CORRELATION_ID = "corr-capacity-proof"
 _QUERY = "Find the Siemens sustainability report."
 _MODEL_QUOTA_QUERY = "Trigger deterministic model quota failure."
+_SOURCE_URL = "https://www.siemens.com/reports/sustainability-2025"
+_CLAIM = "Siemens published its 2025 sustainability report."
 
 
 @dataclass(frozen=True, slots=True)
 class ProbeThresholds:
     p95_submit_ms: float = 250.0
-    p95_first_event_ms: float = 250.0
+    p95_first_event_ms: float = 350.0
     recovery_ms: float = 1_000.0
 
 
@@ -83,9 +91,6 @@ class SequentialIds:
 
 
 class FakeCapacityExecutor:
-    def __init__(self) -> None:
-        self._offline = FakeRunExecutor()
-
     async def run(
         self,
         *,
@@ -97,12 +102,7 @@ class FakeCapacityExecutor:
         await asyncio.sleep(0.001)
         if request == _MODEL_QUOTA_QUERY:
             return _failed_result(tenant_id, session_id, run_id, request)
-        return await self._offline.run(
-            tenant_id=tenant_id,
-            session_id=session_id,
-            run_id=run_id,
-            request=request,
-        )
+        return _completed_result(tenant_id, session_id, run_id, request)
 
 
 async def run_probe(config: ProbeConfig | None = None) -> dict[str, Any]:
@@ -137,7 +137,6 @@ async def run_probe(config: ProbeConfig | None = None) -> dict[str, Any]:
         ):
             authorization = await _seed_tenant(app, database_path)
             session = await _create_session(client, authorization)
-            queue_wait_started = time.perf_counter()
             submissions = await _submit_burst(client, authorization, config)
             accepted = [item for item in submissions if item["status_code"] == 202]
             rejected = [item for item in submissions if item["status_code"] == 429]
@@ -150,11 +149,14 @@ async def run_probe(config: ProbeConfig | None = None) -> dict[str, Any]:
                 client, authorization, accepted[config.cancelled_index]
             )
             first_event = await _first_event_latency(
-                client, authorization, accepted[config.cancelled_index]["run_id"]
+                client,
+                authorization,
+                accepted[config.cancelled_index]["run_id"],
+                started_at=accepted[config.cancelled_index]["_submitted_at"],
             )
             oldest_queue_age_ms = _oldest_queue_age_ms(
                 database_path,
-                wall_started=queue_wait_started,
+                wall_started=min(item["_submitted_at"] for item in accepted),
             )
             recovery_started = time.perf_counter()
             drained = await _drain(database_path)
@@ -165,14 +167,25 @@ async def run_probe(config: ProbeConfig | None = None) -> dict[str, Any]:
                 query=_QUERY,
             )
             recovery_ms = (time.perf_counter() - recovery_started) * 1_000
+            recovery_terminal: dict[str, Any] = {
+                "failure_code": None,
+                "run_id": recovery["run_id"],
+                "state": None,
+            }
             if recovery["status_code"] == 202:
                 drained += await _drain(database_path)
+                recovery_terminal = await _get_status(
+                    client, authorization, recovery["run_id"]
+                )
             first_events = [first_event]
             for item in accepted:
                 if item["run_id"] != first_event["run_id"]:
                     first_events.append(
                         await _first_event_latency(
-                            client, authorization, item["run_id"]
+                            client,
+                            authorization,
+                            item["run_id"],
+                            started_at=item["_submitted_at"],
                         )
                     )
             terminal = await _terminal_summary(client, authorization, accepted)
@@ -194,6 +207,7 @@ async def run_probe(config: ProbeConfig | None = None) -> dict[str, Any]:
         drained=drained,
         terminal=terminal,
         recovery=recovery,
+        recovery_terminal=recovery_terminal,
         recovery_ms=recovery_ms,
         elapsed_ms=elapsed_ms,
         before=before,
@@ -293,11 +307,12 @@ async def _submit_burst(
             query=query,
         )
 
+    accepted_limit = min(config.submissions, config.max_queued_runs)
     accepted_wave = await asyncio.gather(
-        *(submit(index) for index in range(config.max_queued_runs))
+        *(submit(index) for index in range(accepted_limit))
     )
     rejected_wave = await asyncio.gather(
-        *(submit(index) for index in range(config.max_queued_runs, config.submissions))
+        *(submit(index) for index in range(accepted_limit, config.submissions))
     )
     return [*accepted_wave, *rejected_wave]
 
@@ -318,6 +333,7 @@ async def _submit_one(
     elapsed_ms = (time.perf_counter() - started) * 1_000
     body = response.json()
     return {
+        "_submitted_at": started,
         "elapsed_ms": round(elapsed_ms, 3),
         "idempotency_key": idempotency_key,
         "query": query,
@@ -379,15 +395,14 @@ async def _cancel(
 
 
 async def _first_event_latency(
-    client: AsyncClient, authorization: str, run_id: str
+    client: AsyncClient, authorization: str, run_id: str, *, started_at: float
 ) -> dict[str, Any]:
-    started = time.perf_counter()
     response = await client.get(
         f"/v1/runs/{run_id}/events",
         headers={**_headers(authorization), "Last-Event-ID": "1"},
     )
     response.raise_for_status()
-    elapsed_ms = (time.perf_counter() - started) * 1_000
+    elapsed_ms = (time.perf_counter() - started_at) * 1_000
     return {
         "elapsed_ms": round(elapsed_ms, 3),
         "event_type": _sse_field(response.text, "event"),
@@ -449,6 +464,7 @@ def _result(
     drained: int,
     terminal: dict[str, int],
     recovery: dict[str, Any],
+    recovery_terminal: dict[str, Any],
     recovery_ms: float,
     elapsed_ms: float,
     before: resource.struct_rusage,
@@ -464,6 +480,9 @@ def _result(
         "queue_oldest_age_ms": oldest_queue_age_ms,
         "recovery_accepted": recovery["status_code"] == 202,
         "recovery_ms": round(recovery_ms, 3),
+        "recovery_terminal_state": recovery_terminal["state"],
+        "recovery_terminal_success": recovery_terminal["state"] == "completed"
+        and recovery_terminal["failure_code"] is None,
         "rejected": len(rejected),
         "resource_usage": {
             "elapsed_ms": round(elapsed_ms, 3),
@@ -475,7 +494,8 @@ def _result(
         "terminal": terminal,
     }
     assertions = {
-        "accepted_equals_queue_limit": len(accepted) == config.max_queued_runs,
+        "accepted_equals_queue_limit": len(accepted)
+        == min(config.submissions, config.max_queued_runs),
         "cancelled_run_terminal": cancel["changed"] and cancel["state"] == "cancelled",
         "conflicting_duplicate_rejected": conflict["status_code"] == 409,
         "duplicate_is_idempotent": measurements["duplicate_run_id_matches"],
@@ -483,8 +503,9 @@ def _result(
         "model_quota_failure_observed": terminal["budget_exhausted"] == 1,
         "recovery_within_threshold": measurements["recovery_ms"]
         <= config.thresholds.recovery_ms,
+        "recovery_completed": measurements["recovery_terminal_success"],
         "rejected_when_queue_full": len(rejected)
-        == config.submissions - config.max_queued_runs,
+        == max(0, config.submissions - config.max_queued_runs),
         "status_after_submit_is_queued": status["state"] == "queued",
         "submit_p95_within_threshold": measurements["p95_submit_ms"]
         <= config.thresholds.p95_submit_ms,
@@ -518,6 +539,54 @@ def _failed_result(
         FailureReason.BUDGET_EXHAUSTED,
         message="Fake model quota was exhausted within policy bounds.",
     )
+    events.append(event)
+    return RunResult(snapshot=snapshot, events=tuple(events), usage=_usage())
+
+
+def _completed_result(
+    tenant_id: str, session_id: str, run_id: str, request: str
+) -> RunResult:
+    checked_url = AnyHttpUrl(_SOURCE_URL)
+    snapshot = RunStateGraph.create(tenant_id, session_id, run_id, request)
+    events = [_created(snapshot)]
+    plan = QueryPlan(
+        tool_budget=ToolBudget(max_search_queries=1, max_fetches=1),
+        searches=(SearchQuery(text="Siemens official report", max_results=1),),
+    )
+    snapshot, event = RunStateGraph.accept_plan(snapshot, plan)
+    events.append(event)
+    snapshot, event = RunStateGraph.start_search(snapshot)
+    events.append(event)
+    hit = SearchHit(
+        title="Siemens report",
+        url=checked_url,
+        snippet="Official public report",
+        rank=1,
+    )
+    evidence = ExtractedEvidence(
+        evidence_id="ev-report",
+        source_url=checked_url,
+        source_title="Siemens report",
+        summary=_CLAIM,
+        quotes=(_CLAIM,),
+    )
+    snapshot, event = RunStateGraph.record_evidence(
+        snapshot, hits=(hit,), evidence=(evidence,)
+    )
+    events.append(event)
+    answer = ScopedAnswer(
+        answer_text=_CLAIM,
+        citations=(
+            Citation(
+                claim=_CLAIM,
+                evidence_id="ev-report",
+                source_url=checked_url,
+            ),
+        ),
+    )
+    snapshot, event = RunStateGraph.draft_answer(snapshot, answer)
+    events.append(event)
+    snapshot, event = RunStateGraph.complete(snapshot)
     events.append(event)
     return RunResult(snapshot=snapshot, events=tuple(events), usage=_usage())
 

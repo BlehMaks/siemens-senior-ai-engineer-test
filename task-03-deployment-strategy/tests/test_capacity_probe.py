@@ -36,6 +36,8 @@ async def test_capacity_probe_exercises_required_local_paths() -> None:
     assert result["measurements"]["duplicate_run_id_matches"] is True
     assert result["measurements"]["first_event_samples"] == 8
     assert result["measurements"]["recovery_accepted"] is True
+    assert result["measurements"]["recovery_terminal_state"] == "completed"
+    assert result["measurements"]["recovery_terminal_success"] is True
     assert result["measurements"]["terminal"] == {
         "budget_exhausted": 1,
         "cancelled": 1,
@@ -44,6 +46,33 @@ async def test_capacity_probe_exercises_required_local_paths() -> None:
     assert result["measurements"]["p95_submit_ms"] <= 1_000
     assert result["measurements"]["p95_first_event_ms"] <= 1_000
     assert result["measurements"]["queue_oldest_age_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_capacity_probe_respects_submission_count_below_queue_limit() -> None:
+    result = await run_probe(
+        ProbeConfig(
+            submissions=4,
+            max_queued_runs=8,
+            cancelled_index=1,
+            model_quota_index=2,
+            thresholds=ProbeThresholds(
+                p95_submit_ms=1_000,
+                p95_first_event_ms=1_000,
+                recovery_ms=1_500,
+            ),
+        )
+    )
+
+    assert result["assertions"]["passed"] is True
+    assert result["scenario"]["submissions"] == 4
+    assert result["measurements"]["accepted"] == 4
+    assert result["measurements"]["rejected"] == 0
+    assert result["measurements"]["terminal"] == {
+        "budget_exhausted": 1,
+        "cancelled": 1,
+        "completed": 2,
+    }
 
 
 def test_design_envelopes_label_enterprise_scale_as_unmeasured() -> None:

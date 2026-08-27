@@ -86,19 +86,20 @@ Fixed inputs:
 | Deterministic model-quota failure | Accepted run index 6 |
 | Execution backend | In-process fake executor; no paid cloud, no network model call |
 | State and queue | Local SQLite through Task 2 repositories |
-| Thresholds | p95 submit ≤ 250 ms, first SSE event ≤ 250 ms, recovery ≤ 1,000 ms |
+| Thresholds | p95 submit ≤ 250 ms, first SSE event availability ≤ 350 ms, recovery ≤ 1,000 ms |
 
 The scenario proves these behaviors:
 
 - submit accepts work until the tenant queue limit is reached;
 - excess submissions fail with HTTP 429 instead of creating unbounded work;
 - status returns the accepted run as queued before execution;
-- SSE resumes after `Last-Event-ID` and returns the first cancellation event;
+- SSE resumes after `Last-Event-ID` and measures from submission start until the
+  first post-created event is available;
 - cancellation terminalizes a queued run and removes its work item;
 - idempotent duplicate submission returns the original accepted run;
 - same idempotency key with a different payload is rejected with HTTP 409;
 - one accepted run deterministically fails with a bounded fake model-quota failure;
-- after draining the overload, a recovery submission is accepted.
+- after draining the overload, a recovery submission is accepted and completed.
 
 Checked-in sample measurement on this development machine:
 
@@ -108,12 +109,13 @@ Checked-in sample measurement on this development machine:
 | Duplicate behavior | HTTP 202, same run ID |
 | Conflicting duplicate | HTTP 409 |
 | Terminal results after drain | 6 completed, 1 cancelled, 1 budget_exhausted |
-| p95 submit latency | 125.843 ms |
-| p95 first-event latency across eight runs | 10.749 ms |
-| Oldest queue age before drain | 177.049 ms |
-| Recovery time | 51.124 ms |
-| Whole scenario elapsed | 313.873 ms |
-| Resource usage | +4,833,280 platform `ru_maxrss`, +0.12488 user CPU s, +0.09871 system CPU s |
+| p95 submit latency | 110.344 ms |
+| p95 first-event availability across eight runs | 287.066 ms |
+| Oldest real queue age before drain | 175.222 ms |
+| Recovery time | 55.584 ms |
+| Recovery terminal state | completed |
+| Whole scenario elapsed | 334.146 ms |
+| Resource usage | +4,931,584 platform `ru_maxrss`, +0.132264 user CPU s, +0.10873 system CPU s |
 
 These numbers are local proof-of-contract measurements, not production performance
 claims. They are useful because the assertions fail closed if admission,
