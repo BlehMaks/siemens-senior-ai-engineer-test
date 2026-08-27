@@ -29,6 +29,7 @@ from ..ports import (
     WorkItem,
     WriteDisposition,
 )
+from ..schemas import validate_public_answer
 
 
 class QueueReceiver(Protocol):
@@ -215,7 +216,19 @@ class LocalWorker:
         try:
             result = await task
         except asyncio.CancelledError:
-            raise
+            # Preserve supervisor cancellation while containing executor self-cancellation.
+            worker_task = asyncio.current_task()
+            if worker_task is not None and worker_task.cancelling():
+                raise
+            await self._finish_terminal(
+                item,
+                current,
+                _TerminalProjection(
+                    next_state=RunState.FAILED,
+                    failure_code=RunFailureCode.EXECUTION_FAILED,
+                ),
+            )
+            return
         except Exception:
             await self._finish_terminal(
                 item,
@@ -227,7 +240,7 @@ class LocalWorker:
             )
             return
         try:
-            projection = _projection_from_result(result)
+            projection = _projection_from_result(result, run=current)
         except (AttributeError, TypeError, ValueError):
             projection = _TerminalProjection(
                 next_state=RunState.FAILED,
@@ -304,14 +317,23 @@ class LocalWorker:
             await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
 
 
-def _projection_from_result(result: RunResult) -> _TerminalProjection:
+def _projection_from_result(
+    result: RunResult, *, run: RunRecord
+) -> _TerminalProjection:
     snapshot = result.snapshot
+    if (
+        snapshot.tenant_id,
+        snapshot.session_id,
+        snapshot.run_id,
+        snapshot.request,
+    ) != (run.tenant_id, run.session_id, run.run_id, run.query):
+        raise ValueError("executor result does not match the submitted run")
     if snapshot.terminal_state is TerminalState.COMPLETED:
         if snapshot.answer is None:
             raise ValueError("completed result omitted its answer")
         return _TerminalProjection(
             next_state=RunState.COMPLETED,
-            answer=snapshot.answer,
+            answer=validate_public_answer(snapshot.answer),
             reflection=reflect_run(result),
         )
     if snapshot.terminal_state is TerminalState.CANCELLED:

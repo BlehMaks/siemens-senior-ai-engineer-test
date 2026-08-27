@@ -116,7 +116,7 @@ def _require_optional_utc(value: datetime | None) -> datetime | None:
     return None if value is None else _require_utc(value)
 
 
-def _revalidate_answer(value: object) -> ScopedAnswer:
+def validate_public_answer(value: object) -> ScopedAnswer:
     if isinstance(value, dict):
         answer = ScopedAnswer.model_validate(value)
     elif type(value) is ScopedAnswer:
@@ -275,7 +275,7 @@ class RunStatusResponse(StrictModel):
     @field_validator("answer", mode="before")
     @classmethod
     def revalidate_answer(cls, value: object) -> ScopedAnswer | None:
-        return None if value is None else _revalidate_answer(value)
+        return None if value is None else validate_public_answer(value)
 
     @field_validator("failure", mode="before")
     @classmethod
@@ -443,7 +443,7 @@ class RunEvent(StrictModel):
     @field_validator("answer", mode="before")
     @classmethod
     def revalidate_answer(cls, value: object) -> ScopedAnswer | None:
-        return None if value is None else _revalidate_answer(value)
+        return None if value is None else validate_public_answer(value)
 
     @field_validator("failure", mode="before")
     @classmethod

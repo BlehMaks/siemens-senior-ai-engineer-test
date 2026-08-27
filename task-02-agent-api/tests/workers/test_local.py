@@ -42,6 +42,7 @@ from search_agent import (
     Citation,
     ExtractedEvidence,
     FailureReason,
+    OptionalAssistance,
     PublicEvent,
     QueryPlan,
     RunResult,
@@ -383,6 +384,11 @@ async def test_two_workers_execute_one_delivery() -> None:
             RunFailureCode.EXECUTION_FAILED,
         ),
         (
+            lambda: ScriptedExecutor(error=asyncio.CancelledError()),
+            RunState.FAILED,
+            RunFailureCode.EXECUTION_FAILED,
+        ),
+        (
             lambda: ScriptedExecutor(result=cast(RunResult, object())),
             RunState.FAILED,
             RunFailureCode.EXECUTION_FAILED,
@@ -425,6 +431,59 @@ async def test_terminal_mapping_persists_public_projection(
     else:
         reflection = repository.reflections[("tenant-one", "session-one", "run-one")]
         assert isinstance(reflection, RunReflection)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_result", ["request", "answer"])
+async def test_invalid_executor_result_becomes_safe_terminal_failure(
+    invalid_result: str,
+) -> None:
+    result = completed_result()
+    snapshot = result.snapshot
+    if invalid_result == "request":
+        snapshot = RunSnapshot.model_validate(
+            snapshot.model_copy(update={"request": "answer a different request"})
+        )
+    else:
+        assert snapshot.answer is not None
+        answer = snapshot.answer.model_copy(
+            update={
+                "assistance": OptionalAssistance(
+                    offer="Review related documented questions.",
+                    follow_up_queries=tuple(
+                        f"Find documented follow up {index}." for index in range(9)
+                    ),
+                )
+            }
+        )
+        snapshot = RunSnapshot.model_validate(
+            snapshot.model_copy(update={"answer": answer})
+        )
+    queue = FakeQueue(work_item())
+    repository = FakeRunRepository(queued_run())
+    worker = LocalWorker(
+        repository=cast(RunRepository, repository),
+        queue=queue,
+        executor=ScriptedExecutor(
+            result=RunResult(
+                snapshot=snapshot,
+                events=result.events,
+                usage=result.usage,
+            )
+        ),
+        worker_id="worker-one",
+        clock=MutableClock(NOW),
+        lease_id_factory=lambda: "lease-one",
+    )
+
+    await worker.process_one()
+
+    stored = await repository.get(tenant_id="tenant-one", run_id="run-one")
+    assert stored is not None
+    assert stored.state is RunState.FAILED
+    assert stored.failure_code is RunFailureCode.EXECUTION_FAILED
+    assert stored.answer is None
+    assert repository.reflections == {}
 
 
 @pytest.mark.asyncio
