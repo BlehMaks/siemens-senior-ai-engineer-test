@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Never
 
 import pytest
 from contract_fakes import FakeRunRepository, FakeWorkQueue
+from pydantic import ValidationError
 
 from agent_api.ports import (
     ClaimDisposition,
@@ -202,10 +204,41 @@ class RunRepositoryContract:
                 expected_state=RunState.RUNNING,
                 next_state=RunState.COMPLETED,
                 lease_id="lease-one",
+                worker_id="worker-one",
                 at=reclaimed_at + timedelta(seconds=1),
             )
         )
         assert old_owner.disposition is WriteDisposition.LEASE_LOST
+
+    @pytest.mark.asyncio
+    async def test_reused_lease_id_does_not_authorize_the_previous_worker(
+        self, repository: RunRepository
+    ) -> None:
+        await repository.create(submission())
+        await repository.claim(claim(lease_id="lease-shared", lease_seconds=1))
+        reclaimed = await repository.claim(
+            claim(
+                worker_id="worker-two",
+                lease_id="lease-shared",
+                now=NOW + timedelta(seconds=1),
+            )
+        )
+        assert reclaimed.run is not None
+
+        previous_worker = await repository.compare_and_set(
+            StateUpdate(
+                tenant_id="tenant-one",
+                run_id="run-one",
+                expected_version=reclaimed.run.version,
+                expected_state=RunState.RUNNING,
+                next_state=RunState.COMPLETED,
+                lease_id="lease-shared",
+                worker_id="worker-one",
+                at=NOW + timedelta(seconds=2),
+            )
+        )
+
+        assert previous_worker.disposition is WriteDisposition.LEASE_LOST
 
     @pytest.mark.asyncio
     async def test_lease_renewal_extends_ownership_and_rejects_stale_owner(
@@ -255,6 +288,7 @@ class RunRepositoryContract:
             expected_state=RunState.RUNNING,
             next_state=RunState.WAITING_FOR_TOOL,
             lease_id="lease-one",
+            worker_id="worker-one",
             at=NOW + timedelta(seconds=1),
         )
         applied, stale = await asyncio.gather(
@@ -306,6 +340,7 @@ class RunRepositoryContract:
                 expected_state=RunState.RUNNING,
                 next_state=RunState.COMPLETED,
                 lease_id="lease-one",
+                worker_id="worker-one",
                 at=NOW + timedelta(seconds=2),
             )
         )
@@ -317,6 +352,7 @@ class RunRepositoryContract:
                 expected_state=RunState.RUNNING,
                 next_state=RunState.CANCELLED,
                 lease_id="lease-one",
+                worker_id="worker-one",
                 at=NOW + timedelta(seconds=2),
             )
         )
@@ -339,6 +375,7 @@ class RunRepositoryContract:
                 expected_state=RunState.RUNNING,
                 next_state=RunState.COMPLETED,
                 lease_id="lease-one",
+                worker_id="worker-one",
                 at=NOW + timedelta(seconds=1),
             )
         )
@@ -385,6 +422,55 @@ class RunRepositoryContract:
         assert redelivery.disposition is ClaimDisposition.CANCELLATION_REQUESTED
         assert redelivery.run is not None
         assert redelivery.run.state is RunState.CANCELLED
+
+    @pytest.mark.asyncio
+    async def test_cancellation_at_lease_expiry_is_immediately_terminal(
+        self, repository: RunRepository
+    ) -> None:
+        await repository.create(submission())
+        await repository.claim(claim(lease_seconds=1))
+
+        cancellation = await repository.request_cancellation(
+            tenant_id="tenant-one",
+            run_id="run-one",
+            at=NOW + timedelta(seconds=1),
+        )
+
+        assert cancellation.run is not None
+        assert cancellation.run.state is RunState.CANCELLED
+        assert cancellation.run.terminal_at == NOW + timedelta(seconds=1)
+        assert cancellation.run.lease is None
+
+    @pytest.mark.asyncio
+    async def test_retry_counters_do_not_turn_work_into_validation_errors(
+        self, repository: RunRepository
+    ) -> None:
+        await repository.create(submission())
+        last = None
+        for attempt in range(1_001):
+            last = await repository.claim(
+                claim(
+                    worker_id=f"worker-{attempt}",
+                    lease_id=f"lease-{attempt}",
+                    now=NOW + timedelta(seconds=attempt),
+                    lease_seconds=1,
+                )
+            )
+
+        assert last is not None and last.run is not None
+        assert last.run.delivery_attempts == 1_001
+
+    @pytest.mark.asyncio
+    async def test_unrepresentable_lease_expiry_returns_a_typed_result(
+        self, repository: RunRepository
+    ) -> None:
+        last_instant = datetime.max.replace(tzinfo=UTC)
+        await repository.create(submission(created_at=last_instant))
+
+        result = await repository.claim(claim(now=last_instant))
+
+        assert result.disposition is ClaimDisposition.LEASE_UNAVAILABLE
+        assert result.run is not None and result.run.state is RunState.QUEUED
 
     @pytest.mark.asyncio
     async def test_tenant_predicates_hide_reads_claims_cancels_and_deletes(
@@ -538,3 +624,65 @@ async def test_fake_queue_debug_view_is_deterministic() -> None:
         "work-zed",
         "work-later",
     )
+
+
+@pytest.mark.asyncio
+async def test_fake_boundaries_revalidate_constructed_inputs() -> None:
+    repository = FakeRunRepository()
+    invalid_submission = RunSubmission.model_construct(
+        tenant_id="wrong tenant",
+        session_id="session-one",
+        run_id="run-one",
+        idempotency_key="short",
+        query="x",
+        created_at=NOW.replace(tzinfo=None),
+    )
+    with pytest.raises((ValidationError, ValueError)):
+        await repository.create(invalid_submission)
+
+    queue = FakeWorkQueue()
+    invalid_item = WorkItem.model_construct(
+        work_id="work-one",
+        tenant_id="tenant-one",
+        run_id="run-one",
+        enqueued_at=NOW,
+        not_before=NOW - timedelta(seconds=1),
+    )
+    with pytest.raises((ValidationError, ValueError)):
+        await queue.enqueue(invalid_item)
+
+
+@pytest.mark.asyncio
+async def test_fake_boundaries_normalize_scalar_subclasses() -> None:
+    class StringSubclass(str):
+        pass
+
+    class ExplodingDateTime(datetime):
+        def __add__(self, other: object) -> Never:
+            raise RuntimeError("hostile datetime arithmetic executed")
+
+    repository = FakeRunRepository()
+    created = await repository.create(
+        RunSubmission.model_construct(
+            tenant_id=StringSubclass("tenant-one"),
+            session_id=StringSubclass("session-one"),
+            run_id=StringSubclass("run-one"),
+            idempotency_key=StringSubclass("request-key-one"),
+            query=StringSubclass("find the documented answer"),
+            created_at=NOW,
+        )
+    )
+    with pytest.raises((ValidationError, ValueError), match="exact datetime"):
+        await repository.claim(
+            ClaimRequest.model_construct(
+                tenant_id="tenant-one",
+                run_id="run-one",
+                worker_id="worker-one",
+                lease_id="lease-one",
+                now=ExplodingDateTime(2026, 8, 27, 10, 0, tzinfo=UTC),
+                lease_seconds=1,
+            )
+        )
+
+    assert type(created.run.tenant_id) is str
+    assert type(created.run.query) is str

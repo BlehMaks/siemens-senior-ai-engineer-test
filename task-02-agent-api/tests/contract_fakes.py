@@ -47,9 +47,19 @@ def _scope_id(value: OpaqueId) -> OpaqueId:
 
 
 def _utc(value: datetime) -> datetime:
-    if type(value) is not datetime or value.utcoffset() != timedelta(0):
+    if type(value) is not datetime:
+        raise ValueError("timestamp must be an exact datetime")
+    if value.utcoffset() != timedelta(0):
         raise ValueError("timestamp must be timezone-aware UTC")
     return value
+
+
+def _lease_expiry(now: datetime, lease_seconds: int) -> datetime | None:
+    lease_delta = timedelta(seconds=lease_seconds)
+    last_instant = datetime.max.replace(tzinfo=now.tzinfo)
+    if last_instant - now < lease_delta:
+        return None
+    return now + lease_delta
 
 
 class FakeRunRepository:
@@ -157,11 +167,16 @@ class FakeRunRepository:
                     ),
                     run=run,
                 )
+            expires_at = _lease_expiry(checked.now, checked.lease_seconds)
+            if expires_at is None:
+                return ClaimResult(
+                    disposition=ClaimDisposition.LEASE_UNAVAILABLE, run=run
+                )
             lease = ExecutionLease(
                 lease_id=checked.lease_id,
                 worker_id=checked.worker_id,
                 acquired_at=checked.now,
-                expires_at=checked.now + timedelta(seconds=checked.lease_seconds),
+                expires_at=expires_at,
             )
             claimed = run.model_copy(
                 update={
@@ -198,11 +213,16 @@ class FakeRunRepository:
                 or checked.now < run.updated_at
             ):
                 return LeaseResult(disposition=LeaseDisposition.LOST, run=run)
+            requested_expiry = _lease_expiry(checked.now, checked.lease_seconds)
+            if requested_expiry is None:
+                return LeaseResult(
+                    disposition=LeaseDisposition.LEASE_UNAVAILABLE, run=run
+                )
             renewed_lease = lease.model_copy(
                 update={
                     "expires_at": max(
                         lease.expires_at,
-                        checked.now + timedelta(seconds=checked.lease_seconds),
+                        requested_expiry,
                     )
                 }
             )
@@ -235,6 +255,7 @@ class FakeRunRepository:
             if checked.lease_id is not None and (
                 run.lease is None
                 or run.lease.lease_id != checked.lease_id
+                or run.lease.worker_id != checked.worker_id
                 or run.lease.expires_at <= checked.at
             ):
                 return StateUpdateResult(
@@ -275,7 +296,9 @@ class FakeRunRepository:
                 return CancellationResult(run=run, changed=False)
             if checked_at < run.updated_at:
                 raise ValueError("cancellation time cannot precede the stored update")
-            immediate = run.state is RunState.QUEUED
+            immediate = run.state is RunState.QUEUED or (
+                run.lease is not None and run.lease.expires_at <= checked_at
+            )
             cancelled = run.model_copy(
                 update={
                     "state": RunState.CANCELLED if immediate else run.state,

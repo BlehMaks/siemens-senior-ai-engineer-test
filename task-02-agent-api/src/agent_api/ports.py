@@ -37,6 +37,9 @@ TERMINAL_RUN_STATES = frozenset(
 
 
 def _require_utc(value: datetime) -> datetime:
+    if type(value) is not datetime:
+        # Reject before reading overridable datetime properties or doing arithmetic.
+        raise ValueError("timestamp must be an exact datetime")
     if value.tzinfo is None or value.utcoffset() != timedelta(0):
         raise ValueError("timestamp must be timezone-aware UTC")
     return value
@@ -81,8 +84,10 @@ class RunRecord(StrictModel):
     idempotency_key: IdempotencyKey
     query: QueryText
     state: RunState
-    version: int = Field(ge=0, le=1_000_000)
-    delivery_attempts: int = Field(ge=0, le=1_000)
+    # Monotonic counters have no artificial ceiling: a limit would eventually turn
+    # valid retry traffic into an unhandleable validation exception.
+    version: int = Field(ge=0)
+    delivery_attempts: int = Field(ge=0)
     created_at: datetime
     updated_at: datetime
     cancellation_requested_at: datetime | None = None
@@ -95,6 +100,15 @@ class RunRecord(StrictModel):
     _optional_timestamps_are_utc = field_validator(
         "cancellation_requested_at", "terminal_at"
     )(_require_optional_utc)
+
+    @field_validator("lease", mode="before")
+    @classmethod
+    def revalidate_lease(cls, value: object) -> object:
+        if value is None or isinstance(value, dict):
+            return value
+        if type(value) is not ExecutionLease:
+            raise ValueError("lease has the wrong concrete type")
+        return ExecutionLease.model_validate(value.model_dump(mode="python"))
 
     @model_validator(mode="after")
     def validate_lifecycle(self) -> RunRecord:
@@ -121,6 +135,12 @@ class RunRecord(StrictModel):
             raise ValueError("a requested cancellation cannot end in another state")
         if self.state is RunState.QUEUED and self.lease is not None:
             raise ValueError("queued runs cannot have an execution lease")
+        if self.state is RunState.QUEUED and (
+            self.version != 0
+            or self.delivery_attempts != 0
+            or self.cancellation_requested_at is not None
+        ):
+            raise ValueError("queued runs must retain their pristine lifecycle state")
         is_worker_owned = self.state in {
             RunState.RUNNING,
             RunState.WAITING_FOR_TOOL,
@@ -136,9 +156,32 @@ class RunRecord(StrictModel):
         return self
 
 
+def _revalidate_run(value: object) -> RunRecord:
+    if isinstance(value, dict):
+        return RunRecord.model_validate(value)
+    if type(value) is not RunRecord:
+        raise ValueError("run has the wrong concrete type")
+    return RunRecord.model_validate(value.model_dump(mode="python"))
+
+
 class CreateRunResult(StrictModel):
     run: RunRecord
     created: bool
+
+    @field_validator("run", mode="before")
+    @classmethod
+    def revalidate_run(cls, value: object) -> RunRecord:
+        return _revalidate_run(value)
+
+    @model_validator(mode="after")
+    def validate_result(self) -> CreateRunResult:
+        if self.created and (
+            self.run.state is not RunState.QUEUED
+            or self.run.version != 0
+            or self.run.delivery_attempts != 0
+        ):
+            raise ValueError("new runs must be pristine queued records")
+        return self
 
 
 class ClaimRequest(StrictModel):
@@ -158,12 +201,18 @@ class ClaimDisposition(StrEnum):
     BUSY = "busy"
     CANCELLATION_REQUESTED = "cancellation_requested"
     TERMINAL = "terminal"
+    LEASE_UNAVAILABLE = "lease_unavailable"
     NOT_FOUND = "not_found"
 
 
 class ClaimResult(StrictModel):
     disposition: ClaimDisposition
     run: RunRecord | None
+
+    @field_validator("run", mode="before")
+    @classmethod
+    def revalidate_run(cls, value: object) -> RunRecord | None:
+        return None if value is None else _revalidate_run(value)
 
     @model_validator(mode="after")
     def validate_result(self) -> ClaimResult:
@@ -178,6 +227,19 @@ class ClaimResult(StrictModel):
             or self.run.state is not RunState.RUNNING
         ):
             raise ValueError("successful claims require a lease")
+        if self.run is not None:
+            if (
+                self.disposition is ClaimDisposition.TERMINAL
+                and self.run.state not in TERMINAL_RUN_STATES
+            ):
+                raise ValueError("terminal claims require a terminal run")
+            if self.disposition is ClaimDisposition.BUSY and self.run.lease is None:
+                raise ValueError("busy claims require an owned run")
+            if (
+                self.disposition is ClaimDisposition.CANCELLATION_REQUESTED
+                and self.run.cancellation_requested_at is None
+            ):
+                raise ValueError("cancelled claims require a cancellation request")
         return self
 
 
@@ -197,12 +259,18 @@ class LeaseDisposition(StrEnum):
     LOST = "lost"
     CANCELLATION_REQUESTED = "cancellation_requested"
     TERMINAL = "terminal"
+    LEASE_UNAVAILABLE = "lease_unavailable"
     NOT_FOUND = "not_found"
 
 
 class LeaseResult(StrictModel):
     disposition: LeaseDisposition
     run: RunRecord | None
+
+    @field_validator("run", mode="before")
+    @classmethod
+    def revalidate_run(cls, value: object) -> RunRecord | None:
+        return None if value is None else _revalidate_run(value)
 
     @model_validator(mode="after")
     def validate_result(self) -> LeaseResult:
@@ -212,6 +280,17 @@ class LeaseResult(StrictModel):
             self.run is None or self.run.lease is None
         ):
             raise ValueError("a renewed run requires a lease")
+        if self.run is not None:
+            if (
+                self.disposition is LeaseDisposition.TERMINAL
+                and self.run.state not in TERMINAL_RUN_STATES
+            ):
+                raise ValueError("terminal renewal requires a terminal run")
+            if (
+                self.disposition is LeaseDisposition.CANCELLATION_REQUESTED
+                and self.run.cancellation_requested_at is None
+            ):
+                raise ValueError("cancelled renewal requires a cancellation request")
         return self
 
 
@@ -247,11 +326,12 @@ class StateUpdate(StrictModel):
 
     tenant_id: OpaqueId
     run_id: OpaqueId
-    expected_version: int = Field(ge=0, le=1_000_000)
+    expected_version: int = Field(ge=0)
     expected_state: RunState
     next_state: RunState
     at: datetime
     lease_id: OpaqueId | None = None
+    worker_id: OpaqueId | None = None
 
     _at_is_utc = field_validator("at")(_require_utc)
 
@@ -263,8 +343,13 @@ class StateUpdate(StrictModel):
             RunState.RUNNING,
             RunState.WAITING_FOR_TOOL,
         }
-        if owned_state != (self.lease_id is not None):
-            raise ValueError("worker-owned transitions require exactly one lease id")
+        has_ownership = self.lease_id is not None and self.worker_id is not None
+        if owned_state != has_ownership:
+            raise ValueError("worker-owned transitions require lease and worker ids")
+        if not owned_state and (
+            self.lease_id is not None or self.worker_id is not None
+        ):
+            raise ValueError("unowned transitions cannot include ownership ids")
         return self
 
 
@@ -280,16 +365,41 @@ class StateUpdateResult(StrictModel):
     disposition: WriteDisposition
     run: RunRecord | None
 
+    @field_validator("run", mode="before")
+    @classmethod
+    def revalidate_run(cls, value: object) -> RunRecord | None:
+        return None if value is None else _revalidate_run(value)
+
     @model_validator(mode="after")
     def validate_result(self) -> StateUpdateResult:
         if (self.disposition is WriteDisposition.NOT_FOUND) != (self.run is None):
             raise ValueError("only a missing run may omit the run record")
+        if self.run is not None:
+            if self.disposition is WriteDisposition.APPLIED and (
+                self.run.state is RunState.QUEUED or self.run.version == 0
+            ):
+                raise ValueError("applied updates require a changed run")
+            if (
+                self.disposition is WriteDisposition.LEASE_LOST
+                and self.run.lease is None
+            ):
+                raise ValueError("lost leases require an owned run")
+            if (
+                self.disposition is WriteDisposition.CANCELLATION_REQUESTED
+                and self.run.cancellation_requested_at is None
+            ):
+                raise ValueError("cancelled updates require a cancellation request")
         return self
 
 
 class CancellationResult(StrictModel):
     run: RunRecord | None
     changed: bool
+
+    @field_validator("run", mode="before")
+    @classmethod
+    def revalidate_run(cls, value: object) -> RunRecord | None:
+        return None if value is None else _revalidate_run(value)
 
     @model_validator(mode="after")
     def validate_result(self) -> CancellationResult:
@@ -299,6 +409,13 @@ class CancellationResult(StrictModel):
             self.run is None or self.run.cancellation_requested_at is None
         ):
             raise ValueError("a changed run requires a cancellation timestamp")
+        if (
+            not self.changed
+            and self.run is not None
+            and self.run.state not in TERMINAL_RUN_STATES
+            and self.run.cancellation_requested_at is None
+        ):
+            raise ValueError("an unchanged cancellable run is impossible")
         return self
 
 
@@ -369,6 +486,15 @@ class WorkItem(StrictModel):
 class EnqueueResult(StrictModel):
     item: WorkItem
     created: bool
+
+    @field_validator("item", mode="before")
+    @classmethod
+    def revalidate_item(cls, value: object) -> WorkItem:
+        if isinstance(value, dict):
+            return WorkItem.model_validate(value)
+        if type(value) is not WorkItem:
+            raise ValueError("work item has the wrong concrete type")
+        return WorkItem.model_validate(value.model_dump(mode="python"))
 
 
 class WorkQueue(Protocol):
