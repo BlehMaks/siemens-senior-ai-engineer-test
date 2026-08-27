@@ -9,6 +9,7 @@ import logging
 import math
 import os
 import sqlite3
+import stat
 import sys
 import threading
 from dataclasses import dataclass
@@ -87,28 +88,24 @@ class SQLiteReadinessProbe:
         self._path = path
 
     async def ready(self) -> bool:
-        if self._path.is_symlink() or not self._path.is_file():
-            return False
         try:
-            before = self._path.stat()
+            before = self._path.lstat()
+            if not stat.S_ISREG(before.st_mode):
+                return False
             with self._path.open("rb") as opened:
                 opened_stat = os.fstat(opened.fileno())
                 async with aiosqlite.connect(
                     f"{self._path.resolve().as_uri()}?mode=ro", uri=True
                 ) as connection:
                     await validate_current_schema(connection)
-                after = self._path.stat()
+                after = self._path.lstat()
         except (MigrationError, OSError, sqlite3.Error):
             return False
         # This bounds the probe's snapshot; a later replacement is caught next time.
-        return (
-            (
-                before.st_dev,
-                before.st_ino,
-            )
-            == (opened_stat.st_dev, opened_stat.st_ino)
-            == (after.st_dev, after.st_ino)
-        )
+        return stat.S_ISREG(after.st_mode) and (
+            before.st_dev,
+            before.st_ino,
+        ) == (opened_stat.st_dev, opened_stat.st_ino) == (after.st_dev, after.st_ino)
 
 
 @dataclass(frozen=True, slots=True)

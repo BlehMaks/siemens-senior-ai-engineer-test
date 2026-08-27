@@ -332,6 +332,37 @@ async def test_sqlite_readiness_rejects_replacement_during_validation(
 
 
 @pytest.mark.asyncio
+async def test_sqlite_readiness_rejects_symlink_swap_during_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "runtime.sqlite3"
+    await migrate(path)
+    same_inode = tmp_path / "same-inode.sqlite3"
+    same_inode.hardlink_to(path)
+    probe = SQLiteReadinessProbe(path)
+    opened = asyncio.Event()
+    resume = asyncio.Event()
+    original = observability_module.validate_current_schema
+
+    async def delayed_validation(connection: aiosqlite.Connection) -> None:
+        opened.set()
+        await resume.wait()
+        await original(connection)
+
+    monkeypatch.setattr(
+        observability_module, "validate_current_schema", delayed_validation
+    )
+    checking = asyncio.create_task(probe.ready())
+    await asyncio.wait_for(opened.wait(), timeout=1)
+    path.unlink()
+    path.symlink_to(same_inode)
+    resume.set()
+
+    assert not await asyncio.wait_for(checking, timeout=1)
+
+
+@pytest.mark.asyncio
 async def test_metric_totals_saturate_at_a_finite_value() -> None:
     telemetry = OperationalTelemetry(
         pseudonym_key=b"k" * 32,
