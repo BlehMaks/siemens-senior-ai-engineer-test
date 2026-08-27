@@ -831,6 +831,14 @@ def test_production_rejects_cloud_adapters_with_split_document_stores(
         )
 
 
+def test_session_repository_rejects_split_cascade_store() -> None:
+    with pytest.raises(ValueError, match="same document store"):
+        FirestoreSessionRepository(
+            FakeDocumentStore(),
+            FirestoreRunRepository(FakeDocumentStore()),
+        )
+
+
 @pytest.mark.asyncio
 async def test_mid_execution_lease_loss_requests_delivery_retry() -> None:
     store = FakeDocumentStore()

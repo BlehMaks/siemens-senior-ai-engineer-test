@@ -826,6 +826,10 @@ class FirestoreSessionRepository:
         store: DocumentStore,
         run_repository: FirestoreRunRepository | None = None,
     ) -> None:
+        if run_repository is not None and run_repository.document_store is not store:
+            raise ValueError(
+                "session and cascade repositories must use the same document store"
+            )
         self._store = store
         self._runs = (
             FirestoreRunRepository(store) if run_repository is None else run_repository
