@@ -17,6 +17,10 @@ from material_similarity.normalize import normalize_description
         ),
         ("5 mm \N{MULTIPLICATION SIGN} 20 mm", "5mmx20mm"),
         ("Response 5 mS; delay 5 ms", "response 5mS; delay 5ms"),
+        (
+            "5 Ms; 5 ms; 5 \N{MICRO SIGN}S; 5 \N{MICRO SIGN}s",
+            "5Ms; 5ms; 5\N{MICRO SIGN}S; 5\N{MICRO SIGN}s",
+        ),
         ("6.9(Typ)W / -55 Cel to 125 °C", "6.9(typ)w / -55cel to 125cel"),
         ("FRN-R-10, AC/DC, 1/4-inch", "frn-r-10, ac/dc, 1/4-inch"),
         (" \t\n ", ""),
@@ -31,6 +35,37 @@ def test_normalization_is_idempotent(description: str) -> None:
     normalized = normalize_description(description)
 
     assert normalize_description(normalized) == normalized
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("5 ms", "5 mS"),
+        ("5 Ms", "5 ms"),
+        ("5 \N{MICRO SIGN}s", "5 \N{MICRO SIGN}S"),
+        ("5 mV", "5 MV"),
+        ("5 Pa", "5 pA"),
+    ],
+)
+def test_case_sensitive_si_quantities_do_not_collapse(left: str, right: str) -> None:
+    assert normalize_description(left) != normalize_description(right)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "\N{COMBINING GREEK YPOGEGRAMMENI}5mS",
+        "5mS\N{COMBINING GREEK YPOGEGRAMMENI}",
+    ],
+)
+def test_normalization_is_idempotent_across_unicode_casefold_boundary(raw: str) -> None:
+    normalized = normalize_description(raw)
+
+    assert normalize_description(normalized) == normalized
+
+
+def test_prose_outside_numeric_technical_tokens_is_casefolded() -> None:
+    assert normalize_description("MS Response Fuse") == "ms response fuse"
 
 
 @given(

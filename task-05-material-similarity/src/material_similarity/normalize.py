@@ -8,11 +8,11 @@ _WHITESPACE = re.compile(r"\s+")
 _DIMENSION_SEPARATOR = re.compile(
     r"(?:(?<=\d)|(?<=mm))\s*[x\N{MULTIPLICATION SIGN}]\s*(?=\d)"
 )
-_SIEMENS_SYMBOL = re.compile(r"(?<![\w.])(?P<number>\d+(?:\.\d+)?)\s*(?P<unit>[mM]S)\b")
+_TECHNICAL_QUANTITY = re.compile(r"(?P<number>\d+(?:\.\d+)?)\s*(?P<unit>[^\W\d_]+)")
 _UNIT = re.compile(
     r"(?<![\w.])(?P<number>\d+(?:\.\d+)?)\s*(?P<unit>"
-    r"millimet(?:er|re)s?|mm|milliseconds?|ms|volts?|vac|vdc|v|"
-    r"amperes?|amps?|a|watts?|w|joules?|j|celsius|cel|°c)\b"
+    r"(?i:millimet(?:er|re)s?|milliseconds?|volts?|vac|vdc|v|"
+    r"amperes?|amps?|a|watts?|w|joules?|j|celsius|cel|°c)|mm|ms)\b"
 )
 _VOLTAGE_MODE = re.compile(r"(?<=\d)v\s+(?P<mode>ac|dc)\b")
 
@@ -50,22 +50,22 @@ _CANONICAL_UNIT = {
 def normalize_description(description: str) -> str:
     """Canonicalize safe variants without deleting technical evidence."""
 
-    normalized = _WHITESPACE.sub(" ", _casefold_description(description)).strip()
-    normalized = _UNIT.sub(_canonicalize_unit, normalized)
+    known_units = _UNIT.sub(_canonicalize_unit, description)
+    normalized = _WHITESPACE.sub(" ", _casefold_description(known_units)).strip()
     normalized = _DIMENSION_SEPARATOR.sub("x", normalized)
     return _VOLTAGE_MODE.sub(lambda match: f"v{match.group('mode')}", normalized)
 
 
 def _canonicalize_unit(match: re.Match[str]) -> str:
-    return f"{match.group('number')}{_CANONICAL_UNIT[match.group('unit')]}"
+    return f"{match.group('number')}{_CANONICAL_UNIT[match.group('unit').casefold()]}"
 
 
 def _casefold_description(description: str) -> str:
-    """Case-fold prose while keeping SI conductance distinct from milliseconds."""
+    """Case-fold prose while retaining case-sensitive SI quantities."""
 
     parts: list[str] = []
     previous_end = 0
-    for match in _SIEMENS_SYMBOL.finditer(description):
+    for match in _TECHNICAL_QUANTITY.finditer(description):
         parts.append(description[previous_end : match.start()].casefold())
         parts.append(f"{match.group('number')}{match.group('unit')}")
         previous_end = match.end()
