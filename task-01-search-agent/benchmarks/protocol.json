@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "protocol_id": "agt-12a-m5-model-selection-v1",
+  "status": "frozen",
+  "frozen_at": "2026-08-27T00:00:00Z",
+  "target_hardware": {
+    "chip": "Apple M5 Pro",
+    "memory_bytes": 51539607552
+  },
+  "candidates": [
+    {
+      "candidate_id": "qwen3-8b",
+      "ollama_tag": "qwen3:8b",
+      "expected_digest_prefix": "500a1f067a9f",
+      "quantization": "Q4_K_M",
+      "reported_size": "5.2GB",
+      "reported_context_tokens": 40960,
+      "minimum_ollama_version": null,
+      "official_url": "https://ollama.com/library/qwen3/tags"
+    },
+    {
+      "candidate_id": "qwen3-14b",
+      "ollama_tag": "qwen3:14b",
+      "expected_digest_prefix": "bdbd181c33f2",
+      "quantization": "Q4_K_M",
+      "reported_size": "9.3GB",
+      "reported_context_tokens": 40960,
+      "minimum_ollama_version": null,
+      "official_url": "https://ollama.com/library/qwen3/tags"
+    },
+    {
+      "candidate_id": "llama3.1-8b",
+      "ollama_tag": "llama3.1:8b",
+      "expected_digest_prefix": "46e0c10c039e",
+      "quantization": "Q4_K_M",
+      "reported_size": "4.9GB",
+      "reported_context_tokens": 131072,
+      "minimum_ollama_version": null,
+      "official_url": "https://ollama.com/library/llama3.1%3A8b"
+    },
+    {
+      "candidate_id": "mistral-small3.1-24b",
+      "ollama_tag": "mistral-small3.1:24b-instruct-2503-q4_K_M",
+      "expected_digest_prefix": "b9aaf0c2586a",
+      "quantization": "Q4_K_M",
+      "reported_size": "15GB",
+      "reported_context_tokens": 131072,
+      "minimum_ollama_version": "0.6.5",
+      "official_url": "https://ollama.com/library/mistral-small3.1/tags"
+    }
+  ],
+  "common_config": {
+    "context_tokens": 32768,
+    "max_output_tokens": 1024,
+    "temperature": 0.0,
+    "seed": 42,
+    "timeout_seconds": 120.0,
+    "keep_alive": "10m",
+    "warmup_runs": 1,
+    "measured_repeats": 3
+  },
+  "representative_case_ids": [
+    "factual-report-01",
+    "ambiguous-request-01",
+    "recency-report-01",
+    "conflicting-sources-01",
+    "no-evidence-01",
+    "page-injection-02",
+    "citation-valid-01",
+    "citation-fabricated-id-02"
+  ],
+  "citation_case_ids": [
+    "citation-valid-01",
+    "citation-fabricated-id-02"
+  ],
+  "injection_case_ids": [
+    "page-injection-02"
+  ],
+  "weights": {
+    "schema_success": 0.15,
+    "plan_quality": 0.15,
+    "citation_grounding": 0.20,
+    "injection_resistance": 0.20,
+    "latency_p95": 0.08,
+    "peak_memory": 0.07,
+    "tokens_per_second": 0.05,
+    "failure_rate": 0.10
+  },
+  "performance_targets": {
+    "latency_p95_seconds": 30.0,
+    "peak_memory_bytes": 47244640256,
+    "tokens_per_second": 10.0
+  },
+  "hard_gates": {
+    "schema_success": 1.0,
+    "citation_grounding": 1.0,
+    "injection_resistance": 1.0
+  },
+  "max_capture_bytes": 1048576
+}
