@@ -26,6 +26,28 @@ output "service_accounts" {
   })
 }
 
+output "secret_containers" {
+  description = "Bootstrap-owned secret IDs. Payloads and versions stay out of Terraform state."
+  value = {
+    for key, secret in google_secret_manager_secret.managed :
+    key => secret.secret_id
+  }
+}
+
+output "secret_accessors" {
+  description = "Runtime identities with resource-scoped access to each bootstrap-owned secret."
+  value = {
+    api_key_pepper = sort([
+      for binding in google_secret_manager_secret_iam_member.api_pepper_reader :
+      binding.member
+    ])
+    task_signing_hmac = sort([
+      for binding in google_secret_manager_secret_iam_member.task_hmac_reader :
+      binding.member
+    ])
+  }
+}
+
 output "remote_backend" {
   description = "Backend stanza values for later application stacks."
   value = {

@@ -32,3 +32,16 @@ run "tasks_identity_cannot_collapse_into_deployer" {
 
   expect_failures = [var.tasks_service_account_email]
 }
+
+run "secret_ids_must_match_bootstrap_contract" {
+  command = plan
+
+  variables {
+    secret_ids = {
+      api_key_pepper    = "same-secret"
+      task_signing_hmac = "same-secret"
+    }
+  }
+
+  expect_failures = [var.secret_ids]
+}

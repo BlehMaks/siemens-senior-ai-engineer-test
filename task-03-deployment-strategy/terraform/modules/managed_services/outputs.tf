@@ -16,14 +16,6 @@ output "firestore" {
   }
 }
 
-output "secret_containers" {
-  description = "Secret container IDs only. Secret payloads stay out of Terraform state."
-  value = {
-    for key, secret in google_secret_manager_secret.managed :
-    key => secret.secret_id
-  }
-}
-
 output "artifact_registry" {
   description = "Artifact Registry repository contract and least-privilege writer."
   value = {
@@ -42,22 +34,6 @@ output "logging" {
     location       = google_logging_project_bucket_config.application.location
     retention_days = google_logging_project_bucket_config.application.retention_days
     description    = google_logging_project_bucket_config.application.description
-  }
-}
-
-output "workload_access" {
-  description = "Resource-scoped secret access granted by this module. Firestore data access remains bootstrap-owned."
-  value = {
-    secret_accessors = {
-      api_key_pepper = sort([
-        for binding in google_secret_manager_secret_iam_member.api_pepper_reader :
-        binding.member
-      ])
-      task_signing_hmac = sort([
-        for binding in google_secret_manager_secret_iam_member.task_hmac_reader :
-        binding.member
-      ])
-    }
   }
 }
 

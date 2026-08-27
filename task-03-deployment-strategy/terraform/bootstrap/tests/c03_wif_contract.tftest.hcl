@@ -33,6 +33,32 @@ run "github_wif_plans_in_one_pass" {
   }
 
   assert {
+    condition = alltrue([
+      for secret in google_secret_manager_secret.managed :
+      secret.deletion_protection
+    ])
+    error_message = "Bootstrap-owned secret containers must survive routine application teardown."
+  }
+
+  assert {
+    condition = alltrue([
+      for permission in google_project_iam_custom_role.deployer_application.permissions :
+      !contains(["run.routes.invoke", "run.services.sshRoot"], permission)
+    ])
+    error_message = "The deployer custom role must exclude direct Cloud Run invocation and SSH access."
+  }
+
+  assert {
+    condition     = length(output.secret_accessors.api_key_pepper) == 2
+    error_message = "Only the API and worker identities may read the API-key pepper."
+  }
+
+  assert {
+    condition     = length(output.secret_accessors.task_signing_hmac) == 2
+    error_message = "Only the signing and verifying workloads may read the task HMAC."
+  }
+
+  assert {
     condition = google_project_iam_custom_role.tasks_policy.permissions == toset([
       "iam.serviceAccounts.get",
       "iam.serviceAccounts.getIamPolicy",
@@ -40,6 +66,22 @@ run "github_wif_plans_in_one_pass" {
     ])
     error_message = "The deployer may administer only the IAM policy needed for the tasks identity."
   }
+}
+
+run "invalid_or_colliding_secret_ids_fail_closed" {
+  command = plan
+
+  variables {
+    project_id        = "contract-assignment-dev"
+    state_bucket_name = "contract-assignment-dev-tf-state"
+    enable_github_wif = false
+    secret_ids = {
+      api_key_pepper    = "same-secret"
+      task_signing_hmac = "same-secret"
+    }
+  }
+
+  expect_failures = [var.secret_ids]
 }
 
 run "disabled_wif_needs_no_repository_id" {

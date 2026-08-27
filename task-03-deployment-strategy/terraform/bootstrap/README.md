@@ -1,22 +1,27 @@
 # C03 bootstrap Terraform
 
-This stack is the manual bootstrap boundary for Task 3. It creates only the
-state bucket, required APIs, workload identities, and optional GitHub workload
-identity federation. Application resources stay out of scope until C04 and C05.
+This stack is the manual bootstrap boundary for Task 3. It creates the state
+bucket, required APIs, workload identities, empty protected secret containers,
+their runtime access policies, and optional GitHub workload identity federation.
+Routine application resources stay out of scope until C04 and C05.
 
 ## What it guarantees
 
 - no service-account keys;
 - no primitive Owner, Editor, or Viewer roles;
 - one service account per workload;
-- reviewed predefined roles plus a small database/budget custom role for the
-  application deployer, with no project-IAM or Firestore entity permissions;
+- reviewed predefined roles plus a small database/budget/Cloud Run control-plane
+  custom role for the application deployer, with no project-IAM, Firestore entity,
+  direct Cloud Run invocation, or Cloud Run SSH permissions;
 - `serviceAccountUser` only on the three runtime identities it must attach,
   a three-permission custom policy role only on the Cloud Tasks caller identity,
   and `storage.objectAdmin` only on the Terraform state bucket;
 - project-level `datastore.user` bindings are bootstrap-owned and limited to the
   API and worker identities, so the application deployer cannot grant itself data
   access;
+- regional, deletion-protected secret containers and their resource-scoped runtime
+  access are bootstrap-owned; payload versions remain out of Terraform and the
+  application deployer has no Secret Manager administration or access role;
 - GitHub OIDC trust anchored to one immutable numeric repository ID and also
   narrowed to the expected owner/repository name and branch, with optional
   environment pinning;
@@ -31,6 +36,11 @@ identity federation. Application resources stay out of scope until C04 and C05.
   in the local Terraform cache.
 - Applying this stack still requires a human-held project-admin credential in a
   dedicated assessment project. That live plan is deferred to O13.
+- The deployer can update Cloud Run services and attach the three named runtime
+  identities. That is an intentional high-trust release capability: deployed code
+  runs with the selected identity. Repository-ID/ref/environment-bound WIF,
+  protected approvals, immutable image digests, and exact plan/apply binding are
+  therefore security boundaries, not optional process controls.
 - The deployer custom role uses the single-project budget permissions documented
   by Google Cloud. If the selected billing-account policy does not permit that
   flow, an administrator must grant the external billing permission before O13.

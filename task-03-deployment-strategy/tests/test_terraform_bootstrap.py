@@ -48,13 +48,14 @@ def test_provider_selections_are_locked_for_supported_platforms() -> None:
     assert lock.count("h1:") >= 4
 
 
-def test_bootstrap_enables_only_c03_foundational_services() -> None:
+def test_bootstrap_enables_only_foundational_and_protected_services() -> None:
     locals_tf = read(BOOTSTRAP / "locals.tf")
 
     for service in {
         "cloudresourcemanager.googleapis.com",
         "iam.googleapis.com",
         "iamcredentials.googleapis.com",
+        "secretmanager.googleapis.com",
         "serviceusage.googleapis.com",
         "sts.googleapis.com",
         "storage.googleapis.com",
@@ -140,13 +141,11 @@ def test_project_roles_match_reviewed_allowlist() -> None:
 
     expected_roles = {
         "roles/artifactregistry.admin",
-        "roles/cloudtasks.admin",
+        "roles/cloudtasks.queueAdmin",
         "roles/datastore.indexAdmin",
         "roles/datastore.user",
         "roles/logging.configWriter",
         "roles/monitoring.notificationChannelEditor",
-        "roles/run.admin",
-        "roles/secretmanager.admin",
         "roles/serviceusage.serviceUsageAdmin",
     }
 
@@ -174,6 +173,8 @@ def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
     assert "roles/datastore.admin" not in locals_tf
     assert "roles/storage.admin" not in locals_tf
     assert "roles/iam.workloadIdentityPoolAdmin" not in locals_tf
+    assert "roles/run.admin" not in locals_tf
+    assert "roles/secretmanager.admin" not in locals_tf
     assert "datastore.entities" not in locals_tf
 
     expected_custom_permissions = {
@@ -189,6 +190,13 @@ def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
         "datastore.operations.get",
         "datastore.operations.list",
         "resourcemanager.projects.get",
+        "run.operations.get",
+        "run.services.create",
+        "run.services.delete",
+        "run.services.get",
+        "run.services.getIamPolicy",
+        "run.services.setIamPolicy",
+        "run.services.update",
     }
     permission_block = locals_tf.split(
         "deployer_project_permissions = toset([", maxsplit=1
@@ -199,6 +207,31 @@ def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
         if line.strip().startswith('"') and "." in line
     }
     assert permission_lines == expected_custom_permissions
+    assert "run.routes.invoke" not in permission_lines
+    assert "run.services.sshRoot" not in permission_lines
+
+
+def test_secrets_and_runtime_access_stay_in_human_bootstrap() -> None:
+    main_tf = read(BOOTSTRAP / "main.tf")
+    outputs_tf = read(BOOTSTRAP / "outputs.tf")
+
+    assert 'resource "google_secret_manager_secret" "managed"' in main_tf
+    assert 'resource "google_secret_manager_secret_version"' not in main_tf
+    assert "secret_data" not in main_tf
+    assert "deletion_protection = true" in main_tf
+    assert "user_managed" in main_tf
+    assert (
+        'resource "google_secret_manager_secret_iam_member" "api_pepper_reader"'
+        in main_tf
+    )
+    assert (
+        'resource "google_secret_manager_secret_iam_member" "task_hmac_reader"'
+        in main_tf
+    )
+    assert main_tf.count('for_each = toset(["api", "worker"])') == 2
+    assert main_tf.count('role      = "roles/secretmanager.secretAccessor"') == 2
+    assert 'output "secret_containers"' in outputs_tf
+    assert 'output "secret_accessors"' in outputs_tf
 
 
 def test_deployer_can_attach_only_the_three_runtime_identities() -> None:
@@ -271,9 +304,10 @@ def test_example_tfvars_are_secret_free_and_realistic() -> None:
     assert "example-assignment-dev" in example
     assert "siemens-senior-ai-engineer-test" in example
     assert 'github_repository_id = "123456789"' in example
-    assert "secret" not in example.lower()
     assert "token" not in example.lower()
     assert "private_key" not in example.lower()
     assert "client_secret" not in example.lower()
+    assert 'api_key_pepper    = "sai-dev-api-key-pepper"' in example
+    assert 'task_signing_hmac = "sai-dev-task-signing-hmac"' in example
     assert 'github_branch        = "master"' in example
     assert 'github_environment   = "gcp-dev"' in example

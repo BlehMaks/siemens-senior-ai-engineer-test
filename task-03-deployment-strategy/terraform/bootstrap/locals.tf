@@ -3,6 +3,7 @@ locals {
     "cloudresourcemanager.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
+    "secretmanager.googleapis.com",
     "serviceusage.googleapis.com",
     "sts.googleapis.com",
     "storage.googleapis.com",
@@ -36,16 +37,21 @@ locals {
     "datastore.operations.get",
     "datastore.operations.list",
     "resourcemanager.projects.get",
+    "run.operations.get",
+    "run.services.create",
+    "run.services.delete",
+    "run.services.get",
+    "run.services.getIamPolicy",
+    "run.services.setIamPolicy",
+    "run.services.update",
   ])
 
   deployer_project_roles = toset([
     "roles/artifactregistry.admin",
-    "roles/cloudtasks.admin",
+    "roles/cloudtasks.queueAdmin",
     "roles/datastore.indexAdmin",
     "roles/logging.configWriter",
     "roles/monitoring.notificationChannelEditor",
-    "roles/run.admin",
-    "roles/secretmanager.admin",
     "roles/serviceusage.serviceUsageAdmin",
   ])
 

@@ -39,8 +39,8 @@ module "run_services" {
   api_allow_unauthenticated    = module.ingress_policy.policy.api_allow_unauthenticated
   worker_ingress               = module.ingress_policy.policy.worker_ingress
   firestore_database_name      = module.managed_services.firestore.name
-  api_key_pepper_secret_id     = module.managed_services.secret_containers.api_key_pepper
-  task_signing_hmac_secret_id  = module.managed_services.secret_containers.task_signing_hmac
+  api_key_pepper_secret_id     = var.secret_ids.api_key_pepper
+  task_signing_hmac_secret_id  = var.secret_ids.task_signing_hmac
 
   depends_on = [module.managed_services]
 }
@@ -49,11 +49,9 @@ output "managed_services" {
   description = "Thin wrapper around the reusable C04 managed-services module."
   value = {
     firestore         = module.managed_services.firestore
-    secret_containers = module.managed_services.secret_containers
     artifact_registry = module.managed_services.artifact_registry
     logging           = module.managed_services.logging
     budget            = module.managed_services.budget
-    workload_access   = module.managed_services.workload_access
   }
 }
 

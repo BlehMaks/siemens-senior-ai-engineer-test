@@ -37,6 +37,13 @@ This Terraform slice defines the infrastructure guardrails, not the final Task 2
 worker handler. Until `C05B/C05C` land, the reserved queue path is a contract
 only, not a fully wired application endpoint.
 
+The application deployer can replace Cloud Run code and attach only the three
+named runtime identities. This necessarily lets a successful deployment execute
+with the selected runtime permissions even though the deployer has no direct
+invoke, SSH, Secret Manager administration, or Firestore entity permission.
+The exact-repository WIF condition, protected approvals, immutable digest, and
+reviewed binary plan are therefore part of the security boundary.
+
 The ingress and default-URL decisions follow the official
 [Cloud Run ingress contract](https://cloud.google.com/run/docs/securing/ingress),
 which lists same-project Cloud Tasks as internal traffic and warns that disabling

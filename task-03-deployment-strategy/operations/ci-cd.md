@@ -45,6 +45,14 @@ workflow accepts a service-account key or reads a GitHub secret.
    payloads. Deployment fails before Cloud Run creation if either container has
    no enabled version.
 
+The deployer deliberately holds only Cloud Run service lifecycle and IAM-policy
+permissions required by the reviewed Terraform graph; it has no route-invoke or
+SSH permission. Because deploying code under a runtime service account is itself
+a privileged act, compromise of the approved deploy job can still exercise that
+runtime's permissions through replacement code. The two protected approvals,
+exact WIF repository/ref/environment binding, immutable digest, and binary-plan
+verification are the controls for that release authority.
+
 The budget remains disabled unless billing account, project number, positive
 amount, and at least one notification address are all present. A deployer also
 needs `roles/billing.costsManager` on that billing account when the budget is

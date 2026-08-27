@@ -23,6 +23,25 @@ resource "google_storage_bucket" "terraform_state" {
   depends_on = [google_project_service.required]
 }
 
+resource "google_secret_manager_secret" "managed" {
+  for_each = var.secret_ids
+
+  project             = var.project_id
+  secret_id           = each.value
+  labels              = local.common_labels
+  deletion_protection = true
+
+  replication {
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
+  }
+
+  depends_on = [google_project_service.required]
+}
+
 resource "google_iam_workload_identity_pool" "github" {
   count = var.enable_github_wif ? 1 : 0
 
@@ -104,11 +123,29 @@ module "deployer_identity" {
   depends_on = [google_project_service.required]
 }
 
+resource "google_secret_manager_secret_iam_member" "api_pepper_reader" {
+  for_each = toset(["api", "worker"])
+
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.managed["api_key_pepper"].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${module.identity[each.value].email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "task_hmac_reader" {
+  for_each = toset(["api", "worker"])
+
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.managed["task_signing_hmac"].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${module.identity[each.value].email}"
+}
+
 resource "google_project_iam_custom_role" "deployer_application" {
   project     = var.project_id
   role_id     = "${replace(var.system_code, "-", "_")}_${replace(var.environment, "-", "_")}_terraform_deployer"
   title       = "Assessment Terraform deployer"
-  description = "Database lifecycle and project-budget permissions missing from safe predefined roles."
+  description = "Database, budget, and Cloud Run control-plane permissions missing from safe predefined roles."
   permissions = local.deployer_project_permissions
   stage       = "GA"
 

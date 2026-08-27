@@ -5,7 +5,6 @@ locals {
     "firestore.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
-    "secretmanager.googleapis.com",
   ])
 
   common_labels = merge(
@@ -16,13 +15,6 @@ locals {
       system      = var.system_code
     },
   )
-
-  api_member    = "serviceAccount:${var.api_service_account_email}"
-  worker_member = "serviceAccount:${var.worker_service_account_email}"
-  workload_members = toset([
-    local.api_member,
-    local.worker_member,
-  ])
 
   budget_enabled = (
     var.billing_account_id != "" &&
@@ -54,46 +46,6 @@ resource "google_firestore_database" "assessment" {
   point_in_time_recovery_enablement = "POINT_IN_TIME_RECOVERY_ENABLED"
 
   depends_on = [google_project_service.required]
-}
-
-resource "google_secret_manager_secret" "managed" {
-  for_each = var.secret_ids
-
-  project             = var.project_id
-  secret_id           = each.value
-  labels              = local.common_labels
-  deletion_protection = true
-
-  replication {
-    user_managed {
-      replicas {
-        location = var.region
-      }
-    }
-  }
-
-  depends_on = [google_project_service.required]
-}
-
-resource "google_secret_manager_secret_iam_member" "api_pepper_reader" {
-  for_each = toset([
-    local.api_member,
-    local.worker_member,
-  ])
-
-  project   = var.project_id
-  secret_id = google_secret_manager_secret.managed["api_key_pepper"].secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = each.value
-}
-
-resource "google_secret_manager_secret_iam_member" "task_hmac_reader" {
-  for_each = local.workload_members
-
-  project   = var.project_id
-  secret_id = google_secret_manager_secret.managed["task_signing_hmac"].secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = each.value
 }
 
 resource "google_artifact_registry_repository" "containers" {

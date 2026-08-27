@@ -3,6 +3,10 @@ region             = "europe-west3"
 environment        = "dev"
 system_code        = "sai"
 state_bucket_name  = "example-assignment-dev-tf-state"
+secret_ids = {
+  api_key_pepper    = "sai-dev-api-key-pepper"
+  task_signing_hmac = "sai-dev-task-signing-hmac"
+}
 enable_github_wif    = true
 github_repository    = "example-org/siemens-senior-ai-engineer-test"
 github_repository_id = "123456789"

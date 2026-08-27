@@ -104,29 +104,6 @@ variable "firestore_deletion_policy" {
   }
 }
 
-variable "secret_ids" {
-  description = "Secret container IDs to create. Values remain empty until set outside Terraform."
-  type = object({
-    api_key_pepper    = string
-    task_signing_hmac = string
-  })
-  default = {
-    api_key_pepper    = "sai-dev-api-key-pepper"
-    task_signing_hmac = "sai-dev-task-signing-hmac"
-  }
-
-  validation {
-    condition = (
-      length(toset([var.secret_ids.api_key_pepper, var.secret_ids.task_signing_hmac])) == 2 &&
-      alltrue([
-        for secret_id in [var.secret_ids.api_key_pepper, var.secret_ids.task_signing_hmac] :
-        can(regex("^[a-z][a-z0-9-]{2,254}$", secret_id))
-      ])
-    )
-    error_message = "Secret IDs must be unique and satisfy Secret Manager naming rules."
-  }
-}
-
 variable "artifact_repository_id" {
   description = "Artifact Registry Docker repository ID for reviewed images."
   type        = string

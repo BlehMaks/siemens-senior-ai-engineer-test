@@ -1,9 +1,10 @@
 # C04 managed services: dev environment
 
 This stack is the first application-facing Terraform slice after bootstrap. It
-creates only the low-cost managed resources that the assessment cell needs:
-Firestore, Secret Manager containers, Artifact Registry, one dedicated Logging
-bucket, an optional Cloud Billing budget, and the bounded C05A execution plane.
+creates only the low-cost application resources that the assessment cell needs:
+Firestore, Artifact Registry, one dedicated Logging bucket, an optional Cloud
+Billing budget, and the bounded C05A execution plane. Secret containers and their
+runtime access policies remain in the human-held bootstrap stack.
 
 ## What stays out of Terraform state
 
@@ -11,9 +12,9 @@ bucket, an optional Cloud Billing budget, and the bounded C05A execution plane.
 - service-account keys;
 - any live plan or apply steps.
 
-The stack accepts bootstrap service-account emails as plain inputs so validation
-remains credential-free. Later reviewed automation can feed these values from
-the C03 outputs without changing the resource contract.
+The stack accepts bootstrap service-account emails and secret IDs as plain inputs
+so validation remains credential-free. Later reviewed automation can feed these
+values from the C03 outputs without changing the resource contract.
 
 The empty GCS backend block is intentional: local validation uses
 `terraform init -backend=false`, while protected automation supplies the bucket
@@ -25,8 +26,8 @@ is committed.
 - one explicit region: `europe-west3`;
 - Firestore delete protection enabled and Terraform destroy set to `ABANDON`;
 - Artifact Registry uses immutable tags;
-- bootstrap grants `roles/datastore.user` only to the API and worker identities;
-  this stack grants them resource-scoped `roles/secretmanager.secretAccessor`;
+- bootstrap grants `roles/datastore.user` and resource-scoped
+  `roles/secretmanager.secretAccessor` only to the API and worker identities;
 - the deployer gets repository-scoped `roles/artifactregistry.writer`;
 - secret containers and the log bucket stay in the configured region;
 - the log bucket keeps 30 days of redacted application logs;

@@ -95,8 +95,8 @@ def test_dev_environment_wires_c04_outputs_into_c05a() -> None:
     assert "depends_on = [module.managed_services]" in source
     assert "module.managed_services.artifact_registry.location" in source
     assert "module.managed_services.artifact_registry.repository_id" in source
-    assert "module.managed_services.secret_containers.api_key_pepper" in source
-    assert "module.managed_services.secret_containers.task_signing_hmac" in source
+    assert "var.secret_ids.api_key_pepper" in source
+    assert "var.secret_ids.task_signing_hmac" in source
     assert "module.managed_services.firestore.name" in source
 
 

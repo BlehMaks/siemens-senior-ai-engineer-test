@@ -51,6 +51,29 @@ variable "state_bucket_name" {
   }
 }
 
+variable "secret_ids" {
+  description = "Bootstrap-owned Secret Manager container IDs. Payload versions are added out of band."
+  type = object({
+    api_key_pepper    = string
+    task_signing_hmac = string
+  })
+  default = {
+    api_key_pepper    = "sai-dev-api-key-pepper"
+    task_signing_hmac = "sai-dev-task-signing-hmac"
+  }
+
+  validation {
+    condition = (
+      length(toset([var.secret_ids.api_key_pepper, var.secret_ids.task_signing_hmac])) == 2 &&
+      alltrue([
+        for secret_id in [var.secret_ids.api_key_pepper, var.secret_ids.task_signing_hmac] :
+        can(regex("^[a-z][a-z0-9-]{2,254}$", secret_id))
+      ])
+    )
+    error_message = "Secret IDs must be unique and satisfy Secret Manager naming rules."
+  }
+}
+
 variable "labels" {
   description = "Small set of lowercase labels applied to bootstrap resources."
   type        = map(string)

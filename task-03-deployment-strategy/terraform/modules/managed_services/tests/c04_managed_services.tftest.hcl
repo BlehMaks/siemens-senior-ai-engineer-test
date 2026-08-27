@@ -39,14 +39,6 @@ run "default_contract_is_low_cost_and_container_only" {
   }
 
   assert {
-    condition = alltrue([
-      for secret in google_secret_manager_secret.managed :
-      secret.deletion_protection
-    ])
-    error_message = "Secret containers must survive routine Terraform destroy."
-  }
-
-  assert {
     condition     = output.artifact_registry.immutable_tags
     error_message = "Artifact Registry must pin immutable tags."
   }
@@ -64,22 +56,6 @@ run "default_contract_is_low_cost_and_container_only" {
   assert {
     condition     = output.logging.location == "europe-west3"
     error_message = "Application logs must stay in the configured region."
-  }
-
-  assert {
-    condition = toset(output.workload_access.secret_accessors.api_key_pepper) == toset([
-      "serviceAccount:sai-dev-api@contract-assignment-dev.iam.gserviceaccount.com",
-      "serviceAccount:sai-dev-worker@contract-assignment-dev.iam.gserviceaccount.com",
-    ])
-    error_message = "Only the API and worker identities may read the API-key pepper."
-  }
-
-  assert {
-    condition = toset(output.workload_access.secret_accessors.task_signing_hmac) == toset([
-      "serviceAccount:sai-dev-api@contract-assignment-dev.iam.gserviceaccount.com",
-      "serviceAccount:sai-dev-worker@contract-assignment-dev.iam.gserviceaccount.com",
-    ])
-    error_message = "Only the signing and verifying workloads may read the task HMAC."
   }
 
   assert {
@@ -135,23 +111,14 @@ run "billing_coordinates_without_recipient_mean_no_budget_resource" {
   }
 }
 
-run "custom_secret_ids_and_email_channels_are_accepted" {
+run "custom_email_channels_are_accepted" {
   command = plan
 
   variables {
     billing_account_id = "ABC123-DEF456-GHI789"
-    secret_ids = {
-      api_key_pepper    = "contract-dev-api-pepper"
-      task_signing_hmac = "contract-dev-task-hmac"
-    }
     budget_notification_emails = [
       "cloud-budgets@example.com",
     ]
-  }
-
-  assert {
-    condition     = output.secret_containers.api_key_pepper == "contract-dev-api-pepper"
-    error_message = "Secret container IDs should remain caller-controlled."
   }
 
   assert {
@@ -211,10 +178,6 @@ run "invalid_policy_inputs_fail_closed" {
     labels = {
       Owner = "Platform Team"
     }
-    secret_ids = {
-      api_key_pepper    = "INVALID_SECRET"
-      task_signing_hmac = "ok-secret-id"
-    }
     budget_alert_thresholds = [0.9, 0.5]
     budget_notification_emails = [
       "not-an-email",
@@ -223,7 +186,6 @@ run "invalid_policy_inputs_fail_closed" {
 
   expect_failures = [
     var.labels,
-    var.secret_ids,
     var.budget_alert_thresholds,
     var.budget_notification_emails,
   ]
@@ -267,21 +229,16 @@ run "collapsed_workload_identities_fail_closed" {
   expect_failures = [var.deployer_service_account_email]
 }
 
-run "resource_collisions_and_label_overflow_fail_closed" {
+run "label_overflow_fails_closed" {
   command = plan
 
   variables {
     labels = {
       for index in range(62) : "label_${index}" => "value"
     }
-    secret_ids = {
-      api_key_pepper    = "same-secret"
-      task_signing_hmac = "same-secret"
-    }
   }
 
   expect_failures = [
     var.labels,
-    var.secret_ids,
   ]
 }
