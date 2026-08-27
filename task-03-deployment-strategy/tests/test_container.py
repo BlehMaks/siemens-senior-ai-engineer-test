@@ -50,6 +50,7 @@ def test_dockerfile_is_locked_minimal_and_runtime_hardened() -> None:
     assert "COPY --from=builder /opt/venv /opt/venv" in dockerfile
     assert "--chown" not in dockerfile
     assert "USER 65532:65532" in dockerfile
+    assert dockerfile.index("WORKDIR /app") < dockerfile.index("USER 65532:65532")
     assert "STOPSIGNAL SIGTERM" in dockerfile
     assert "HEALTHCHECK" in dockerfile
     assert "curl" not in dockerfile
