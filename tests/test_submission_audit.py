@@ -200,3 +200,70 @@ def test_terraform_interpolation_is_not_a_secret_literal(repository: Path) -> No
     git(repository, "add", target.name)
 
     assert audit_repository(repository) == []
+
+
+@pytest.mark.parametrize(
+    ("path", "content"),
+    [
+        (
+            "config.yaml",
+            seed("credentials:\n  - tok", "en: abcdefghijklmnop\n").decode(),
+        ),
+        ("settings.toml", seed("service.tok", 'en = "abcdefghijklmnop"\n').decode()),
+        ("config.json", seed('{"clientSec', 'ret": "abcdefghijklmnop"}\n').decode()),
+        ("config.json", seed('{"tok', 'en": "abc\\"defghijklmnop"}\n').decode()),
+    ],
+)
+def test_structured_credential_literals_fail(
+    repository: Path, path: str, content: str
+) -> None:
+    target = repository / path
+    target.write_text(content, encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert any("credential assignment" in item for item in audit_repository(repository))
+
+
+@pytest.mark.parametrize(
+    ("path", "content"),
+    [
+        ("settings.py", seed("tok", 'en = os.environ["SERVICE_TOKEN"]\n').decode()),
+        (
+            "settings.py",
+            seed(
+                "sec", 'ret = f"projects/{project_id}/secrets/{secret_id}"\n'
+            ).decode(),
+        ),
+        (
+            "main.tf",
+            seed(
+                "sec", 'ret = "projects/${var.project_id}/secrets/${var.secret_id}"\n'
+            ).decode(),
+        ),
+        ("runtime.sh", seed("tok", "en=`gcloud auth print-access-token`\n").decode()),
+    ],
+)
+def test_composite_symbolic_credential_values_pass(
+    repository: Path, path: str, content: str
+) -> None:
+    target = repository / path
+    target.write_text(content, encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert audit_repository(repository) == []
+
+
+def test_later_credential_on_same_line_is_not_hidden_by_symbolic_value(
+    repository: Path,
+) -> None:
+    target = repository / "config.json"
+    target.write_text(
+        seed(
+            '{"tok',
+            'en": "${RUNTIME_TOKEN}", "clientSecret": "abcdefghijklmnop"}\n',
+        ).decode(),
+        encoding="utf-8",
+    )
+    git(repository, "add", target.name)
+
+    assert any("credential assignment" in item for item in audit_repository(repository))
