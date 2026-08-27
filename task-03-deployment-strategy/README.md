@@ -12,6 +12,8 @@ enterprise boundaries reviewable.
 - [C01 cloud decision and target architecture](architecture/strategy.md) is the
   canonical provider comparison, low-cost assessment design, and Siemens-wide
   target.
+- [C01B capacity model and local proof](architecture/capacity-model.md) provides the
+  executable fake-provider load scenario and machine-readable sample result.
 - [ADR-0001](architecture/adr/0001-gcp-reference-profiles.md) records the conditional
   GCP decision and its reversal triggers.
 - [C03 bootstrap Terraform](terraform/bootstrap/README.md) adds the executable
@@ -40,7 +42,7 @@ SLO/DR/FinOps/governance gates.
 | Container | Pending C02 | Locked multi-architecture build, non-root/read-only smoke, SBOM, scans |
 | Identity and Terraform | C03 foundation shipped; C04-C07 pending | WIF/IAM, managed services, static policy, plan, rollback, teardown, budget checks |
 | Enterprise migration | Pending C01A | Residency, SLO/RTO/RPO, IAM, DR, FinOps, and approval gates |
-| Capacity proof | Pending C01B | Repeatable fake-provider load scenario and machine-readable measurements |
+| Capacity proof | C01B local proof shipped | Repeatable fake-provider load scenario and machine-readable measurements |
 
 ## Verification
 

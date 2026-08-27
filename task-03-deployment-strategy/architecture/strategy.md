@@ -249,7 +249,7 @@ C01 intentionally does not create cloud resources or claim production capacity.
 | C02 | Multi-architecture non-root/read-only container, health/signal behavior, SBOM, vulnerability and secret scans |
 | C03-C07 | Bootstrap, WIF/IAM, Terraform names, assessment services, budgets, static policies, CI/CD, rollback, teardown, and optional under-budget smoke |
 | C01A | Pilot-to-global migration, SLO/RTO/RPO negotiation, tenant/residency matrix, IAM audit, DR/game days, FinOps worksheet, and enterprise approval gates |
-| C01B | Fixed local fake-provider envelopes and measurements for submit/status/SSE/cancel, backpressure, idempotency, recovery, queue age, latency, and resource use; 100 runs/s with 5,000-15,000 in-flight remains a design stress case until measured |
+| C01B | [Local proof shipped](capacity-model.md): fixed fake-provider envelopes and measurements for submit/status/SSE/cancel, backpressure, idempotency, model-quota degradation, recovery, queue age, latency, and resource use; 100 runs/s with 5,000-15,000 in-flight remains an unmeasured design stress case |
 
 Apigee, Spanner, AlloyDB, GKE, Vertex AI, Cloud Run GPU, multi-cell routing, corporate
 IdP integration, VPC Service Controls, and enterprise SIEM integration are target
