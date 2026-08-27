@@ -9,12 +9,16 @@ bucket, an optional Cloud Billing budget, and the bounded C05A execution plane.
 
 - secret payloads and versions;
 - service-account keys;
-- remote backend wiring to a live state bucket;
 - any live plan or apply steps.
 
 The stack accepts bootstrap service-account emails as plain inputs so validation
 remains credential-free. Later reviewed automation can feed these values from
 the C03 outputs without changing the resource contract.
+
+The empty GCS backend block is intentional: local validation uses
+`terraform init -backend=false`, while protected automation supplies the bucket
+and `assessment/dev` prefix created by C03. No backend coordinate or credential
+is committed.
 
 ## Default posture
 

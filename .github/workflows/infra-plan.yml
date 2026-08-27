@@ -1,0 +1,122 @@
+name: Infrastructure plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_digest:
+        description: Reviewed Artifact Registry sha256 digest
+        required: true
+        type: string
+      ingress_mode:
+        description: Ingress posture to review
+        required: true
+        default: baseline
+        type: choice
+        options:
+          - baseline
+          - hardened
+
+permissions: {}
+
+concurrency:
+  group: gcp-dev-infra-plan
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Protected GCP development plan
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: gcp-dev
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_STATE_BUCKET: ${{ vars.GCP_TERRAFORM_STATE_BUCKET }}
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+      TF_VAR_project_number: ${{ vars.GCP_PROJECT_NUMBER }}
+      TF_VAR_region: ${{ vars.GCP_REGION }}
+      TF_VAR_api_service_account_email: ${{ vars.GCP_API_SERVICE_ACCOUNT }}
+      TF_VAR_worker_service_account_email: ${{ vars.GCP_WORKER_SERVICE_ACCOUNT }}
+      TF_VAR_tasks_service_account_email: ${{ vars.GCP_TASKS_SERVICE_ACCOUNT }}
+      TF_VAR_deployer_service_account_email: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+      TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+      BUDGET_NOTIFICATION_EMAILS: ${{ vars.GCP_BUDGET_NOTIFICATION_EMAILS }}
+      TF_VAR_image_digest: ${{ inputs.image_digest }}
+      TF_VAR_ingress_mode: ${{ inputs.ingress_mode }}
+    steps:
+      - name: Check out protected master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate immutable inputs
+        shell: bash
+        run: |
+          if [[ ! "$TF_VAR_image_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "image_digest must be a sha256 OCI digest" >&2
+            exit 1
+          fi
+
+      - name: Validate optional budget recipients
+        shell: bash
+        run: |
+          if [[ -n "$BUDGET_NOTIFICATION_EMAILS" ]]; then
+            recipients=$(jq -cer \
+              'if type == "array" and all(.[]; type == "string") then . else error("expected a JSON string array") end' \
+              <<< "$BUDGET_NOTIFICATION_EMAILS")
+            echo "TF_VAR_budget_notification_emails=$recipients" >> "$GITHUB_ENV"
+          fi
+          if [[ -z "$TF_STATE_BUCKET" ]]; then
+            echo "GCP_TERRAFORM_STATE_BUCKET is required" >&2
+            exit 1
+          fi
+
+      - name: Obtain a short-lived GCP credential
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Install pinned Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Initialize the reviewed remote state
+        run: >-
+          terraform -chdir=task-03-deployment-strategy/terraform/environments/dev init
+          -input=false
+          -backend-config=bucket=$TF_STATE_BUCKET
+          -backend-config=prefix=assessment/dev
+
+      - name: Produce a non-interactive plan
+        run: >-
+          terraform -chdir=task-03-deployment-strategy/terraform/environments/dev plan
+          -input=false
+          -lock-timeout=60s
+          -out=$RUNNER_TEMP/dev.tfplan
+
+      - name: Render the review copy
+        run: >-
+          terraform -chdir=task-03-deployment-strategy/terraform/environments/dev show
+          -no-color
+          $RUNNER_TEMP/dev.tfplan
+          > $RUNNER_TEMP/dev-plan.txt
+
+      - name: Preserve the short-lived review evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gcp-dev-plan-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/dev.tfplan
+            ${{ runner.temp }}/dev-plan.txt
+          if-no-files-found: error
+          retention-days: 1
