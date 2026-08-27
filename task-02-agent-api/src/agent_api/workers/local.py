@@ -321,8 +321,15 @@ class LocalWorker:
         if write.disposition is WriteDisposition.APPLIED:
             await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
             return
-        if write.disposition is WriteDisposition.CANCELLATION_REQUESTED:
-            assert write.run is not None
+        if (
+            write.run is not None
+            and write.run.cancellation_requested_at is not None
+            and _owns(
+                write.run,
+                worker_id=self._worker_id,
+                lease_id=_lease_id(run),
+            )
+        ):
             await self._finish_cancellation(item, write.run)
             return
         if write.run is not None and write.run.state in TERMINAL_RUN_STATES:

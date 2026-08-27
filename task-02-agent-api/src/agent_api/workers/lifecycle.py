@@ -35,23 +35,47 @@ async def worker_lifespan(
         yield
         return
 
+    owner = asyncio.current_task()
+    if owner is None:
+        raise RuntimeError("worker lifespan requires an owning task")
+    stopping = False
+    worker_ended = False
+
+    def notify_owner(_: asyncio.Task[None]) -> None:
+        nonlocal worker_ended
+        if not stopping:
+            worker_ended = True
+            owner.cancel()
+
     task = asyncio.create_task(worker.run_forever())
+    task.add_done_callback(notify_owner)
     try:
-        yield
-    finally:
-        worker.stop()
         try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=shutdown_seconds)
-        except TimeoutError:
-            # LocalWorker propagates this cancellation after aborting its executor.
-            # Durable visibility and the expiring lease then permit restart recovery.
+            yield
+        except asyncio.CancelledError:
+            if not worker_ended:
+                raise
+    finally:
+        unexpected_exit = worker_ended or task.done()
+        stopping = True
+        worker.stop()
+        deadline = asyncio.get_running_loop().time() + shutdown_seconds
+        done, _ = await asyncio.wait(
+            {task},
+            timeout=max(0.0, deadline - asyncio.get_running_loop().time()),
+        )
+        if task not in done:
+            # LocalWorker aborts its executor and discards late results outside the
+            # repository boundary; visibility and lease expiry permit recovery.
             task.cancel()
-            done, _ = await asyncio.wait({task}, timeout=shutdown_seconds)
-            if task not in done:
-                task.add_done_callback(_consume_task_result)
-            else:
-                with contextlib.suppress(asyncio.CancelledError):
-                    task.result()
+            task.add_done_callback(_consume_task_result)
+            await asyncio.sleep(0)
+            if not task.done():
+                await asyncio.sleep(0)
+        else:
+            task.result()
+            if unexpected_exit:
+                raise RuntimeError("managed worker exited unexpectedly")
 
 
 def _consume_task_result(task: asyncio.Task[None]) -> None:

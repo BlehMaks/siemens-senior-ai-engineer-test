@@ -87,6 +87,19 @@ class StubbornWorker:
 
 
 @dataclass(slots=True)
+class CrashingWorker:
+    error: BaseException | None = None
+
+    async def run_forever(self, *, poll_interval: float = 1.0) -> None:
+        del poll_interval
+        if self.error is not None:
+            raise self.error
+
+    def stop(self) -> None:
+        pass
+
+
+@dataclass(slots=True)
 class BlockingExecutor:
     started: asyncio.Event = field(default_factory=asyncio.Event)
     cancelled: asyncio.Event = field(default_factory=asyncio.Event)
@@ -168,15 +181,35 @@ async def test_worker_lifespan_gracefully_drains_after_stop() -> None:
 async def test_worker_lifespan_remains_bounded_if_cancellation_is_suppressed() -> None:
     worker = StubbornWorker()
     loop = asyncio.get_running_loop()
-    started_at = loop.time()
+    started_at: float | None = None
 
-    async with worker_lifespan(worker, shutdown_seconds=0.01):
+    async with worker_lifespan(worker, shutdown_seconds=0.05):
         await asyncio.wait_for(worker.started.wait(), timeout=1)
+        started_at = loop.time()
 
-    assert loop.time() - started_at < 0.2
+    assert started_at is not None
+    assert loop.time() - started_at < 0.09
     assert worker.ignored_cancellation.is_set()
     worker.release.set()
     await asyncio.wait_for(worker.finished.wait(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_worker_lifespan_propagates_worker_crash_to_owner() -> None:
+    error = RuntimeError("simulated worker crash")
+
+    with pytest.raises(RuntimeError) as caught:
+        async with worker_lifespan(CrashingWorker(error), shutdown_seconds=0.1):
+            await asyncio.Event().wait()
+
+    assert caught.value is error
+
+
+@pytest.mark.asyncio
+async def test_worker_lifespan_rejects_unexpected_normal_worker_exit() -> None:
+    with pytest.raises(RuntimeError, match="managed worker exited unexpectedly"):
+        async with worker_lifespan(CrashingWorker(), shutdown_seconds=0.1):
+            await asyncio.Event().wait()
 
 
 @pytest.mark.parametrize("timeout", [0.0, -1.0, float("inf"), float("nan"), True])

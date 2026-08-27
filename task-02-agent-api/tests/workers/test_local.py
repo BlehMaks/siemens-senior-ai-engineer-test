@@ -297,6 +297,22 @@ class FakeRunRepository:
             )
 
 
+class CancelBeforeCompletionRepository(FakeRunRepository):
+    def __init__(self, *runs: RunRecord) -> None:
+        super().__init__(*runs)
+        self._inject_cancellation = True
+
+    async def compare_and_set(self, update: StateUpdate) -> StateUpdateResult:
+        if self._inject_cancellation and update.next_state is RunState.COMPLETED:
+            self._inject_cancellation = False
+            await self.request_cancellation(
+                tenant_id=update.tenant_id,
+                run_id=update.run_id,
+                at=update.at,
+            )
+        return await super().compare_and_set(update)
+
+
 @dataclass(slots=True)
 class ScriptedExecutor:
     result: RunResult | None = None
@@ -536,6 +552,28 @@ async def test_persisted_cancellation_wins_running_execution_race() -> None:
         at=NOW,
     )
     await processing
+
+    stored = await repository.get(tenant_id="tenant-one", run_id="run-one")
+    assert stored is not None
+    assert stored.state is RunState.CANCELLED
+    assert stored.cancellation_requested_at == NOW
+    assert queue.cancel_calls == [("tenant-one", "run-one")]
+
+
+@pytest.mark.asyncio
+async def test_completion_conflict_terminalizes_same_lease_cancellation() -> None:
+    repository = CancelBeforeCompletionRepository(queued_run())
+    queue = FakeQueue(work_item())
+    worker = LocalWorker(
+        repository=cast(RunRepository, repository),
+        queue=queue,
+        executor=ScriptedExecutor(result=completed_result()),
+        worker_id="worker-one",
+        clock=MutableClock(NOW),
+        lease_id_factory=lambda: "lease-one",
+    )
+
+    await worker.process_one()
 
     stored = await repository.get(tenant_id="tenant-one", run_id="run-one")
     assert stored is not None
