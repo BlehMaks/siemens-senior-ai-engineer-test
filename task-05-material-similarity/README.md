@@ -68,3 +68,44 @@ uv run python -m material_similarity.evaluation \
   "input/IT DA AI Tasks/Fuse.csv" \
   task-05-material-similarity/evals/relevance.yaml
 ```
+
+## Output contract
+
+The CLI emits one object for `--part-id`, or an array containing one object per
+catalog row when `--part-id` is omitted. The schema is deliberately small:
+
+| Field | Type and invariant |
+|---|---|
+| `part_id` | Non-blank source identifier. |
+| `status` | `ok`, `insufficient_description`, or `insufficient_candidates`. |
+| `alternatives` | Exactly five entries for `ok`, none for blank text, otherwise zero to four evidence-backed entries. |
+| `alternatives[].part_id` | Unique candidate identifier, never the query identifier. |
+| `alternatives[].score` | Weighted cosine score in `[0, 1]`; descending, then `part_id` ascending for ties. |
+| `alternatives[].word_score` | Word-channel cosine contribution in `[0, 1]`. |
+| `alternatives[].character_score` | Character-channel cosine contribution in `[0, 1]`. |
+| `alternatives[].shared_tokens` | Up to five highest-IDF shared word features. |
+| `alternatives[].shared_character_ngrams` | Up to five highest-IDF shared character features. |
+
+Scores describe text similarity, not electrical compatibility or approval to use a
+part as a replacement. Consumers must inspect the evidence and status rather than
+applying an arbitrary score cutoff.
+
+## Deliverables and verification
+
+- `reports/data-analysis.md` records the reproducible profile and data-quality
+  remedies.
+- `reports/retrieval-evaluation.md` records reviewed metrics, successes, failures,
+  and limitations; `reports/relevance-metrics.json` is its reproducible machine
+  output.
+- `reports/hybrid-extension-design.md` defines the minimal missing-aware structured
+  extension without changing the assignment's text-only result semantics.
+
+From the repository root, the complete Task 5 gate is:
+
+```bash
+SIEMENS_FUSE_CSV="input/IT DA AI Tasks/Fuse.csv" \
+  uv run pytest -q task-05-material-similarity/tests
+uv run ruff format --check task-05-material-similarity
+uv run ruff check task-05-material-similarity
+uv run mypy task-05-material-similarity/src
+```
