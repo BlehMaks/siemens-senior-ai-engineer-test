@@ -143,8 +143,11 @@ class RunReflection(StrictModel):
         if contains_sensitive_memory_text(self.requested_outcome):
             raise ValueError("requested outcome contains sensitive material")
         if self.outcome is TerminalState.COMPLETED:
-            if not self.completion_evidence or self.unresolved_items:
+            evidence_required = EventType.EVIDENCE_READY in self.actions
+            if evidence_required != bool(self.completion_evidence):
                 raise ValueError("completed reflections require resolved evidence")
+            if self.unresolved_items:
+                raise ValueError("completed reflections cannot be unresolved")
         elif self.completion_evidence:
             raise ValueError(
                 "non-completed reflections cannot claim completion evidence"

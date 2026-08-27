@@ -143,6 +143,11 @@ PLANNING_SYSTEM_PROMPT = (
     "Return only the structured response."
 )
 
+_FIXED_CLARIFICATION_FOCUS = "Ask the user to clarify the original request."
+_SAFE_INJECTED_CLARIFICATION_FOCUSES = frozenset(
+    {_FIXED_CLARIFICATION_FOCUS, "Clarify the original request."}
+)
+
 
 class TaskCategory(StrEnum):
     DIRECT_REPLY = "direct_reply"
@@ -277,13 +282,14 @@ class QueryPlanner:
             raise ProviderResponseError(
                 "planner output violated the public planning contract"
             ) from exc
-        validate_planning_decision(request=request, decision=decision)
         if decision.task_category is TaskCategory.CLARIFICATION:
+            _validate_discarded_clarification(decision)
             decision = PlanningDecision(
                 task_category=TaskCategory.CLARIFICATION,
                 requires_search=False,
-                answer_focus="Ask the user to clarify the original request.",
+                answer_focus=_FIXED_CLARIFICATION_FOCUS,
             )
+        validate_planning_decision(request=request, decision=decision)
         return PlanningOutcome(decision=decision, metadata=result.metadata)
 
 
@@ -431,9 +437,24 @@ def validate_planning_decision(
 ) -> PlanningDecision:
     """Re-check an injected planning port before any tool can run."""
 
+    try:
+        if (
+            type(decision) is not PlanningDecision
+            or type(decision.task_category) is not TaskCategory
+        ):
+            raise ValueError("planning decision types are invalid")
+        checked = PlanningDecision.model_validate(
+            decision.model_dump(mode="python", warnings="error"), strict=True
+        )
+        if checked != decision:
+            raise ValueError("planning decision changed during validation")
+    except (AttributeError, TypeError, ValidationError, ValueError):
+        raise PlanningPolicyError(
+            "planning decision failed strict validation"
+        ) from None
     _reject_forbidden_request(request)
-    _validate_generated_policy(request=request, decision=decision)
-    return decision
+    _validate_generated_policy(request=request, decision=checked)
+    return checked
 
 
 def _reject_forbidden_request(request: str) -> None:
@@ -449,12 +470,11 @@ def _reject_forbidden_request(request: str) -> None:
 def _validate_generated_policy(*, request: str, decision: PlanningDecision) -> None:
     _reject_forbidden_request(decision.answer_focus)
     if decision.task_category is TaskCategory.CLARIFICATION:
-        # Clarification text is replaced with a fixed prompt below. Scan every
-        # discarded field for prohibited content, but do not assign it scope.
-        if decision.assistance is not None:
-            _reject_forbidden_request(decision.assistance.offer)
-            for query in decision.assistance.follow_up_queries:
-                _reject_forbidden_request(query)
+        if (
+            decision.answer_focus not in _SAFE_INJECTED_CLARIFICATION_FOCUSES
+            or decision.assistance is not None
+        ):
+            raise PlanningPolicyError("clarification response is not approved")
         return
     company_focus_is_invalid = (
         decision.task_category is TaskCategory.COMPANY_RESEARCH
@@ -510,6 +530,16 @@ def _validate_generated_policy(*, request: str, decision: PlanningDecision) -> N
                 raise PlanningPolicyError(
                     "assistance queries must stay tied to the user request"
                 )
+
+
+def _validate_discarded_clarification(decision: PlanningDecision) -> None:
+    """Reject prohibited generated text before replacing it with the fixed reply."""
+
+    _reject_forbidden_request(decision.answer_focus)
+    if decision.assistance is not None:
+        _reject_forbidden_request(decision.assistance.offer)
+        for query in decision.assistance.follow_up_queries:
+            _reject_forbidden_request(query)
 
 
 def _stays_scoped(

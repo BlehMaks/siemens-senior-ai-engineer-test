@@ -76,6 +76,12 @@ class RunSnapshot(StrictModel):
         if self.status is RunStatus.COMPLETED and self.answer is None:
             msg = "completed runs require an answer"
             raise ValueError(msg)
+        if self.status in {RunStatus.ANSWER_READY, RunStatus.COMPLETED} and (
+            self.answer is not None
+            and bool(self.answer.citations) != bool(self.evidence)
+        ):
+            msg = "answer citations must match the evidence-backed run path"
+            raise ValueError(msg)
         if self.status is RunStatus.FAILED and self.failure_reason is None:
             msg = "failed runs require failure_reason"
             raise ValueError(msg)
@@ -93,7 +99,6 @@ class RunStateGraph:
     _ALLOWED: ClassVar[dict[RunStatus, tuple[RunStatus, ...]]] = {
         RunStatus.CREATED: (
             RunStatus.PLANNED,
-            RunStatus.ANSWER_READY,
             RunStatus.FAILED,
             RunStatus.CANCELLED,
         ),
@@ -178,6 +183,8 @@ class RunStateGraph:
         run: RunSnapshot,
         answer: ScopedAnswer,
     ) -> tuple[RunSnapshot, PublicEvent]:
+        if not answer.citations:
+            raise ValueError("cited answers require at least one citation")
         return cls._transition(
             run,
             next_status=RunStatus.ANSWER_READY,
@@ -196,12 +203,16 @@ class RunStateGraph:
 
         if answer.citations:
             raise ValueError("direct answers cannot contain citations")
+        if run.status is not RunStatus.CREATED:
+            msg = f"illegal transition: {run.status.value} -> answer_ready"
+            raise IllegalTransitionError(msg)
         return cls._transition(
             run,
             next_status=RunStatus.ANSWER_READY,
             event_type=EventType.ANSWER_DRAFTED,
             message="Drafted answer without web search",
             answer=answer,
+            allow_created_answer=True,
         )
 
     @classmethod
@@ -264,8 +275,14 @@ class RunStateGraph:
         answer: ScopedAnswer | None = None,
         terminal_state: TerminalState | None = None,
         failure_reason: FailureReason | None = None,
+        allow_created_answer: bool = False,
     ) -> tuple[RunSnapshot, PublicEvent]:
-        if next_status not in cls._ALLOWED[run.status]:
+        created_answer = (
+            allow_created_answer
+            and run.status is RunStatus.CREATED
+            and next_status is RunStatus.ANSWER_READY
+        )
+        if not created_answer and next_status not in cls._ALLOWED[run.status]:
             msg = f"illegal transition: {run.status.value} -> {next_status.value}"
             raise IllegalTransitionError(msg)
         next_values = run.model_dump(mode="python")
