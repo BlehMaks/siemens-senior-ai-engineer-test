@@ -831,6 +831,10 @@ class FirestoreSessionRepository:
             FirestoreRunRepository(store) if run_repository is None else run_repository
         )
 
+    @property
+    def document_store(self) -> DocumentStore:
+        return self._store
+
     async def put(self, session: SessionRecord) -> bool:
         checked = _checked_session(session)
         document_id = _document_id(checked.tenant_id, checked.session_id)
@@ -917,6 +921,10 @@ class FirestoreSessionRepository:
 class FirestoreEventRepository:
     def __init__(self, store: DocumentStore) -> None:
         self._store = store
+
+    @property
+    def document_store(self) -> DocumentStore:
+        return self._store
 
     async def append(self, *, tenant_id: OpaqueId, event: RunEvent) -> bool:
         checked_tenant = _scope_id(tenant_id)
@@ -1012,6 +1020,10 @@ class CloudTasksWorkQueue:
         self._tasks = task_client
         self._queue_name = queue_name
         self._codec = codec
+
+    @property
+    def document_store(self) -> DocumentStore:
+        return self._store
 
     async def enqueue(self, item: WorkItem) -> EnqueueResult:
         checked = _checked_item(item)
@@ -1110,15 +1122,18 @@ class CloudTasksWorkQueue:
         task_name: str | None,
         queue_name: str | None,
     ) -> WorkItem:
-        if not _same_resource(queue_name, self._queue_name):
-            raise TaskDeliveryAuthError("task delivery queue is invalid")
+        try:
+            canonical_queue = _canonical_resource(queue_name, self._queue_name)
+            canonical_task = _canonical_task_resource(task_name, self._queue_name)
+        except ValueError as exc:
+            raise TaskDeliveryAuthError("task delivery queue is invalid") from exc
         item = self._codec.decode(
             body=body,
             signature=signature,
-            task_name=task_name,
-            queue_name=queue_name,
+            task_name=canonical_task,
+            queue_name=canonical_queue,
         )
-        if not _same_resource(task_name, self._task_name(item.work_id)):
+        if canonical_task != self._task_name(item.work_id):
             raise TaskDeliveryAuthError("task delivery name is invalid")
         return item
 
@@ -1148,8 +1163,8 @@ def _require_delivery_identity(
 def _delivery_signature_input(*, body: bytes, task_name: str, queue_name: str) -> bytes:
     return b"\x00".join(
         (
-            _resource_leaf(queue_name).encode("utf-8"),
-            _resource_leaf(task_name).encode("utf-8"),
+            queue_name.encode("utf-8"),
+            task_name.encode("utf-8"),
             body,
         )
     )
@@ -1162,13 +1177,24 @@ def _resource_leaf(name: str) -> str:
     return leaf
 
 
-def _same_resource(received: str | None, expected: str) -> bool:
-    try:
-        return received is not None and _resource_leaf(received) == _resource_leaf(
-            expected
-        )
-    except ValueError:
-        return False
+def _canonical_resource(received: str | None, expected: str) -> str:
+    if type(received) is not str or not received:
+        raise ValueError("resource name is missing")
+    if "/" not in received:
+        if received != _resource_leaf(expected):
+            raise ValueError("resource id does not match")
+        return expected
+    if received != expected:
+        raise ValueError("resource name does not match")
+    return received
+
+
+def _canonical_task_resource(received: str | None, queue_name: str) -> str:
+    if type(received) is not str or not received:
+        raise ValueError("task name is missing")
+    if "/" not in received:
+        return f"{queue_name}/tasks/{received}"
+    return received
 
 
 def _require_text(document: Mapping[str, object], field: str) -> str:

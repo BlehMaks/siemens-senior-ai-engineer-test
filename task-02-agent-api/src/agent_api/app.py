@@ -167,6 +167,12 @@ def create_app(
         cloud_run_repository=isinstance(run_repository, FirestoreRunRepository),
         cloud_event_repository=isinstance(event_repository, FirestoreEventRepository),
         cloud_work_queue=isinstance(work_queue, CloudTasksWorkQueue),
+        shared_cloud_store=_share_document_store(
+            durable_sessions,
+            run_repository,
+            event_repository,
+            work_queue,
+        ),
     )
 
     @asynccontextmanager
@@ -470,6 +476,7 @@ def _validate_authoritative_runtime(
     cloud_run_repository: bool,
     cloud_event_repository: bool,
     cloud_work_queue: bool,
+    shared_cloud_store: bool,
 ) -> None:
     if not production_environment:
         return
@@ -493,5 +500,30 @@ def _validate_authoritative_runtime(
         raise ValueError("production_environment requires a Firestore event repository")
     if not cloud_work_queue:
         raise ValueError("production_environment requires a Cloud Tasks work queue")
+    if not shared_cloud_store:
+        raise ValueError("production cloud adapters must share the same document store")
     if has_run_executor and not task_delivery_enabled:
         raise ValueError("production worker requires signed task delivery")
+
+
+def _share_document_store(
+    sessions: object,
+    runs: object,
+    events: object,
+    queue: object,
+) -> bool:
+    adapters = (sessions, runs, events, queue)
+    stores = tuple(
+        adapter.document_store
+        for adapter in adapters
+        if isinstance(
+            adapter,
+            (
+                FirestoreSessionRepository,
+                FirestoreRunRepository,
+                FirestoreEventRepository,
+                CloudTasksWorkQueue,
+            ),
+        )
+    )
+    return len(stores) == 4 and all(store is stores[0] for store in stores[1:])

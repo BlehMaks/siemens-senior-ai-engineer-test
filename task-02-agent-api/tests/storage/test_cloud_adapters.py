@@ -37,6 +37,7 @@ from agent_api.storage import (
     StorageConflictError,
     TaskDeliveryAuthError,
 )
+from agent_api.workers.local import LocalWorker
 from search_agent import (
     Citation,
     ExtractedEvidence,
@@ -211,6 +212,20 @@ class CompletedExecutor:
                 tokens=128,
             ),
         )
+
+
+class SleepingExecutor:
+    async def run(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        session_id: OpaqueId,
+        run_id: OpaqueId,
+        request: QueryText,
+    ) -> RunResult:
+        del tenant_id, session_id, run_id, request
+        await asyncio.sleep(60)
+        raise AssertionError("sleeping executor should be cancelled after lease loss")
 
 
 class FakeDocumentStore(DocumentStoreTransaction):
@@ -538,6 +553,14 @@ async def test_cloud_task_payloads_are_signed_and_tamper_evident() -> None:
             task_name=delivery_headers["X-CloudTasks-TaskName"],
             queue_name=delivery_headers["X-CloudTasks-QueueName"],
         )
+    other_queue = "projects/other/locations/us/queues/dispatch"
+    with pytest.raises(TaskDeliveryAuthError):
+        queue.decode_delivery(
+            body=task.body,
+            signature=delivery_headers["X-Agent-Api-Task-Signature"],
+            task_name=f"{other_queue}/tasks/{task.name.rsplit('/', 1)[-1]}",
+            queue_name=other_queue,
+        )
     with pytest.raises(TaskDeliveryAuthError, match="headers are incomplete"):
         queue.decode_delivery(
             body=task.body,
@@ -781,6 +804,66 @@ def test_production_rejects_sqlite_adapters_with_cloud_backend_labels(
             run_state_backend="firestore",
             queue_backend="cloud_tasks",
         )
+
+
+def test_production_rejects_cloud_adapters_with_split_document_stores(
+    tmp_path: Path,
+) -> None:
+    session_store = FakeDocumentStore()
+    run_store = FakeDocumentStore()
+
+    with pytest.raises(ValueError, match="same document store"):
+        create_app(
+            database_path=tmp_path / "split-cloud.sqlite3",
+            pepper_provider=FixedPepper(),
+            session_repository=FirestoreSessionRepository(session_store),
+            run_repository=FirestoreRunRepository(run_store),
+            event_repository=FirestoreEventRepository(run_store),
+            work_queue=CloudTasksWorkQueue(
+                store=run_store,
+                task_client=FakeCloudTaskClient(),
+                queue_name="projects/test/locations/eu/queues/dispatch",
+                codec=SignedWorkItemCodec(b"s" * 32),
+            ),
+            production_environment=True,
+            run_state_backend="firestore",
+            queue_backend="cloud_tasks",
+        )
+
+
+@pytest.mark.asyncio
+async def test_mid_execution_lease_loss_requests_delivery_retry() -> None:
+    store = FakeDocumentStore()
+    await _seed_session(store, tenant_id="tenant-one", session_id="session-one")
+    runs = FirestoreRunRepository(store)
+    await runs.create(submission())
+    queue = CloudTasksWorkQueue(
+        store=store,
+        task_client=FakeCloudTaskClient(),
+        queue_name="projects/test/locations/eu/queues/dispatch",
+        codec=SignedWorkItemCodec(b"s" * 32),
+    )
+    item = WorkItem(
+        work_id="work-run-one",
+        tenant_id="tenant-one",
+        run_id="run-one",
+        enqueued_at=NOW,
+        not_before=NOW,
+    )
+    await queue.enqueue(item)
+    times = iter((NOW, NOW + timedelta(seconds=31)))
+    worker = LocalWorker(
+        repository=runs,
+        queue=queue,
+        executor=SleepingExecutor(),
+        worker_id="worker-one",
+        clock=lambda: next(times),
+        lease_seconds=30,
+        heartbeat_seconds=0.01,
+        cancellation_drain_seconds=0.1,
+    )
+
+    assert await worker.process(item) is False
 
 
 @pytest.mark.parametrize(
