@@ -109,13 +109,13 @@ Checked-in sample measurement on this development machine:
 | Duplicate behavior | HTTP 202, same run ID |
 | Conflicting duplicate | HTTP 409 |
 | Terminal results after drain | 6 completed, 1 cancelled, 1 budget_exhausted |
-| p95 submit latency | 106.179 ms |
-| p95 first-event availability across eight runs | 265.427 ms |
-| Oldest real queue age before drain | 167.226 ms |
-| Recovery time through terminal completion | 13.987 ms |
+| p95 submit latency | 116.339 ms |
+| p95 first-event availability across eight runs | 264.403 ms |
+| Oldest real queue age before drain | 155.131 ms |
+| Recovery time through terminal completion | 18.194 ms |
 | Recovery terminal state | completed |
-| Whole scenario elapsed | 333.519 ms |
-| Resource usage | +4,915,200 platform `ru_maxrss`, +0.12919 user CPU s, +0.101452 system CPU s |
+| Whole scenario elapsed | 338.232 ms |
+| Resource usage | +4,669,440 platform `ru_maxrss`, +0.136668 user CPU s, +0.107824 system CPU s |
 
 These numbers are local proof-of-contract measurements, not production performance
 claims. They are useful because the assertions fail closed if admission,

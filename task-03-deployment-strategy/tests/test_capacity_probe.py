@@ -139,25 +139,34 @@ async def test_first_event_latency_ignores_later_recovery_work(
 
 
 @pytest.mark.asyncio
-async def test_queue_age_starts_after_client_side_submit_delay(
+async def test_queue_age_starts_after_transport_delay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_post = capacity_probe.AsyncClient.post
+    original_handle = capacity_probe.ASGITransport.handle_async_request
     original_queue_age = capacity_probe._oldest_queue_age_ms
-    observed_first_api_attempt: float | None = None
+    observed_first_api_arrival: float | None = None
     age_observed_at: float | None = None
+    delayed_keys: set[str] = set()
 
-    async def delayed_submit(self, url, *args, **kwargs):
-        nonlocal observed_first_api_attempt
-        key = kwargs.get("headers", {}).get("Idempotency-Key", "")
-        if str(url).endswith("/runs") and key.startswith("capacity-"):
+    async def delayed_transport(self, request):
+        nonlocal observed_first_api_arrival
+        key = request.headers.get("Idempotency-Key", "")
+        if (
+            request.method == "POST"
+            and request.url.path.endswith("/runs")
+            and key.startswith("capacity-")
+            and key not in delayed_keys
+        ):
+            delayed_keys.add(key)
             await asyncio.sleep(0.1)
             now = time.perf_counter()
-            if observed_first_api_attempt is None or now < observed_first_api_attempt:
-                observed_first_api_attempt = now
-        return await original_post(self, url, *args, **kwargs)
+            if observed_first_api_arrival is None or now < observed_first_api_arrival:
+                observed_first_api_arrival = now
+        return await original_handle(self, request)
 
-    monkeypatch.setattr(capacity_probe.AsyncClient, "post", delayed_submit)
+    monkeypatch.setattr(
+        capacity_probe.ASGITransport, "handle_async_request", delayed_transport
+    )
 
     def captured_queue_age(database_path: Path, *, wall_started: float) -> float:
         nonlocal age_observed_at
@@ -175,11 +184,11 @@ async def test_queue_age_starts_after_client_side_submit_delay(
         )
     )
 
-    assert observed_first_api_attempt is not None
+    assert observed_first_api_arrival is not None
     assert age_observed_at is not None
     assert (
         result["measurements"]["queue_oldest_age_ms"]
-        <= (age_observed_at - observed_first_api_attempt) * 1_000 + 10
+        <= (age_observed_at - observed_first_api_arrival) * 1_000 + 10
     )
 
 

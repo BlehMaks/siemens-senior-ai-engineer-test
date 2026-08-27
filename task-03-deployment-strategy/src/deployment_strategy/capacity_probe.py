@@ -20,10 +20,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from httpx import ASGITransport, AsyncClient, Request
+from httpx import ASGITransport, AsyncClient
 from pydantic import AnyHttpUrl
 
 from agent_api.app import create_app
+from agent_api.ports import EnqueueResult, WorkItem
 from agent_api.security import LimitConfig
 from agent_api.storage import (
     SQLiteRunRepository,
@@ -105,16 +106,24 @@ class FakeCapacityExecutor:
         return _completed_result(tenant_id, session_id, run_id, request)
 
 
+class RecordingSQLiteWorkQueue(SQLiteWorkQueue):
+    def __init__(self, path: Path, accepted_enqueue_at: list[float]) -> None:
+        super().__init__(path)
+        self._accepted_enqueue_at = accepted_enqueue_at
+
+    async def enqueue(self, item: WorkItem) -> EnqueueResult:
+        result = await super().enqueue(item)
+        if result.created:
+            self._accepted_enqueue_at.append(time.perf_counter())
+        return result
+
+
 async def run_probe(config: ProbeConfig | None = None) -> dict[str, Any]:
     config = ProbeConfig() if config is None else config
     with TemporaryDirectory(prefix="siemens-capacity-") as workspace:
         database_path = Path(workspace) / "capacity.sqlite3"
-        initial_submit_reached_at: list[float] = []
-
-        async def record_initial_submit(request: Request) -> None:
-            key = request.headers.get("Idempotency-Key", "")
-            if request.method == "POST" and key.startswith("capacity-"):
-                initial_submit_reached_at.append(time.perf_counter())
+        database_path.touch()
+        accepted_enqueue_at: list[float] = []
 
         app = create_app(
             database_path=database_path,
@@ -131,6 +140,7 @@ async def run_probe(config: ProbeConfig | None = None) -> dict[str, Any]:
                 max_sse_connections=4,
                 daily_work_units=100,
             ),
+            work_queue=RecordingSQLiteWorkQueue(database_path, accepted_enqueue_at),
         )
         before = resource.getrusage(resource.RUSAGE_SELF)
         started = time.perf_counter()
@@ -139,7 +149,6 @@ async def run_probe(config: ProbeConfig | None = None) -> dict[str, Any]:
             AsyncClient(
                 transport=ASGITransport(app=app),
                 base_url="http://capacity.local",
-                event_hooks={"request": [record_initial_submit]},
                 timeout=5.0,
             ) as client,
         ):
@@ -164,7 +173,7 @@ async def run_probe(config: ProbeConfig | None = None) -> dict[str, Any]:
             )
             oldest_queue_age_ms = _oldest_queue_age_ms(
                 database_path,
-                wall_started=min(initial_submit_reached_at),
+                wall_started=min(accepted_enqueue_at),
             )
             initial_drained = await _drain(database_path)
             first_events = [first_event]
