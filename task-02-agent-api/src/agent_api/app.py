@@ -59,6 +59,7 @@ from .storage import (
     CloudTasksWorkQueue,
     FirestoreEventRepository,
     FirestoreRunRepository,
+    FirestoreSessionRepository,
     SQLiteAuditRepository,
     SQLiteEventRepository,
     SQLiteKeyHashRepository,
@@ -130,6 +131,9 @@ def create_app(
     quota_limiter: QuotaLimiter | None = None,
     telemetry: OperationalTelemetry | None = None,
     readiness_probe: ReadinessProbe | None = None,
+    session_repository: SQLiteSessionRepository
+    | FirestoreSessionRepository
+    | None = None,
     run_repository: SQLiteRunRepository | FirestoreRunRepository | None = None,
     event_repository: SQLiteEventRepository | FirestoreEventRepository | None = None,
     work_queue: SQLiteWorkQueue | CloudTasksWorkQueue | None = None,
@@ -142,6 +146,12 @@ def create_app(
     provider = EnvPepperProvider() if pepper_provider is None else pepper_provider
     now = _utc_now if clock is None else clock
     limits = LimitConfig() if limit_config is None else limit_config
+    durable_sessions = session_repository
+    if durable_sessions is None and isinstance(run_repository, FirestoreRunRepository):
+        durable_sessions = FirestoreSessionRepository(
+            run_repository.document_store,
+            run_repository,
+        )
     _validate_authoritative_runtime(
         production_environment=production_environment,
         run_state_backend=run_state_backend,
@@ -151,6 +161,12 @@ def create_app(
         has_work_queue=work_queue is not None,
         has_run_executor=run_executor is not None,
         task_delivery_enabled=task_delivery_enabled,
+        cloud_session_repository=isinstance(
+            durable_sessions, FirestoreSessionRepository
+        ),
+        cloud_run_repository=isinstance(run_repository, FirestoreRunRepository),
+        cloud_event_repository=isinstance(event_repository, FirestoreEventRepository),
+        cloud_work_queue=isinstance(work_queue, CloudTasksWorkQueue),
     )
 
     @asynccontextmanager
@@ -193,7 +209,11 @@ def create_app(
             SQLiteKeyHashRepository(database_path), provider
         )
         app.state.session_service = SessionService(
-            SQLiteSessionRepository(database_path),
+            (
+                SQLiteSessionRepository(database_path)
+                if durable_sessions is None
+                else durable_sessions
+            ),
             clock=now,
             id_factory=session_id_factory,
         )
@@ -300,9 +320,7 @@ async def _invalid_request(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
-async def _task_delivery_auth_error(
-    request: Request, exc: Exception
-) -> JSONResponse:
+async def _task_delivery_auth_error(request: Request, exc: Exception) -> JSONResponse:
     del exc
     return _error_response(
         request, 401, ErrorCode.UNAUTHENTICATED, "Authentication failed."
@@ -448,6 +466,10 @@ def _validate_authoritative_runtime(
     has_work_queue: bool,
     has_run_executor: bool,
     task_delivery_enabled: bool,
+    cloud_session_repository: bool,
+    cloud_run_repository: bool,
+    cloud_event_repository: bool,
+    cloud_work_queue: bool,
 ) -> None:
     if not production_environment:
         return
@@ -461,5 +483,15 @@ def _validate_authoritative_runtime(
         raise ValueError("production_environment requires an injected event repository")
     if not has_work_queue:
         raise ValueError("production_environment requires an injected work queue")
+    if not cloud_session_repository:
+        raise ValueError(
+            "production_environment requires a Firestore session repository"
+        )
+    if not cloud_run_repository:
+        raise ValueError("production_environment requires a Firestore run repository")
+    if not cloud_event_repository:
+        raise ValueError("production_environment requires a Firestore event repository")
+    if not cloud_work_queue:
+        raise ValueError("production_environment requires a Cloud Tasks work queue")
     if has_run_executor and not task_delivery_enabled:
         raise ValueError("production worker requires signed task delivery")

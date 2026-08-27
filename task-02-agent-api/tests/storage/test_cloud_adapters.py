@@ -18,7 +18,7 @@ from test_ports_contract import (
 )
 
 from agent_api.app import create_app
-from agent_api.ports import RunRepository, RunState, WorkItem, WorkQueue
+from agent_api.ports import ClaimRequest, RunRepository, RunState, WorkItem, WorkQueue
 from agent_api.schemas import RunEvent, RunEventType
 from agent_api.security import ExecutionPermit, RunAdmission, SSEPermit
 from agent_api.storage import (
@@ -28,7 +28,12 @@ from agent_api.storage import (
     DocumentStoreTransaction,
     FirestoreEventRepository,
     FirestoreRunRepository,
+    FirestoreSessionRepository,
+    SessionRecord,
     SignedWorkItemCodec,
+    SQLiteEventRepository,
+    SQLiteRunRepository,
+    SQLiteWorkQueue,
     StorageConflictError,
     TaskDeliveryAuthError,
 )
@@ -119,6 +124,19 @@ class StubQuotaLimiter:
     async def renew_sse(self, permit: SSEPermit, *, at: object) -> bool:
         del permit, at
         return True
+
+
+class BlockedQuotaLimiter(StubQuotaLimiter):
+    async def acquire_execution(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        run_id: OpaqueId,
+        at: object,
+        lease_seconds: int,
+    ) -> None:
+        del tenant_id, run_id, at, lease_seconds
+        return None
 
 
 class CompletedExecutor:
@@ -225,15 +243,25 @@ class FakeDocumentStore(DocumentStoreTransaction):
         collection: str,
         filters: Mapping[str, object] | None = None,
         order_by: tuple[str, ...] = (),
+        start_after: Mapping[str, object] | None = None,
         limit: int | None = None,
     ) -> tuple[dict[str, object], ...]:
         selected = []
         for row in self._collections.get(collection, {}).values():
-            if filters is not None and any(row.get(key) != value for key, value in filters.items()):
+            if filters is not None and any(
+                row.get(key) != value for key, value in filters.items()
+            ):
                 continue
             selected.append(copy.deepcopy(row))
         if order_by:
             selected.sort(key=lambda row: tuple(row[field] for field in order_by))
+        if start_after is not None:
+            cursor = tuple(start_after[field] for field in order_by)
+            selected = [
+                row
+                for row in selected
+                if tuple(row[field] for field in order_by) > cursor
+            ]
         if limit is not None:
             selected = selected[:limit]
         return tuple(selected)
@@ -242,7 +270,58 @@ class FakeDocumentStore(DocumentStoreTransaction):
         self, operation: Callable[[DocumentStoreTransaction], Awaitable[T]]
     ) -> T:
         async with self._lock:
-            return await operation(self)
+            return await operation(ReadBeforeWriteTransaction(self))
+
+
+class ReadBeforeWriteTransaction(DocumentStoreTransaction):
+    def __init__(self, store: FakeDocumentStore) -> None:
+        self._store = store
+        self._wrote = False
+
+    def _require_read_phase(self) -> None:
+        if self._wrote:
+            raise RuntimeError("Firestore transactions forbid read-after-write")
+
+    async def get(
+        self, *, collection: str, document_id: str
+    ) -> dict[str, object] | None:
+        self._require_read_phase()
+        return await self._store.get(collection=collection, document_id=document_id)
+
+    async def list(
+        self,
+        *,
+        collection: str,
+        filters: Mapping[str, object] | None = None,
+        order_by: tuple[str, ...] = (),
+        start_after: Mapping[str, object] | None = None,
+        limit: int | None = None,
+    ) -> tuple[dict[str, object], ...]:
+        self._require_read_phase()
+        return await self._store.list(
+            collection=collection,
+            filters=filters,
+            order_by=order_by,
+            start_after=start_after,
+            limit=limit,
+        )
+
+    async def set(
+        self, *, collection: str, document_id: str, document: Mapping[str, object]
+    ) -> None:
+        self._wrote = True
+        await self._store.set(
+            collection=collection,
+            document_id=document_id,
+            document=document,
+        )
+
+    async def delete(self, *, collection: str, document_id: str) -> bool:
+        self._wrote = True
+        return await self._store.delete(
+            collection=collection,
+            document_id=document_id,
+        )
 
 
 class FakeCloudTaskClient:
@@ -262,7 +341,9 @@ class FakeCloudTaskClient:
         return self._tasks.pop(name, None) is not None
 
 
-async def _seed_session(store: FakeDocumentStore, *, tenant_id: str, session_id: str) -> None:
+async def _seed_session(
+    store: FakeDocumentStore, *, tenant_id: str, session_id: str
+) -> None:
     await store.transaction(
         lambda tx: tx.set(
             collection="sessions",
@@ -314,6 +395,41 @@ class TestCloudTasksWorkQueue(WorkQueueContract):
             queue_name="projects/test/locations/eu/queues/dispatch",
             codec=SignedWorkItemCodec(b"s" * 32),
         )
+
+
+@pytest.mark.asyncio
+async def test_firestore_sessions_are_pageable_run_parents_and_cascade_delete() -> None:
+    store = FakeDocumentStore()
+    runs = FirestoreRunRepository(store)
+    sessions = FirestoreSessionRepository(store, runs)
+    first = SessionRecord(
+        tenant_id="tenant-one",
+        session_id="session-one",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    second = SessionRecord(
+        tenant_id="tenant-one",
+        session_id="session-two",
+        created_at=NOW + timedelta(seconds=1),
+        updated_at=NOW + timedelta(seconds=1),
+    )
+
+    assert await sessions.put(first) is True
+    assert await sessions.put(first) is False
+    assert await sessions.put(second) is True
+    assert await sessions.list(tenant_id="tenant-one", limit=1) == (first,)
+    assert await sessions.list(
+        tenant_id="tenant-one",
+        limit=1,
+        after=(first.created_at, first.session_id),
+    ) == (second,)
+
+    created = await runs.create(submission())
+    assert created.created is True
+    assert await sessions.delete(tenant_id="tenant-one", session_id="session-one")
+    assert await runs.get(tenant_id="tenant-one", run_id="run-one") is None
+    assert await sessions.get(tenant_id="tenant-one", session_id="session-one") is None
 
 
 @pytest.mark.asyncio
@@ -406,6 +522,15 @@ async def test_cloud_task_payloads_are_signed_and_tamper_evident() -> None:
         )
         == item
     )
+    assert (
+        queue.decode_delivery(
+            body=task.body,
+            signature=delivery_headers["X-Agent-Api-Task-Signature"],
+            task_name=task.name.rsplit("/", 1)[-1],
+            queue_name=queue_name.rsplit("/", 1)[-1],
+        )
+        == item
+    )
     with pytest.raises(TaskDeliveryAuthError, match="signature is invalid"):
         queue.decode_delivery(
             body=task.body + b" ",
@@ -477,8 +602,8 @@ async def test_signed_cloud_delivery_executes_once_and_rejects_tampering(
     await queue.enqueue(item)
     task = next(iter(client._tasks.values()))
     headers = {name: value for name, value in task.headers} | {
-        "X-CloudTasks-TaskName": task.name,
-        "X-CloudTasks-QueueName": queue_name,
+        "X-CloudTasks-TaskName": task.name.rsplit("/", 1)[-1],
+        "X-CloudTasks-QueueName": queue_name.rsplit("/", 1)[-1],
     }
 
     async with (
@@ -519,12 +644,143 @@ async def test_signed_cloud_delivery_executes_once_and_rejects_tampering(
     assert stored.delivery_attempts == 1
     assert tuple(
         event.state
-        for event in await events.list(tenant_id="tenant-one", run_id=created.run.run_id)
+        for event in await events.list(
+            tenant_id="tenant-one", run_id=created.run.run_id
+        )
     ) == (
         RunState.QUEUED,
         RunState.RUNNING,
         RunState.COMPLETED,
     )
+
+
+@pytest.mark.parametrize("contention", ["quota", "lease"])
+@pytest.mark.asyncio
+async def test_temporary_cloud_delivery_contention_returns_retryable_status(
+    tmp_path: Path,
+    contention: str,
+) -> None:
+    store = FakeDocumentStore()
+    await _seed_session(store, tenant_id="tenant-one", session_id="session-one")
+    runs = FirestoreRunRepository(store)
+    await runs.create(submission())
+    client = FakeCloudTaskClient()
+    queue_name = "projects/test/locations/eu/queues/dispatch"
+    queue = CloudTasksWorkQueue(
+        store=store,
+        task_client=client,
+        queue_name=queue_name,
+        codec=SignedWorkItemCodec(b"s" * 32),
+    )
+    await queue.enqueue(
+        WorkItem(
+            work_id="work-run-one",
+            tenant_id="tenant-one",
+            run_id="run-one",
+            enqueued_at=NOW,
+            not_before=NOW,
+        )
+    )
+    if contention == "lease":
+        await runs.claim(
+            ClaimRequest(
+                tenant_id="tenant-one",
+                run_id="run-one",
+                worker_id="worker-crashed",
+                lease_id="lease-crashed",
+                now=NOW,
+                lease_seconds=30,
+            )
+        )
+    task = next(iter(client._tasks.values()))
+    app = create_app(
+        database_path=tmp_path / f"{contention}-delivery.sqlite3",
+        pepper_provider=FixedPepper(),
+        clock=lambda: NOW + timedelta(seconds=1),
+        quota_limiter=(
+            BlockedQuotaLimiter() if contention == "quota" else StubQuotaLimiter()
+        ),
+        run_executor=CompletedExecutor(),
+        run_repository=runs,
+        event_repository=FirestoreEventRepository(store),
+        work_queue=queue,
+        production_environment=True,
+        run_state_backend="firestore",
+        queue_backend="cloud_tasks",
+        task_delivery_enabled=True,
+    )
+    headers = dict(task.headers) | {
+        "X-CloudTasks-TaskName": task.name.rsplit("/", 1)[-1],
+        "X-CloudTasks-QueueName": queue_name.rsplit("/", 1)[-1],
+    }
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://worker"
+        ) as web,
+    ):
+        response = await web.post(
+            "/internal/tasks/run-delivery",
+            content=task.body,
+            headers=headers,
+        )
+
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_production_application_creates_cloud_run_parent_sessions(
+    tmp_path: Path,
+) -> None:
+    store = FakeDocumentStore()
+    runs = FirestoreRunRepository(store)
+    app = create_app(
+        database_path=tmp_path / "cloud-session.sqlite3",
+        pepper_provider=FixedPepper(),
+        session_id_factory=lambda: "session-cloud",
+        run_repository=runs,
+        event_repository=FirestoreEventRepository(store),
+        work_queue=CloudTasksWorkQueue(
+            store=store,
+            task_client=FakeCloudTaskClient(),
+            queue_name="projects/test/locations/eu/queues/dispatch",
+            codec=SignedWorkItemCodec(b"s" * 32),
+        ),
+        production_environment=True,
+        run_state_backend="firestore",
+        queue_backend="cloud_tasks",
+    )
+
+    async with app.router.lifespan_context(app):
+        session = await app.state.session_service.create(
+            tenant_id="tenant-one", label=None
+        )
+        created = await runs.create(
+            submission(session_id=session.session_id, run_id="run-cloud")
+        )
+
+    assert created.created is True
+
+
+def test_production_rejects_sqlite_adapters_with_cloud_backend_labels(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sqlite-disguised-as-cloud.sqlite3"
+    path.touch()
+
+    with pytest.raises(ValueError, match=r"Firestore|Cloud Tasks"):
+        create_app(
+            database_path=path,
+            pepper_provider=FixedPepper(),
+            run_repository=SQLiteRunRepository(path),
+            event_repository=SQLiteEventRepository(path),
+            work_queue=SQLiteWorkQueue(path),
+            production_environment=True,
+            run_state_backend="firestore",
+            queue_backend="cloud_tasks",
+        )
 
 
 @pytest.mark.parametrize(

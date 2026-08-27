@@ -8,13 +8,14 @@ import json
 import secrets
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from typing import Protocol
 
 from pydantic import TypeAdapter, ValidationError
 
 from search_agent.contracts import OpaqueId
 
 from ..schemas import PageCursor, SessionLabel
-from ..storage import SessionRecord, SQLiteSessionRepository, StorageConflictError
+from ..storage import SessionRecord, StorageConflictError
 
 _OPAQUE_ID = TypeAdapter(OpaqueId)
 _PAGE_CURSOR = TypeAdapter(PageCursor)
@@ -37,10 +38,32 @@ class SessionUnavailable(RuntimeError):
     """A session identifier could not be allocated within the retry bound."""
 
 
+class SessionRepository(Protocol):
+    async def put(self, session: SessionRecord) -> bool: ...
+
+    async def get(
+        self, *, tenant_id: OpaqueId, session_id: OpaqueId
+    ) -> SessionRecord | None: ...
+
+    async def list(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        limit: int = 100,
+        after: tuple[datetime, OpaqueId] | None = None,
+    ) -> tuple[SessionRecord, ...]: ...
+
+    async def delete_memory(
+        self, *, tenant_id: OpaqueId, session_id: OpaqueId
+    ) -> int: ...
+
+    async def delete(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> bool: ...
+
+
 class SessionService:
     def __init__(
         self,
-        repository: SQLiteSessionRepository,
+        repository: SessionRepository,
         *,
         clock: Callable[[], datetime],
         id_factory: Callable[[], str] | None = None,

@@ -12,7 +12,7 @@ from ..storage import CloudTasksWorkQueue, TaskDeliveryAuthError
 
 
 class TaskDeliveryWorker(Protocol):
-    async def process(self, item: WorkItem) -> None: ...
+    async def process(self, item: WorkItem) -> bool: ...
 
 
 def build_internal_task_router(*, path: str) -> APIRouter:
@@ -37,7 +37,8 @@ def build_internal_task_router(*, path: str) -> APIRouter:
             task_name=_single_header(request, "x-cloudtasks-taskname"),
             queue_name=_single_header(request, "x-cloudtasks-queuename"),
         )
-        await worker.process(item)
+        if not await worker.process(item):
+            return Response(status_code=503, headers={"Retry-After": "1"})
         return Response(status_code=204)
 
     return router

@@ -8,6 +8,7 @@ import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import partial
 from typing import Protocol
 
 from pydantic import TypeAdapter
@@ -41,6 +42,7 @@ from ..ports import (
 )
 from ..schemas import RunEvent, RunEventType, RunFailure, public_run_failure
 from .repositories import (
+    SessionRecord,
     StorageConflictError,
     StorageError,
     _changed_run,
@@ -124,6 +126,12 @@ def _checked_item(value: WorkItem) -> WorkItem:
     return WorkItem.model_validate(value.model_dump(mode="python"))
 
 
+def _checked_session(value: SessionRecord) -> SessionRecord:
+    if type(value) is not SessionRecord:
+        raise ValueError("storage value has the wrong concrete type")
+    return SessionRecord.model_validate(value.model_dump(mode="python"))
+
+
 class DocumentStoreTransaction(Protocol):
     async def get(
         self, *, collection: str, document_id: str
@@ -141,6 +149,7 @@ class DocumentStoreTransaction(Protocol):
         collection: str,
         filters: Mapping[str, object] | None = None,
         order_by: tuple[str, ...] = (),
+        start_after: Mapping[str, object] | None = None,
         limit: int | None = None,
     ) -> tuple[dict[str, object], ...]: ...
 
@@ -156,6 +165,7 @@ class DocumentStore(Protocol):
         collection: str,
         filters: Mapping[str, object] | None = None,
         order_by: tuple[str, ...] = (),
+        start_after: Mapping[str, object] | None = None,
         limit: int | None = None,
     ) -> tuple[dict[str, object], ...]: ...
 
@@ -170,6 +180,13 @@ class CloudTask:
     schedule_at: datetime
     body: bytes
     headers: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _RunDeletion:
+    run: RunRecord
+    event_ids: tuple[str, ...]
+    work_item_ids: tuple[str, ...]
 
 
 class CloudTaskClient(Protocol):
@@ -227,13 +244,16 @@ class SignedWorkItemCodec:
         except ValueError as exc:
             raise TaskDeliveryAuthError("task delivery headers are incomplete") from exc
         assert task_name is not None and queue_name is not None
-        expected = "sha256=" + hmac.new(
-            self._secret,
-            _delivery_signature_input(
-                body=body, task_name=task_name, queue_name=queue_name
-            ),
-            "sha256",
-        ).hexdigest()
+        expected = (
+            "sha256="
+            + hmac.new(
+                self._secret,
+                _delivery_signature_input(
+                    body=body, task_name=task_name, queue_name=queue_name
+                ),
+                "sha256",
+            ).hexdigest()
+        )
         if not hmac.compare_digest(signature, expected):
             raise TaskDeliveryAuthError("task delivery signature is invalid")
         try:
@@ -247,6 +267,10 @@ class FirestoreRunRepository:
 
     def __init__(self, store: DocumentStore) -> None:
         self._store = store
+
+    @property
+    def document_store(self) -> DocumentStore:
+        return self._store
 
     async def create(self, submission: RunSubmission) -> CreateRunResult:
         checked = _checked_submission(submission)
@@ -269,14 +293,19 @@ class FirestoreRunRepository:
                         "idempotency key already identifies another request"
                     )
                 run = await self._tx_get_run(
-                    tx, tenant_id=checked.tenant_id, run_id=_require_text(existing, "run_id")
+                    tx,
+                    tenant_id=checked.tenant_id,
+                    run_id=_require_text(existing, "run_id"),
                 )
                 if run is None:
                     raise StorageError("idempotency record has no run")
                 return CreateRunResult(run=run, created=False)
-            if await self._tx_get_run(
-                tx, tenant_id=checked.tenant_id, run_id=checked.run_id
-            ) is not None:
+            if (
+                await self._tx_get_run(
+                    tx, tenant_id=checked.tenant_id, run_id=checked.run_id
+                )
+                is not None
+            ):
                 raise IdempotencyConflictError("run id already exists")
             if (
                 await tx.get(
@@ -313,7 +342,7 @@ class FirestoreRunRepository:
                     "created_at": _timestamp(checked.created_at),
                 },
             )
-            await self._append_event(tx, run)
+            await self._append_event(tx, run, sequence=1)
             return CreateRunResult(run=run, created=True)
 
         return await self._store.transaction(operation)
@@ -346,7 +375,9 @@ class FirestoreRunRepository:
         checked = _checked_claim(request)
 
         async def operation(tx: DocumentStoreTransaction) -> ClaimResult:
-            run = await self._tx_get_run(tx, tenant_id=checked.tenant_id, run_id=checked.run_id)
+            run = await self._tx_get_run(
+                tx, tenant_id=checked.tenant_id, run_id=checked.run_id
+            )
             if run is None:
                 return ClaimResult(disposition=ClaimDisposition.NOT_FOUND, run=None)
             if run.state in TERMINAL_RUN_STATES:
@@ -366,8 +397,9 @@ class FirestoreRunRepository:
                     terminal_at=checked.now,
                     lease=None,
                 )
+                sequence = await self._next_event_sequence(tx, cancelled)
                 await self._save_run(tx, previous=run, changed=cancelled)
-                await self._append_event(tx, cancelled)
+                await self._append_event(tx, cancelled, sequence=sequence)
                 return ClaimResult(
                     disposition=ClaimDisposition.CANCELLATION_REQUESTED,
                     run=cancelled,
@@ -403,8 +435,9 @@ class FirestoreRunRepository:
                     expires_at=expires_at,
                 ),
             )
+            sequence = await self._next_event_sequence(tx, claimed)
             await self._save_run(tx, previous=run, changed=claimed)
-            await self._append_event(tx, claimed)
+            await self._append_event(tx, claimed, sequence=sequence)
             return ClaimResult(disposition=ClaimDisposition.CLAIMED, run=claimed)
 
         return await self._store.transaction(operation)
@@ -413,7 +446,9 @@ class FirestoreRunRepository:
         checked = _checked_renewal(renewal)
 
         async def operation(tx: DocumentStoreTransaction) -> LeaseResult:
-            run = await self._tx_get_run(tx, tenant_id=checked.tenant_id, run_id=checked.run_id)
+            run = await self._tx_get_run(
+                tx, tenant_id=checked.tenant_id, run_id=checked.run_id
+            )
             if run is None:
                 return LeaseResult(disposition=LeaseDisposition.NOT_FOUND, run=None)
             if run.state in TERMINAL_RUN_STATES:
@@ -456,7 +491,9 @@ class FirestoreRunRepository:
         checked = _checked_update(update)
 
         async def operation(tx: DocumentStoreTransaction) -> StateUpdateResult:
-            run = await self._tx_get_run(tx, tenant_id=checked.tenant_id, run_id=checked.run_id)
+            run = await self._tx_get_run(
+                tx, tenant_id=checked.tenant_id, run_id=checked.run_id
+            )
             if run is None:
                 return StateUpdateResult(
                     disposition=WriteDisposition.NOT_FOUND,
@@ -507,6 +544,7 @@ class FirestoreRunRepository:
                 answer=checked.answer,
                 failure_code=checked.failure_code,
             )
+            sequence = await self._next_event_sequence(tx, changed)
             await self._save_run(tx, previous=run, changed=changed)
             await self._write_reflection(
                 tx,
@@ -515,7 +553,7 @@ class FirestoreRunRepository:
                 session_id=run.session_id,
                 run_id=run.run_id,
             )
-            await self._append_event(tx, changed)
+            await self._append_event(tx, changed, sequence=sequence)
             return StateUpdateResult(
                 disposition=WriteDisposition.APPLIED,
                 run=changed,
@@ -531,10 +569,15 @@ class FirestoreRunRepository:
         checked_at = _parse_timestamp(_timestamp(at))
 
         async def operation(tx: DocumentStoreTransaction) -> CancellationResult:
-            run = await self._tx_get_run(tx, tenant_id=checked_tenant, run_id=checked_run)
+            run = await self._tx_get_run(
+                tx, tenant_id=checked_tenant, run_id=checked_run
+            )
             if run is None:
                 return CancellationResult(run=None, changed=False)
-            if run.state in TERMINAL_RUN_STATES or run.cancellation_requested_at is not None:
+            if (
+                run.state in TERMINAL_RUN_STATES
+                or run.cancellation_requested_at is not None
+            ):
                 return CancellationResult(run=run, changed=False)
             if checked_at < run.updated_at:
                 raise ValueError("cancellation time cannot precede the stored update")
@@ -549,10 +592,12 @@ class FirestoreRunRepository:
                 terminal_at=checked_at if immediate else None,
                 lease=None if immediate else run.lease,
             )
+            sequence = await self._next_event_sequence(tx, cancelled)
             await self._save_run(tx, previous=run, changed=cancelled)
             await self._append_event(
                 tx,
                 cancelled,
+                sequence=sequence,
                 message=(None if immediate else "Run cancellation was requested."),
             )
             return CancellationResult(run=cancelled, changed=True)
@@ -564,10 +609,14 @@ class FirestoreRunRepository:
         checked_run = _scope_id(run_id)
 
         async def operation(tx: DocumentStoreTransaction) -> bool:
-            run = await self._tx_get_run(tx, tenant_id=checked_tenant, run_id=checked_run)
+            run = await self._tx_get_run(
+                tx, tenant_id=checked_tenant, run_id=checked_run
+            )
             if run is None:
                 return False
-            return await self._delete_run_in_tx(tx, run=run)
+            deletion = await self._read_run_deletion(tx, run=run)
+            await self._apply_run_deletion(tx, deletion=deletion)
+            return True
 
         return await self._store.transaction(operation)
 
@@ -583,19 +632,25 @@ class FirestoreRunRepository:
                     "session_id": checked_session,
                 },
             )
-            deleted = 0
-            for row in runs:
-                deleted += int(await self._delete_run_in_tx(tx, run=_decode_required_run(row)))
-            await tx.delete(
-                collection=_SESSIONS,
-                document_id=_document_id(checked_tenant, checked_session),
-            )
-            await _delete_documents(
+            deletions = [
+                await self._read_run_deletion(tx, run=_decode_required_run(row))
+                for row in runs
+            ]
+            reflection_ids = await _document_ids(
                 tx,
                 collection=_REFLECTIONS,
                 filters={"tenant_id": checked_tenant, "session_id": checked_session},
             )
-            return deleted
+            for deletion in deletions:
+                await self._apply_run_deletion(tx, deletion=deletion)
+            await tx.delete(
+                collection=_SESSIONS,
+                document_id=_document_id(checked_tenant, checked_session),
+            )
+            await _delete_document_ids(
+                tx, collection=_REFLECTIONS, document_ids=reflection_ids
+            )
+            return len(deletions)
 
         return await self._store.transaction(operation)
 
@@ -607,16 +662,25 @@ class FirestoreRunRepository:
                 collection=_RUNS,
                 filters={"tenant_id": checked_tenant},
             )
-            deleted = 0
-            for row in runs:
-                deleted += int(await self._delete_run_in_tx(tx, run=_decode_required_run(row)))
-            await _delete_documents(
+            deletions = [
+                await self._read_run_deletion(tx, run=_decode_required_run(row))
+                for row in runs
+            ]
+            session_ids = await _document_ids(
                 tx, collection=_SESSIONS, filters={"tenant_id": checked_tenant}
             )
-            await _delete_documents(
+            reflection_ids = await _document_ids(
                 tx, collection=_REFLECTIONS, filters={"tenant_id": checked_tenant}
             )
-            return deleted
+            for deletion in deletions:
+                await self._apply_run_deletion(tx, deletion=deletion)
+            await _delete_document_ids(
+                tx, collection=_SESSIONS, document_ids=session_ids
+            )
+            await _delete_document_ids(
+                tx, collection=_REFLECTIONS, document_ids=reflection_ids
+            )
+            return len(deletions)
 
         return await self._store.transaction(operation)
 
@@ -638,46 +702,69 @@ class FirestoreRunRepository:
             document=_run_document(changed),
         )
 
-    async def _delete_run_in_tx(
+    async def _read_run_deletion(
         self, tx: DocumentStoreTransaction, *, run: RunRecord
-    ) -> bool:
+    ) -> _RunDeletion:
+        event_ids = await _document_ids(
+            tx,
+            collection=_EVENTS,
+            filters={"tenant_id": run.tenant_id, "run_id": run.run_id},
+        )
+        work_item_ids = await _document_ids(
+            tx,
+            collection=_WORK_ITEMS,
+            filters={"tenant_id": run.tenant_id, "run_id": run.run_id},
+        )
+        return _RunDeletion(
+            run=run,
+            event_ids=event_ids,
+            work_item_ids=work_item_ids,
+        )
+
+    async def _apply_run_deletion(
+        self, tx: DocumentStoreTransaction, *, deletion: _RunDeletion
+    ) -> None:
+        run = deletion.run
         await tx.delete(
             collection=_IDEMPOTENCY,
             document_id=_document_id(run.tenant_id, run.idempotency_key),
         )
-        await _delete_documents(
-            tx,
-            collection=_EVENTS,
-            filters={"tenant_id": run.tenant_id, "run_id": run.run_id},
+        await _delete_document_ids(
+            tx, collection=_EVENTS, document_ids=deletion.event_ids
         )
         await tx.delete(
             collection=_REFLECTIONS,
             document_id=_document_id(run.tenant_id, run.session_id, run.run_id),
         )
-        await _delete_documents(
-            tx,
-            collection=_WORK_ITEMS,
-            filters={"tenant_id": run.tenant_id, "run_id": run.run_id},
+        await _delete_document_ids(
+            tx, collection=_WORK_ITEMS, document_ids=deletion.work_item_ids
         )
-        return await tx.delete(
+        await tx.delete(
             collection=_RUNS,
             document_id=_document_id(run.tenant_id, run.run_id),
         )
+
+    async def _next_event_sequence(
+        self, tx: DocumentStoreTransaction, run: RunRecord
+    ) -> int:
+        rows = await tx.list(
+            collection=_EVENTS,
+            filters={"tenant_id": run.tenant_id, "run_id": run.run_id},
+            order_by=("sequence",),
+        )
+        return 1 if not rows else _require_int(rows[-1], "sequence") + 1
 
     async def _append_event(
         self,
         tx: DocumentStoreTransaction,
         run: RunRecord,
         *,
+        sequence: int,
         message: str | None = None,
     ) -> None:
-        rows = await tx.list(
-            collection=_EVENTS,
-            filters={"tenant_id": run.tenant_id, "run_id": run.run_id},
-            order_by=("sequence",),
+        failure = (
+            None if run.failure_code is None else public_run_failure(run.failure_code)
         )
-        sequence = 1 if not rows else int(rows[-1]["sequence"]) + 1
-        failure = None if run.failure_code is None else public_run_failure(run.failure_code)
         event = RunEvent(
             sequence=sequence,
             run_id=run.run_id,
@@ -686,7 +773,11 @@ class FirestoreRunRepository:
             occurred_at=run.updated_at,
             message=(
                 message
-                or (failure.message if failure is not None else _RUN_EVENT_MESSAGES[run.state])
+                or (
+                    failure.message
+                    if failure is not None
+                    else _RUN_EVENT_MESSAGES[run.state]
+                )
             ),
             answer=run.answer,
             failure=failure,
@@ -727,6 +818,102 @@ class FirestoreRunRepository:
         )
 
 
+class FirestoreSessionRepository:
+    """Session lifecycle sharing the same document store as authoritative runs."""
+
+    def __init__(
+        self,
+        store: DocumentStore,
+        run_repository: FirestoreRunRepository | None = None,
+    ) -> None:
+        self._store = store
+        self._runs = (
+            FirestoreRunRepository(store) if run_repository is None else run_repository
+        )
+
+    async def put(self, session: SessionRecord) -> bool:
+        checked = _checked_session(session)
+        document_id = _document_id(checked.tenant_id, checked.session_id)
+
+        async def operation(tx: DocumentStoreTransaction) -> bool:
+            existing = await tx.get(collection=_SESSIONS, document_id=document_id)
+            if existing is not None:
+                if _decode_session_document(existing) != checked:
+                    raise StorageConflictError("session id already exists")
+                return False
+            await tx.set(
+                collection=_SESSIONS,
+                document_id=document_id,
+                document=_session_document(checked),
+            )
+            return True
+
+        return await self._store.transaction(operation)
+
+    async def get(
+        self, *, tenant_id: OpaqueId, session_id: OpaqueId
+    ) -> SessionRecord | None:
+        return _decode_session_document(
+            await self._store.get(
+                collection=_SESSIONS,
+                document_id=_document_id(_scope_id(tenant_id), _scope_id(session_id)),
+            )
+        )
+
+    async def list(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        limit: int = 100,
+        after: tuple[datetime, OpaqueId] | None = None,
+    ) -> tuple[SessionRecord, ...]:
+        if type(limit) is not int or not 1 <= limit <= 101:
+            raise ValueError("session list limit must be between 1 and 101")
+        start_after = None
+        if after is not None:
+            if type(after) is not tuple or len(after) != 2:
+                raise ValueError("session cursor must be a timestamp and session id")
+            start_after = {
+                "created_at": _timestamp(after[0]),
+                "session_id": _scope_id(after[1]),
+            }
+        rows = await self._store.list(
+            collection=_SESSIONS,
+            filters={"tenant_id": _scope_id(tenant_id)},
+            order_by=("created_at", "session_id"),
+            start_after=start_after,
+            limit=limit,
+        )
+        return tuple(_decode_required_session(row) for row in rows)
+
+    async def delete_memory(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> int:
+        checked_tenant = _scope_id(tenant_id)
+        checked_session = _scope_id(session_id)
+
+        async def operation(tx: DocumentStoreTransaction) -> int:
+            document_ids = await _document_ids(
+                tx,
+                collection=_REFLECTIONS,
+                filters={
+                    "tenant_id": checked_tenant,
+                    "session_id": checked_session,
+                },
+            )
+            await _delete_document_ids(
+                tx, collection=_REFLECTIONS, document_ids=document_ids
+            )
+            return len(document_ids)
+
+        return await self._store.transaction(operation)
+
+    async def delete(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> bool:
+        existing = await self.get(tenant_id=tenant_id, session_id=session_id)
+        if existing is None:
+            return False
+        await self._runs.delete_session(tenant_id=tenant_id, session_id=session_id)
+        return True
+
+
 class FirestoreEventRepository:
     def __init__(self, store: DocumentStore) -> None:
         self._store = store
@@ -736,7 +923,9 @@ class FirestoreEventRepository:
         checked = RunEvent.model_validate(event.model_dump(mode="python"))
 
         async def operation(tx: DocumentStoreTransaction) -> bool:
-            document_id = _document_id(checked_tenant, checked.run_id, str(checked.sequence))
+            document_id = _document_id(
+                checked_tenant, checked.run_id, str(checked.sequence)
+            )
             existing = await tx.get(collection=_EVENTS, document_id=document_id)
             if existing is not None:
                 if _decode_event_document(existing) != checked:
@@ -762,7 +951,9 @@ class FirestoreEventRepository:
             if run is None:
                 raise StorageConflictError("event run does not exist")
             expected_failure = (
-                None if run.failure_code is None else public_run_failure(run.failure_code)
+                None
+                if run.failure_code is None
+                else public_run_failure(run.failure_code)
             )
             if (
                 checked.state is not run.state
@@ -802,7 +993,7 @@ class FirestoreEventRepository:
         return tuple(
             _decode_event_document(row)
             for row in rows
-            if int(row["sequence"]) > after_sequence
+            if _require_int(row, "sequence") > after_sequence
         )[:limit]
 
 
@@ -833,10 +1024,13 @@ class CloudTasksWorkQueue:
             if (stored.tenant_id, stored.run_id) != (checked.tenant_id, checked.run_id):
                 raise QueueConflictError("work id already identifies another run")
             return EnqueueResult(item=stored, created=False)
-        if await self._store.get(
-            collection=_RUNS,
-            document_id=_document_id(checked.tenant_id, checked.run_id),
-        ) is None:
+        if (
+            await self._store.get(
+                collection=_RUNS,
+                document_id=_document_id(checked.tenant_id, checked.run_id),
+            )
+            is None
+        ):
             raise RunParentNotFoundError("work item run does not exist")
         task_name = self._task_name(checked.work_id)
         body, headers = self._codec.encode(
@@ -861,7 +1055,10 @@ class CloudTasksWorkQueue:
                 task_name=remote.name,
                 queue_name=self._queue_name,
             )
-            if (decoded.tenant_id, decoded.run_id) != (checked.tenant_id, checked.run_id):
+            if (decoded.tenant_id, decoded.run_id) != (
+                checked.tenant_id,
+                checked.run_id,
+            ):
                 raise QueueConflictError(
                     "work id already identifies another run"
                 ) from err
@@ -894,13 +1091,12 @@ class CloudTasksWorkQueue:
             task_name = _require_text(row, "task_name")
             document_id = _require_text(row, "document_id")
             deleted = await self._tasks.delete(name=task_name)
-            if (
-                (deleted or await self._tasks.get(name=task_name) is None)
-                and await self._store.transaction(
-                    lambda tx, document_id=document_id: tx.delete(
-                        collection=_WORK_ITEMS,
-                        document_id=document_id,
-                    )
+            if not deleted and await self._tasks.get(name=task_name) is not None:
+                continue
+
+            if await self._store.transaction(
+                partial(
+                    _delete_document, collection=_WORK_ITEMS, document_id=document_id
                 )
             ):
                 removed += 1
@@ -914,7 +1110,7 @@ class CloudTasksWorkQueue:
         task_name: str | None,
         queue_name: str | None,
     ) -> WorkItem:
-        if queue_name != self._queue_name:
+        if not _same_resource(queue_name, self._queue_name):
             raise TaskDeliveryAuthError("task delivery queue is invalid")
         item = self._codec.decode(
             body=body,
@@ -922,7 +1118,7 @@ class CloudTasksWorkQueue:
             task_name=task_name,
             queue_name=queue_name,
         )
-        if task_name != self._task_name(item.work_id):
+        if not _same_resource(task_name, self._task_name(item.work_id)):
             raise TaskDeliveryAuthError("task delivery name is invalid")
         return item
 
@@ -945,20 +1141,47 @@ def _require_delivery_identity(
         or not queue_name
     ):
         raise ValueError("task and queue names must be non-empty strings")
+    _resource_leaf(task_name)
+    _resource_leaf(queue_name)
 
 
-def _delivery_signature_input(
-    *, body: bytes, task_name: str, queue_name: str
-) -> bytes:
+def _delivery_signature_input(*, body: bytes, task_name: str, queue_name: str) -> bytes:
     return b"\x00".join(
-        (queue_name.encode("utf-8"), task_name.encode("utf-8"), body)
+        (
+            _resource_leaf(queue_name).encode("utf-8"),
+            _resource_leaf(task_name).encode("utf-8"),
+            body,
+        )
     )
+
+
+def _resource_leaf(name: str) -> str:
+    leaf = name.rsplit("/", 1)[-1]
+    if not leaf:
+        raise ValueError("resource name must end with a non-empty id")
+    return leaf
+
+
+def _same_resource(received: str | None, expected: str) -> bool:
+    try:
+        return received is not None and _resource_leaf(received) == _resource_leaf(
+            expected
+        )
+    except ValueError:
+        return False
 
 
 def _require_text(document: Mapping[str, object], field: str) -> str:
     value = document.get(field)
     if type(value) is not str:
         raise StorageError(f"{field} is not stored as text")
+    return value
+
+
+def _require_int(document: Mapping[str, object], field: str) -> int:
+    value = document.get(field)
+    if type(value) is not int:
+        raise StorageError(f"{field} is not stored as an integer")
     return value
 
 
@@ -975,6 +1198,42 @@ def _run_document(run: RunRecord) -> dict[str, object]:
         "updated_at": _timestamp(run.updated_at),
         "payload": run.model_dump_json(exclude_none=True),
     }
+
+
+def _session_document(session: SessionRecord) -> dict[str, object]:
+    return {
+        "document_id": _document_id(session.tenant_id, session.session_id),
+        "tenant_id": session.tenant_id,
+        "session_id": session.session_id,
+        "created_at": _timestamp(session.created_at),
+        "updated_at": _timestamp(session.updated_at),
+        "payload": session.model_dump_json(exclude_none=True),
+    }
+
+
+def _decode_session_document(
+    document: Mapping[str, object] | None,
+) -> SessionRecord | None:
+    if document is None:
+        return None
+    try:
+        session = SessionRecord.model_validate_json(_require_text(document, "payload"))
+    except ValueError as exc:
+        raise StorageError("stored session failed validation") from exc
+    if (
+        _require_text(document, "tenant_id") != session.tenant_id
+        or _require_text(document, "session_id") != session.session_id
+        or _parse_timestamp(_require_text(document, "created_at")) != session.created_at
+        or _parse_timestamp(_require_text(document, "updated_at")) != session.updated_at
+    ):
+        raise StorageError("indexed session fields disagree with payload")
+    return session
+
+
+def _decode_required_session(document: Mapping[str, object]) -> SessionRecord:
+    session = _decode_session_document(document)
+    assert session is not None
+    return session
 
 
 def _decode_run_document(document: Mapping[str, object] | None) -> RunRecord | None:
@@ -1019,7 +1278,9 @@ def _decode_run_document(document: Mapping[str, object] | None) -> RunRecord | N
             _require_text(document, "tenant_id"),
             _require_text(document, "run_id"),
             _require_text(document, "session_id"),
-            checked.state.value if document.get("state") is None else _require_text(document, "state"),
+            checked.state.value
+            if document.get("state") is None
+            else _require_text(document, "state"),
             _require_text(document, "idempotency_key"),
             _require_text(document, "created_at"),
             _require_text(document, "updated_at"),
@@ -1069,7 +1330,7 @@ def _decode_event_document(document: Mapping[str, object]) -> RunEvent:
         raise StorageError("stored event failed validation") from exc
     if (
         _require_text(document, "run_id") != event.run_id
-        or int(document["sequence"]) != event.sequence
+        or _require_int(document, "sequence") != event.sequence
         or _parse_timestamp(_require_text(document, "occurred_at")) != event.occurred_at
     ):
         raise StorageError("indexed event fields disagree with payload")
@@ -1094,14 +1355,30 @@ def _decode_work_document(document: Mapping[str, object]) -> WorkItem:
         raise StorageError("stored work item failed validation") from exc
 
 
-async def _delete_documents(
+async def _document_ids(
     tx: DocumentStoreTransaction,
     *,
     collection: str,
     filters: Mapping[str, object],
+) -> tuple[str, ...]:
+    rows = await tx.list(collection=collection, filters=filters)
+    return tuple(_require_text(row, "document_id") for row in rows)
+
+
+async def _delete_document_ids(
+    tx: DocumentStoreTransaction,
+    *,
+    collection: str,
+    document_ids: tuple[str, ...],
 ) -> None:
-    for row in await tx.list(collection=collection, filters=filters):
-        await tx.delete(collection=collection, document_id=_require_text(row, "document_id"))
+    for document_id in document_ids:
+        await tx.delete(collection=collection, document_id=document_id)
+
+
+async def _delete_document(
+    tx: DocumentStoreTransaction, *, collection: str, document_id: str
+) -> bool:
+    return await tx.delete(collection=collection, document_id=document_id)
 
 
 def _header_value(headers: tuple[tuple[str, str], ...], name: str) -> str | None:
@@ -1118,6 +1395,7 @@ __all__ = [
     "DocumentStoreTransaction",
     "FirestoreEventRepository",
     "FirestoreRunRepository",
+    "FirestoreSessionRepository",
     "SignedWorkItemCodec",
     "TaskDeliveryAuthError",
 ]

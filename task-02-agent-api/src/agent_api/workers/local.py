@@ -135,7 +135,7 @@ class LocalWorker:
         await self.process(item)
         return True
 
-    async def process(self, item: WorkItem) -> None:
+    async def process(self, item: WorkItem) -> bool:
         permit: ExecutionPermit | None = None
         if self._limiter is not None:
             permit = await self._limiter.acquire_execution(
@@ -147,10 +147,10 @@ class LocalWorker:
             if permit is None:
                 self._observe_lease(item, "blocked")
                 self._observe_work(item, "quota_blocked")
-                return
+                return False
             self._observe_lease(item, "acquired")
         try:
-            await self._process_admitted(item, permit)
+            return await self._process_admitted(item, permit)
         finally:
             if permit is not None:
                 assert self._limiter is not None
@@ -159,7 +159,7 @@ class LocalWorker:
 
     async def _process_admitted(
         self, item: WorkItem, permit: ExecutionPermit | None
-    ) -> None:
+    ) -> bool:
         claim = await self._repository.claim(
             ClaimRequest(
                 tenant_id=item.tenant_id,
@@ -182,23 +182,25 @@ class LocalWorker:
                 else "not_found",
             )
             await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
-            return
+            return True
         if claim.disposition is ClaimDisposition.CANCELLATION_REQUESTED:
             self._observe_work(item, "cancelled")
             if run is not None and run.state in TERMINAL_RUN_STATES:
                 await self._observe_terminal(run, usage=None)
                 await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
-            return
+                return True
+            return False
         if claim.disposition in {
             ClaimDisposition.ALREADY_CLAIMED,
             ClaimDisposition.BUSY,
             ClaimDisposition.LEASE_UNAVAILABLE,
         }:
             self._observe_work(item, "busy")
-            return
+            return False
         assert run is not None
         self._observe_work(item, "claimed")
         await self._execute(item, run, permit)
+        return True
 
     async def run_forever(self, *, poll_interval: float = 1.0) -> None:
         while not self._stop.is_set():

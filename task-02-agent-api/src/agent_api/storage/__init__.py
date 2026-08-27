@@ -9,6 +9,7 @@ from .cloud import (
     DocumentStoreTransaction,
     FirestoreEventRepository,
     FirestoreRunRepository,
+    FirestoreSessionRepository,
     SignedWorkItemCodec,
     TaskDeliveryAuthError,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "DocumentStoreTransaction",
     "FirestoreEventRepository",
     "FirestoreRunRepository",
+    "FirestoreSessionRepository",
     "MigrationError",
     "SQLiteAuditRepository",
     "SQLiteEventRepository",
