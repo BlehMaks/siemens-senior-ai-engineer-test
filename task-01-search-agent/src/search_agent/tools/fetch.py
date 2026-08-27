@@ -73,6 +73,26 @@ class FetchedDocument:
     body: bytes
 
 
+def _validated_fetched_document(value: object) -> FetchedDocument:
+    """Copy a fetched value with base operations before byte accounting or parsing."""
+
+    if (
+        type(value) is not FetchedDocument
+        or type(value.canonical_url) is not str
+        or type(value.content_type) is not str
+        or not isinstance(value.body, bytes)
+    ):
+        raise TypeError("fetch port returned an invalid document")
+    body = bytes.__getitem__(value.body, slice(None))
+    if type(body) is not bytes:
+        raise TypeError("fetch port returned an invalid body")
+    return FetchedDocument(
+        canonical_url=value.canonical_url,
+        content_type=value.content_type,
+        body=body,
+    )
+
+
 def create_fetch_client(
     *,
     connect_timeout: float = 5.0,

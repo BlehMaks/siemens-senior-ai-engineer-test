@@ -541,6 +541,29 @@ async def test_actual_body_bytes_are_charged_beyond_the_page_reservation() -> No
     assert result.usage.raw_bytes_reserved == 64
 
 
+class _LyingBytes(bytes):
+    def __len__(self) -> int:
+        return 1
+
+
+@pytest.mark.asyncio
+async def test_bytes_subclass_cannot_forge_body_accounting() -> None:
+    body = _LyingBytes(SOURCE_TEXT.encode() + (b" " * 1024))
+    fetched = FetchedDocument(
+        canonical_url=SOURCE_URL,
+        content_type="text/html",
+        body=body,
+    )
+
+    result = await _run(
+        _runner(fetcher=_Fetcher({SOURCE_URL: fetched}), reservation=64),
+        _budget(max_raw_bytes=64, max_decoded_bytes=64),
+    )
+
+    assert bytes.__len__(body) > 64
+    assert result.snapshot.failure_reason is FailureReason.BUDGET_EXHAUSTED
+
+
 @pytest.mark.asyncio
 async def test_wall_time_budget_is_checked_after_await() -> None:
     current = [0.0]
@@ -605,6 +628,23 @@ async def test_sync_extractor_is_rejected_before_unbounded_work_starts() -> None
 
     assert result.snapshot.failure_reason is FailureReason.VALIDATION_FAILED
     assert called is False
+
+
+@pytest.mark.asyncio
+async def test_extract_property_is_rejected_without_descriptor_access() -> None:
+    accesses = 0
+
+    class PropertyExtractor:
+        @property
+        def extract(self) -> object:
+            nonlocal accesses
+            accesses += 1
+            raise AssertionError("descriptor must not execute")
+
+    result = await _run(_runner(extractor=cast(ExtractionPort, PropertyExtractor())))
+
+    assert result.snapshot.failure_reason is FailureReason.VALIDATION_FAILED
+    assert accesses == 0
 
 
 class _CountingClock:
@@ -785,6 +825,57 @@ async def test_provider_metadata_cannot_bypass_global_budgets(
     result = await _run(_runner(provider=provider), budget)
 
     assert result.snapshot.failure_reason is FailureReason.BUDGET_EXHAUSTED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attempt_count", [1.5, True, "2"])
+async def test_constructed_provider_metadata_cannot_corrupt_usage(
+    attempt_count: object,
+) -> None:
+    class ConstructedMetadataProvider:
+        async def generate_structured(
+            self,
+            *,
+            messages: tuple[ProviderMessage, ...],
+            response_model: type[BaseModel],
+            temperature: float = 0.0,
+        ) -> ProviderResult:
+            del messages, response_model, temperature
+            return ProviderResult(
+                response=_answer(_hit(), _document()),
+                metadata=ProviderMetadata.model_construct(
+                    provider_name="hostile",
+                    model_name="hostile",
+                    attempt_count=cast(int, attempt_count),
+                    prompt_eval_count=0,
+                    eval_count=0,
+                ),
+            )
+
+    budget = _budget()
+    result = await _run(
+        _runner(provider=cast(_Provider, ConstructedMetadataProvider())), budget
+    )
+
+    assert result.snapshot.failure_reason is FailureReason.VALIDATION_FAILED
+    assert type(result.usage.model_attempts) is int
+    assert (
+        result.usage.model_attempts
+        <= budget.max_model_calls * budget.max_attempts_per_model_call
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_attempt_limit_is_inclusive() -> None:
+    exact = await _run(
+        _runner(provider=_Provider(_answer(_hit(), _document()), attempt_count=6))
+    )
+    over = await _run(
+        _runner(provider=_Provider(_answer(_hit(), _document()), attempt_count=7))
+    )
+
+    assert exact.snapshot.status is RunStatus.COMPLETED
+    assert over.snapshot.failure_reason is FailureReason.BUDGET_EXHAUSTED
 
 
 @pytest.mark.asyncio

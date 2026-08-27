@@ -12,7 +12,7 @@ from enum import StrEnum
 
 from trafilatura import bare_extraction
 
-from .fetch import FetchedDocument
+from .fetch import FetchedDocument, _validated_fetched_document
 
 
 class ExtractionFailureReason(StrEnum):
@@ -50,8 +50,9 @@ class LocalExtractor:
                 raise ValueError(f"{name} must be a positive integer")
 
     def extract(self, document: FetchedDocument) -> ExtractedDocument:
+        document = _validated_fetched_document(document)
         body = document.body
-        if not isinstance(body, bytes) or b"\x00" in body:
+        if b"\x00" in body:
             raise ExtractionError(
                 ExtractionFailureReason.MALFORMED_CONTENT,
                 "fetched content is malformed",
@@ -179,6 +180,13 @@ class AsyncLocalExtractor:
     extractor: LocalExtractor = field(default_factory=LocalExtractor)
 
     async def extract(self, document: FetchedDocument) -> ExtractedDocument:
+        try:
+            document = _validated_fetched_document(document)
+        except TypeError:
+            raise ExtractionError(
+                ExtractionFailureReason.MALFORMED_CONTENT,
+                "fetched content is malformed",
+            ) from None
         if len(document.body) > self.extractor.max_input_bytes:
             raise ExtractionError(
                 ExtractionFailureReason.INPUT_TOO_LARGE,
@@ -210,19 +218,42 @@ class AsyncLocalExtractor:
             if process.returncode is None:
                 with suppress(ProcessLookupError):
                     process.kill()
-                await process.wait()
+                reap_task = asyncio.create_task(process.wait())
+                while not reap_task.done():
+                    try:
+                        await asyncio.shield(reap_task)
+                    except asyncio.CancelledError:
+                        continue
+                with suppress(Exception):
+                    reap_task.result()
             raise
         if process.returncode != 0:
             raise ExtractionError(
                 ExtractionFailureReason.MALFORMED_CONTENT,
                 "content extraction process failed",
             )
-        return _decode_worker_result(stdout)
+        return _decode_worker_result(
+            stdout,
+            expected_url=document.canonical_url,
+            max_output_chars=self.extractor.max_output_chars,
+        )
 
 
-def _decode_worker_result(payload: bytes) -> ExtractedDocument:
+def _decode_worker_result(
+    payload: bytes, *, expected_url: str, max_output_chars: int
+) -> ExtractedDocument:
     try:
-        result = json.loads(payload)
+        if not isinstance(payload, bytes):
+            raise ValueError
+        rendered = bytes.__getitem__(payload, slice(None))
+        if type(rendered) is not bytes:
+            raise ValueError
+        if bytes.__len__(rendered) > max_output_chars * 12 + 4096:
+            raise ExtractionError(
+                ExtractionFailureReason.OUTPUT_TOO_LARGE,
+                "content extraction process output exceeds the limit",
+            )
+        result = json.loads(rendered)
         if not isinstance(result, dict) or set(result) not in (
             {"ok", "reason"},
             {"ok", "canonical_url", "title", "text"},
@@ -238,8 +269,22 @@ def _decode_worker_result(payload: bytes) -> ExtractedDocument:
             type(canonical_url) is not str
             or (title is not None and type(title) is not str)
             or type(text) is not str
+            or canonical_url != expected_url
         ):
             raise ValueError
+        text = text.strip()
+        if title is not None:
+            title = title.strip() or None
+        if not text:
+            raise ExtractionError(
+                ExtractionFailureReason.NO_CONTENT,
+                "content extraction process returned no content",
+            )
+        if len(text) + (len(title) if title is not None else 0) > max_output_chars:
+            raise ExtractionError(
+                ExtractionFailureReason.OUTPUT_TOO_LARGE,
+                "content extraction process output exceeds the limit",
+            )
         return ExtractedDocument(
             canonical_url=canonical_url,
             title=title,

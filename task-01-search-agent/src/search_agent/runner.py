@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from numbers import Real
-from typing import Protocol, TypeVar
+from typing import Protocol, TypeVar, cast
 
 from pydantic import Field, ValidationError, model_validator
 
@@ -42,6 +42,7 @@ from .providers import (
     ProviderMessage,
     ProviderMetadata,
     ProviderResponseError,
+    ProviderResult,
     StructuredChatProvider,
 )
 from .state import RunSnapshot, RunStateGraph, RunStatus
@@ -52,6 +53,7 @@ from .tools import (
     FetchError,
     SearchFailure,
 )
+from .tools.fetch import _validated_fetched_document
 
 _DEFAULT_FETCH_RESERVATION_BYTES = 2 * 1024 * 1024
 _SYNTHESIS_SYSTEM_PROMPT = (
@@ -79,6 +81,8 @@ class FetchPort(Protocol):
 
 
 class ExtractionPort(Protocol):
+    """Cooperative async port; implementations must not block the event loop."""
+
     async def extract(self, document: FetchedDocument) -> ExtractedDocument: ...
 
 
@@ -281,9 +285,10 @@ class _Ledger:
         metadata: ProviderMetadata,
         response_text: str,
     ) -> None:
+        checked_metadata = _validated_provider_metadata(metadata)
         estimated_response_tokens = _token_upper_bound(response_text)
         observed_tokens = reserved_tokens + estimated_response_tokens
-        attempts = metadata.attempt_count
+        attempts = checked_metadata.attempt_count
         if not 1 <= attempts <= self.budget.max_attempts_per_model_call:
             raise _BudgetExceeded
         self.model_attempts = _consume(
@@ -291,8 +296,8 @@ class _Ledger:
             attempts - 1,
             self.budget.max_model_calls * self.budget.max_attempts_per_model_call,
         )
-        prompt_tokens = metadata.prompt_eval_count
-        response_tokens = metadata.eval_count
+        prompt_tokens = checked_metadata.prompt_eval_count
+        response_tokens = checked_metadata.eval_count
         if (
             isinstance(prompt_tokens, int)
             and prompt_tokens >= 0
@@ -518,7 +523,7 @@ class ResearchRunner:
         outcome = await self._await_boundary(
             lambda: self.planner.plan_with_metadata(request), ledger
         )
-        if not isinstance(outcome, PlanningOutcome):
+        if type(outcome) is not PlanningOutcome:
             raise ProviderResponseError("planner returned an invalid decision")
         decision = validate_planning_decision(
             request=request,
@@ -579,8 +584,7 @@ class ResearchRunner:
                 fetched = await self._await_boundary(
                     partial(self.fetcher.fetch, str(hit.url)), ledger
                 )
-                if not isinstance(fetched, FetchedDocument):
-                    raise TypeError("fetch port returned an invalid document")
+                fetched = _validated_fetched_document(fetched)
                 ledger.account_page_body(len(fetched.body))
                 ledger.consume_decoded(len(fetched.body))
                 extracted = await self._await_boundary(
@@ -611,9 +615,22 @@ class ResearchRunner:
         return records
 
     async def _extract(self, document: FetchedDocument) -> ExtractedDocument:
-        if not inspect.iscoroutinefunction(self.extractor.extract):
+        try:
+            extract = inspect.getattr_static(type(self.extractor), "extract")
+            instance_extract = inspect.getattr_static(self.extractor, "extract")
+        except AttributeError:
+            raise _InvalidAdapter from None
+        if (
+            instance_extract is not extract
+            or not inspect.isfunction(extract)
+            or not inspect.iscoroutinefunction(extract)
+        ):
             raise _InvalidAdapter
-        return await self.extractor.extract(document)
+        bound_extract = cast(
+            Callable[[FetchedDocument], Awaitable[ExtractedDocument]],
+            extract.__get__(self.extractor, type(self.extractor)),
+        )
+        return await bound_extract(document)
 
     async def _synthesize(
         self,
@@ -657,6 +674,11 @@ class ResearchRunner:
             ledger,
         )
         try:
+            if (
+                type(result) is not ProviderResult
+                or type(result.response) is not ScopedAnswer
+            ):
+                raise TypeError
             answer = ScopedAnswer.model_validate(
                 result.response.model_dump(mode="python", warnings="error"),
                 strict=True,
@@ -735,3 +757,17 @@ def _clock_value(clock: Callable[[], float]) -> float:
 def _token_upper_bound(text: str) -> int:
     # UTF-8 bytes are a conservative tokenizer-independent accounting unit.
     return len(text.encode("utf-8"))
+
+
+def _validated_provider_metadata(value: object) -> ProviderMetadata:
+    try:
+        if type(value) is not ProviderMetadata:
+            raise TypeError
+        checked = ProviderMetadata.model_validate(
+            value.model_dump(mode="python", warnings="error"), strict=True
+        )
+        if checked != value:
+            raise ValueError
+        return checked
+    except (AttributeError, TypeError, ValidationError, ValueError):
+        raise ProviderResponseError("provider metadata is invalid") from None

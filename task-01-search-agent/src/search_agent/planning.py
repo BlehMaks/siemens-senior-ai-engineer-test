@@ -326,6 +326,7 @@ class AnswerScopePolicy:
         {
             "bypass",
             "disclose",
+            "discard",
             "disregard",
             "execute",
             "exfiltrate",
@@ -338,6 +339,7 @@ class AnswerScopePolicy:
             "run",
             "send",
             "transfer",
+            "upload",
         }
     )
     _CONTROL_TARGETS = frozenset(
@@ -351,11 +353,15 @@ class AnswerScopePolicy:
             "directive",
             "directives",
             "funds",
+            "guardrail",
+            "guardrails",
             "instruction",
             "instructions",
             "money",
             "policy",
             "prompt",
+            "record",
+            "records",
             "restrictions",
             "rules",
             "safeguards",
@@ -384,10 +390,16 @@ class AnswerScopePolicy:
         _reject_forbidden_request(answer.answer_text)
         normalized_answer = _normalized_policy_text(answer.answer_text)
         answer_tokens = frozenset(_POLICY_WORD_PATTERN.findall(normalized_answer))
+        request_tokens = frozenset(
+            _POLICY_WORD_PATTERN.findall(_normalized_policy_text(request))
+        )
+        answer_actions = answer_tokens & cls._CONTROL_ACTIONS
+        answer_targets = answer_tokens & cls._CONTROL_TARGETS
         # Topic padding cannot turn control-language found in a page into an answer.
         if (
-            answer_tokens & cls._CONTROL_ACTIONS
-            and answer_tokens & cls._CONTROL_TARGETS
+            answer_actions
+            and answer_targets
+            and ((answer_actions | answer_targets) - request_tokens)
         ):
             raise PlanningPolicyError("answer contains unrequested instructions")
         for citation in answer.citations:

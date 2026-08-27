@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 
@@ -30,6 +31,11 @@ class BenignString(str):
 class LyingStripString(str):
     def strip(self, chars: str | None = None) -> str:
         return self
+
+
+class LyingBytes(bytes):
+    def __len__(self) -> int:
+        return 1
 
 
 def _document(body: bytes, *, content_type: str = "text/html") -> FetchedDocument:
@@ -126,13 +132,26 @@ async def test_async_local_extractor_runs_in_a_cancellable_process() -> None:
 
 
 @pytest.mark.asyncio
-async def test_async_local_extractor_rejects_oversize_before_spawning() -> None:
+@pytest.mark.parametrize("body", [b"four", LyingBytes(b"four")])
+async def test_async_local_extractor_rejects_oversize_before_spawning(
+    monkeypatch: pytest.MonkeyPatch,
+    body: bytes,
+) -> None:
+    spawned = False
+
+    async def create_process(*args: object, **kwargs: object) -> None:
+        nonlocal spawned
+        del args, kwargs
+        spawned = True
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
     extractor = AsyncLocalExtractor(LocalExtractor(max_input_bytes=3))
 
     with pytest.raises(ExtractionError) as error:
-        await extractor.extract(_document(b"four"))
+        await extractor.extract(_document(body))
 
     assert error.value.reason is ExtractionFailureReason.INPUT_TOO_LARGE
+    assert spawned is False
 
 
 @pytest.mark.asyncio
@@ -140,6 +159,8 @@ async def test_async_local_extractor_reaps_process_when_cancelled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     killed = asyncio.Event()
+    wait_started = asyncio.Event()
+    wait_release = asyncio.Event()
     reaped = asyncio.Event()
 
     class BlockingProcess:
@@ -155,6 +176,8 @@ async def test_async_local_extractor_reaps_process_when_cancelled(
             killed.set()
 
         async def wait(self) -> int:
+            wait_started.set()
+            await wait_release.wait()
             reaped.set()
             return -9
 
@@ -170,11 +193,145 @@ async def test_async_local_extractor_reaps_process_when_cancelled(
     )
     await asyncio.sleep(0)
     task.cancel()
+    await wait_started.wait()
+    wait_release.set()
+    task.cancel()
 
     with pytest.raises(asyncio.CancelledError):
         await task
     assert killed.is_set()
     assert reaped.is_set()
+
+
+def _install_worker_result(
+    monkeypatch: pytest.MonkeyPatch,
+    result: object,
+) -> None:
+    class Process:
+        returncode = 0
+
+        async def communicate(self, payload: bytes) -> tuple[bytes, bytes]:
+            del payload
+            if isinstance(result, bytes):
+                return result, b""
+            return json.dumps(result).encode(), b""
+
+    async def create_process(*args: object, **kwargs: object) -> Process:
+        del args, kwargs
+        return Process()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("worker_result", "reason"),
+    [
+        (
+            {
+                "ok": True,
+                "canonical_url": "https://example.com/report",
+                "title": None,
+                "text": "",
+            },
+            ExtractionFailureReason.NO_CONTENT,
+        ),
+        (
+            {
+                "ok": True,
+                "canonical_url": "https://example.com/report",
+                "title": None,
+                "text": " \n ",
+            },
+            ExtractionFailureReason.NO_CONTENT,
+        ),
+        (
+            {
+                "ok": True,
+                "canonical_url": "https://example.com/report",
+                "title": None,
+                "text": "four",
+            },
+            ExtractionFailureReason.OUTPUT_TOO_LARGE,
+        ),
+        (
+            {
+                "ok": True,
+                "canonical_url": "https://example.com/other",
+                "title": None,
+                "text": "ok",
+            },
+            ExtractionFailureReason.MALFORMED_CONTENT,
+        ),
+        (
+            {
+                "ok": True,
+                "canonical_url": "https://example.com/report",
+                "title": None,
+                "text": 7,
+            },
+            ExtractionFailureReason.MALFORMED_CONTENT,
+        ),
+    ],
+)
+async def test_async_worker_success_is_revalidated(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_result: object,
+    reason: ExtractionFailureReason,
+) -> None:
+    _install_worker_result(monkeypatch, worker_result)
+
+    with pytest.raises(ExtractionError) as error:
+        await AsyncLocalExtractor(LocalExtractor(max_output_chars=3)).extract(
+            _document(b"ok", content_type="text/plain")
+        )
+
+    assert error.value.reason is reason
+
+
+@pytest.mark.asyncio
+async def test_async_worker_combined_output_limit_is_inclusive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact = {
+        "ok": True,
+        "canonical_url": "https://example.com/report",
+        "title": "x",
+        "text": "abc",
+    }
+    _install_worker_result(monkeypatch, exact)
+
+    extracted = await AsyncLocalExtractor(LocalExtractor(max_output_chars=4)).extract(
+        _document(b"ok", content_type="text/plain")
+    )
+    assert extracted.title == "x"
+    assert extracted.text == "abc"
+
+    over = {**exact, "title": "xx"}
+    _install_worker_result(monkeypatch, over)
+    with pytest.raises(ExtractionError) as error:
+        await AsyncLocalExtractor(LocalExtractor(max_output_chars=4)).extract(
+            _document(b"ok", content_type="text/plain")
+        )
+    assert error.value.reason is ExtractionFailureReason.OUTPUT_TOO_LARGE
+
+
+@pytest.mark.asyncio
+async def test_async_worker_stdout_limit_rejects_first_byte_over_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    max_output_chars = 3
+    _install_worker_result(
+        monkeypatch,
+        b"x" * (max_output_chars * 12 + 4097),
+    )
+
+    with pytest.raises(ExtractionError) as error:
+        await AsyncLocalExtractor(
+            LocalExtractor(max_output_chars=max_output_chars)
+        ).extract(_document(b"ok", content_type="text/plain"))
+
+    assert error.value.reason is ExtractionFailureReason.OUTPUT_TOO_LARGE
 
 
 def test_plain_text_requires_utf8() -> None:
