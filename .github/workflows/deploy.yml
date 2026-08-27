@@ -105,6 +105,7 @@ jobs:
       TF_VAR_worker_service_account_email: ${{ vars.GCP_WORKER_SERVICE_ACCOUNT }}
       TF_VAR_tasks_service_account_email: ${{ vars.GCP_TASKS_SERVICE_ACCOUNT }}
       TF_VAR_deployer_service_account_email: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+      TF_VAR_secret_ids: ${{ vars.GCP_SECRET_IDS }}
       TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
       BUDGET_NOTIFICATION_EMAILS: ${{ vars.GCP_BUDGET_NOTIFICATION_EMAILS }}
       TF_VAR_ingress_mode: baseline
@@ -151,13 +152,27 @@ jobs:
             TF_VAR_api_service_account_email \
             TF_VAR_worker_service_account_email \
             TF_VAR_tasks_service_account_email \
-            TF_VAR_deployer_service_account_email
+            TF_VAR_deployer_service_account_email \
+            TF_VAR_secret_ids
           do
             if [[ -z "${!variable}" ]]; then
               echo "$variable is required" >&2
               exit 1
             fi
           done
+
+      - name: Validate secret container IDs
+        shell: bash
+        run: |
+          secret_ids=$(jq -cer '
+            if type == "object"
+              and (keys | sort) == ["api_key_pepper", "task_signing_hmac"]
+              and all(.[]; type == "string" and length > 0)
+            then .
+            else error("expected exactly two non-empty secret container IDs")
+            end
+          ' <<< "$TF_VAR_secret_ids")
+          echo "TF_VAR_secret_ids=$secret_ids" >> "$GITHUB_ENV"
 
       - name: Validate optional budget recipients
         shell: bash
@@ -209,24 +224,6 @@ jobs:
         env:
           REGISTRY_HOST: ${{ steps.registry.outputs.host }}
         run: gcloud auth configure-docker "$REGISTRY_HOST" --quiet
-
-      - name: Require externally injected secret versions
-        shell: bash
-        run: |
-          environment_root=task-03-deployment-strategy/terraform/environments/dev
-          for key in api_key_pepper task_signing_hmac
-          do
-            secret=$(terraform -chdir="$environment_root" output -json managed_services | jq -r ".secret_containers.$key")
-            version=$(gcloud secrets versions list "$secret" \
-              --project "$TF_VAR_project_id" \
-              --filter='state=ENABLED' \
-              --limit=1 \
-              --format='value(name)')
-            if [[ -z "$version" ]]; then
-              echo "$secret has no enabled version; inject it out of band before deployment" >&2
-              exit 1
-            fi
-          done
 
       - name: Push the exact tested image
         id: image

@@ -5,6 +5,7 @@ from pathlib import Path
 TASK_ROOT = Path(__file__).resolve().parents[1]
 TERRAFORM_ROOT = TASK_ROOT / "terraform"
 RUN_SERVICES_MAIN = TERRAFORM_ROOT / "modules" / "run_services" / "main.tf"
+RUN_SERVICES_OUTPUTS = TERRAFORM_ROOT / "modules" / "run_services" / "outputs.tf"
 RUN_SERVICES_VARIABLES = TERRAFORM_ROOT / "modules" / "run_services" / "variables.tf"
 DEV_VARIABLES = TERRAFORM_ROOT / "environments" / "dev" / "variables.tf"
 INGRESS_POLICY_TEST = (
@@ -32,24 +33,22 @@ def read(path: Path) -> str:
 
 def test_run_services_keeps_worker_private_and_oidc_bound() -> None:
     source = read(RUN_SERVICES_MAIN)
+    outputs = read(RUN_SERVICES_OUTPUTS)
 
     assert source.count("invoker_iam_disabled = false") == 2
     assert "ingress              = var.worker_ingress" in source
+    assert "google_cloud_run_v2_service_iam_" not in source
+    assert "google_cloud_tasks_queue_iam_" not in source
+    assert "google_service_account_iam_" not in source
+    assert 'worker_invoker_role            = "roles/run.invoker"' in outputs
+    assert 'api_queue_enqueuer_role        = "roles/cloudtasks.enqueuer"' in outputs
     assert (
-        'resource "google_cloud_run_v2_service_iam_binding" "worker_invoker"' in source
+        'tasks_service_agent_token_role = "roles/iam.serviceAccountTokenCreator"'
+        in outputs
     )
-    assert 'role     = "roles/run.invoker"' in source
-    assert 'members  = ["serviceAccount:${var.tasks_service_account_email}"]' in source
-    assert 'role     = "roles/cloudtasks.enqueuer"' in source
-    assert 'member   = "serviceAccount:${var.api_service_account_email}"' in source
-    assert 'role               = "roles/iam.serviceAccountTokenCreator"' in source
     assert "service_account_email = var.tasks_service_account_email" in source
     assert "audience              = google_cloud_run_v2_service.worker.uri" in source
-    assert (
-        'for_each = var.api_allow_unauthenticated ? toset(["baseline"]) : toset([])'
-        in source
-    )
-    assert source.count('member   = "allUsers"') == 1
+    assert "allUsers" not in source
     assert "allAuthenticatedUsers" not in source
 
 

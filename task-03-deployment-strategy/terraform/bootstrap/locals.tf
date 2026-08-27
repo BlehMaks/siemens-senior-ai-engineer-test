@@ -1,8 +1,10 @@
 locals {
   required_services = toset([
+    "cloudtasks.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
+    "run.googleapis.com",
     "secretmanager.googleapis.com",
     "serviceusage.googleapis.com",
     "sts.googleapis.com",
@@ -27,6 +29,16 @@ locals {
   deployer_project_permissions = toset([
     "billing.resourcebudgets.read",
     "billing.resourcebudgets.write",
+    "cloudtasks.locations.get",
+    "cloudtasks.locations.list",
+    "cloudtasks.operations.get",
+    "cloudtasks.queues.create",
+    "cloudtasks.queues.delete",
+    "cloudtasks.queues.get",
+    "cloudtasks.queues.list",
+    "cloudtasks.queues.pause",
+    "cloudtasks.queues.resume",
+    "cloudtasks.queues.update",
     "datastore.databases.create",
     "datastore.databases.delete",
     "datastore.databases.getMetadata",
@@ -42,23 +54,15 @@ locals {
     "run.services.delete",
     "run.services.get",
     "run.services.getIamPolicy",
-    "run.services.setIamPolicy",
     "run.services.update",
   ])
 
   deployer_project_roles = toset([
     "roles/artifactregistry.admin",
-    "roles/cloudtasks.queueAdmin",
     "roles/datastore.indexAdmin",
     "roles/logging.configWriter",
     "roles/monitoring.notificationChannelEditor",
     "roles/serviceusage.serviceUsageAdmin",
-  ])
-
-  tasks_policy_permissions = toset([
-    "iam.serviceAccounts.get",
-    "iam.serviceAccounts.getIamPolicy",
-    "iam.serviceAccounts.setIamPolicy",
   ])
 
   identities = {

@@ -7,6 +7,7 @@ TASK_ROOT = Path(__file__).resolve().parents[1]
 CONTAINER = TASK_ROOT / "src" / "deployment_strategy" / "container.py"
 RUN_SERVICES = TASK_ROOT / "terraform" / "modules" / "run_services" / "main.tf"
 RUN_OUTPUTS = TASK_ROOT / "terraform" / "modules" / "run_services" / "outputs.tf"
+BOOTSTRAP = TASK_ROOT / "terraform" / "bootstrap" / "main.tf"
 
 
 def read(path: Path) -> str:
@@ -39,13 +40,13 @@ def test_terraform_and_container_share_the_exact_cloud_configuration_contract() 
 
 
 def test_runtime_identities_have_only_the_queue_operations_the_code_uses() -> None:
-    terraform = read(RUN_SERVICES)
+    terraform = read(BOOTSTRAP)
     outputs = read(RUN_OUTPUTS)
 
-    assert 'role     = "roles/cloudtasks.enqueuer"' in terraform
-    assert 'role     = "roles/cloudtasks.viewer"' in terraform
-    assert 'role     = "roles/cloudtasks.taskDeleter"' in terraform
-    assert "var.api_service_account_email" in terraform
-    assert "var.worker_service_account_email" in terraform
+    assert 'role   = "roles/cloudtasks.enqueuer"' in terraform
+    assert 'role   = "roles/cloudtasks.viewer"' in terraform
+    assert 'role   = "roles/cloudtasks.taskDeleter"' in terraform
+    assert 'module.identity["api"].email' in terraform
+    assert 'module.identity["worker"].email' in terraform
     assert 'task_viewer_role               = "roles/cloudtasks.viewer"' in outputs
     assert 'task_deleter_role              = "roles/cloudtasks.taskDeleter"' in outputs

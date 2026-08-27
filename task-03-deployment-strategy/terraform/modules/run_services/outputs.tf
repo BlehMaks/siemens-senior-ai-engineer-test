@@ -1,17 +1,17 @@
 output "api_service" {
   description = "Bounded API Cloud Run service contract."
   value = {
-    name                   = google_cloud_run_v2_service.api.name
-    uri                    = google_cloud_run_v2_service.api.uri
-    ingress                = google_cloud_run_v2_service.api.ingress
-    default_uri_disabled   = google_cloud_run_v2_service.api.default_uri_disabled
-    service_account        = google_cloud_run_v2_service.api.template[0].service_account
-    max_instances          = google_cloud_run_v2_service.api.template[0].scaling[0].max_instance_count
-    min_instances          = google_cloud_run_v2_service.api.template[0].scaling[0].min_instance_count
-    concurrency            = google_cloud_run_v2_service.api.template[0].max_instance_request_concurrency
-    timeout                = google_cloud_run_v2_service.api.template[0].timeout
-    public_invoker_enabled = var.api_allow_unauthenticated
-    image                  = local.image
+    name                    = google_cloud_run_v2_service.api.name
+    uri                     = google_cloud_run_v2_service.api.uri
+    ingress                 = google_cloud_run_v2_service.api.ingress
+    default_uri_disabled    = google_cloud_run_v2_service.api.default_uri_disabled
+    service_account         = google_cloud_run_v2_service.api.template[0].service_account
+    max_instances           = google_cloud_run_v2_service.api.template[0].scaling[0].max_instance_count
+    min_instances           = google_cloud_run_v2_service.api.template[0].scaling[0].min_instance_count
+    concurrency             = google_cloud_run_v2_service.api.template[0].max_instance_request_concurrency
+    timeout                 = google_cloud_run_v2_service.api.template[0].timeout
+    public_invoker_required = var.api_allow_unauthenticated
+    image                   = local.image
   }
 }
 
@@ -27,8 +27,8 @@ output "worker_service" {
     concurrency     = google_cloud_run_v2_service.worker.template[0].max_instance_request_concurrency
     timeout         = google_cloud_run_v2_service.worker.template[0].timeout
     dispatch_path   = var.worker_dispatch_path
-    invoker_members = google_cloud_run_v2_service_iam_binding.worker_invoker.members
-    invoker_role    = google_cloud_run_v2_service_iam_binding.worker_invoker.role
+    invoker_members = ["serviceAccount:${var.tasks_service_account_email}"]
+    invoker_role    = "roles/run.invoker"
   }
 }
 
@@ -51,18 +51,18 @@ output "dispatch_queue" {
 }
 
 output "iam_contract" {
-  description = "Least-privilege invocation and enqueue permissions."
+  description = "Bootstrap-owned least-privilege invocation and queue policy expected by this module."
   value = {
-    api_queue_enqueuer_role        = google_cloud_tasks_queue_iam_member.api_enqueuer.role
-    api_queue_enqueuer_member      = google_cloud_tasks_queue_iam_member.api_enqueuer.member
-    task_viewer_members            = sort([for binding in google_cloud_tasks_queue_iam_member.task_viewer : binding.member])
+    api_queue_enqueuer_role        = "roles/cloudtasks.enqueuer"
+    api_queue_enqueuer_member      = "serviceAccount:${var.api_service_account_email}"
+    task_viewer_members            = sort(["serviceAccount:${var.api_service_account_email}", "serviceAccount:${var.worker_service_account_email}"])
     task_viewer_role               = "roles/cloudtasks.viewer"
-    task_deleter_members           = sort([for binding in google_cloud_tasks_queue_iam_member.task_deleter : binding.member])
+    task_deleter_members           = sort(["serviceAccount:${var.api_service_account_email}", "serviceAccount:${var.worker_service_account_email}"])
     task_deleter_role              = "roles/cloudtasks.taskDeleter"
-    worker_invoker_members         = google_cloud_run_v2_service_iam_binding.worker_invoker.members
-    worker_invoker_role            = google_cloud_run_v2_service_iam_binding.worker_invoker.role
-    tasks_service_agent_member     = google_service_account_iam_member.tasks_service_agent_token_creator.member
-    tasks_service_agent_token_role = google_service_account_iam_member.tasks_service_agent_token_creator.role
+    worker_invoker_members         = ["serviceAccount:${var.tasks_service_account_email}"]
+    worker_invoker_role            = "roles/run.invoker"
+    tasks_service_agent_member     = local.tasks_service_agent_member
+    tasks_service_agent_token_role = "roles/iam.serviceAccountTokenCreator"
   }
 }
 

@@ -43,6 +43,7 @@ jobs:
       TF_VAR_worker_service_account_email: ${{ vars.GCP_WORKER_SERVICE_ACCOUNT }}
       TF_VAR_tasks_service_account_email: ${{ vars.GCP_TASKS_SERVICE_ACCOUNT }}
       TF_VAR_deployer_service_account_email: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+      TF_VAR_secret_ids: ${{ vars.GCP_SECRET_IDS }}
       TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
       BUDGET_NOTIFICATION_EMAILS: ${{ vars.GCP_BUDGET_NOTIFICATION_EMAILS }}
       TF_VAR_image_digest: ${{ inputs.image_digest }}
@@ -60,6 +61,35 @@ jobs:
             echo "image_digest must be a sha256 OCI digest" >&2
             exit 1
           fi
+          for variable in \
+            TF_STATE_BUCKET \
+            TF_VAR_project_id \
+            TF_VAR_project_number \
+            TF_VAR_region \
+            TF_VAR_api_service_account_email \
+            TF_VAR_worker_service_account_email \
+            TF_VAR_tasks_service_account_email \
+            TF_VAR_deployer_service_account_email \
+            TF_VAR_secret_ids
+          do
+            if [[ -z "${!variable}" ]]; then
+              echo "$variable is required" >&2
+              exit 1
+            fi
+          done
+
+      - name: Validate secret container IDs
+        shell: bash
+        run: |
+          secret_ids=$(jq -cer '
+            if type == "object"
+              and (keys | sort) == ["api_key_pepper", "task_signing_hmac"]
+              and all(.[]; type == "string" and length > 0)
+            then .
+            else error("expected exactly two non-empty secret container IDs")
+            end
+          ' <<< "$TF_VAR_secret_ids")
+          echo "TF_VAR_secret_ids=$secret_ids" >> "$GITHUB_ENV"
 
       - name: Validate optional budget recipients
         shell: bash
@@ -69,10 +99,6 @@ jobs:
               'if type == "array" and all(.[]; type == "string") then . else error("expected a JSON string array") end' \
               <<< "$BUDGET_NOTIFICATION_EMAILS")
             echo "TF_VAR_budget_notification_emails=$recipients" >> "$GITHUB_ENV"
-          fi
-          if [[ -z "$TF_STATE_BUCKET" ]]; then
-            echo "GCP_TERRAFORM_STATE_BUCKET is required" >&2
-            exit 1
           fi
 
       - name: Obtain a short-lived GCP credential

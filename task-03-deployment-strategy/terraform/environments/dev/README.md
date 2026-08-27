@@ -28,6 +28,9 @@ is committed.
 - Artifact Registry uses immutable tags;
 - bootstrap grants `roles/datastore.user` and resource-scoped
   `roles/secretmanager.secretAccessor` only to the API and worker identities;
+- bootstrap also owns the queue and Cloud Run invoker policies after these
+  deterministic application resources have been created; this stack exposes the
+  expected IAM contract but never edits resource policies;
 - the deployer gets repository-scoped `roles/artifactregistry.writer`;
 - secret containers and the log bucket stay in the configured region;
 - the log bucket keeps 30 days of redacted application logs;

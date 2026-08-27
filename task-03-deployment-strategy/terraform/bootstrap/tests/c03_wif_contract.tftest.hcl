@@ -43,9 +43,10 @@ run "github_wif_plans_in_one_pass" {
   assert {
     condition = alltrue([
       for permission in google_project_iam_custom_role.deployer_application.permissions :
-      !contains(["run.routes.invoke", "run.services.sshRoot"], permission)
+      !contains(["run.routes.invoke", "run.services.sshRoot"], permission) &&
+      !endswith(permission, ".setIamPolicy")
     ])
-    error_message = "The deployer custom role must exclude direct Cloud Run invocation and SSH access."
+    error_message = "The deployer must exclude direct runtime access and every IAM-policy mutation."
   }
 
   assert {
@@ -59,12 +60,44 @@ run "github_wif_plans_in_one_pass" {
   }
 
   assert {
-    condition = google_project_iam_custom_role.tasks_policy.permissions == toset([
-      "iam.serviceAccounts.get",
-      "iam.serviceAccounts.getIamPolicy",
-      "iam.serviceAccounts.setIamPolicy",
-    ])
-    error_message = "The deployer may administer only the IAM policy needed for the tasks identity."
+    condition     = output.runtime_policy.tasks_service_agent_token_role == "roles/iam.serviceAccountTokenCreator"
+    error_message = "The human bootstrap must own the Cloud Tasks token-minting grant."
+  }
+
+  assert {
+    condition     = !output.runtime_policy.enabled && output.runtime_policy.queue_binding_count == 0 && output.runtime_policy.worker_invoker_binding_count == 0
+    error_message = "Runtime policies must wait until the application resources exist."
+  }
+}
+
+run "human_bootstrap_owns_runtime_policies" {
+  command = plan
+
+  plan_options {
+    refresh = false
+  }
+
+  variables {
+    project_id                = "contract-assignment-dev"
+    state_bucket_name         = "contract-assignment-dev-tf-state"
+    enable_github_wif         = false
+    enable_runtime_policy     = true
+    api_allow_unauthenticated = true
+  }
+
+  assert {
+    condition     = output.runtime_policy.api_public_invoker_enabled
+    error_message = "Baseline bootstrap policy must expose only the API invocation boundary."
+  }
+
+  assert {
+    condition     = output.runtime_policy.worker_invoker_binding_count == 1
+    error_message = "Only one bootstrap-owned worker invoker policy is expected."
+  }
+
+  assert {
+    condition     = output.runtime_policy.queue_binding_count == 5
+    error_message = "Bootstrap must apply the five reviewed queue runtime bindings."
   }
 }
 

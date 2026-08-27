@@ -75,16 +75,19 @@ def test_deploy_promotes_the_tested_artifact_by_digest() -> None:
     assert "AGENT_API_TASK_SIGNING_HMAC" not in source
 
 
-def test_remote_state_and_secret_container_guards_fail_closed() -> None:
+def test_remote_state_and_secret_container_inputs_fail_closed() -> None:
     deploy = read(WORKFLOW_ROOT / "deploy.yml")
     plan = read(WORKFLOW_ROOT / "infra-plan.yml")
 
     for source in (deploy, plan):
         assert "-backend-config=bucket=$TF_STATE_BUCKET" in source
         assert "-backend-config=prefix=assessment/dev" in source
+        assert "TF_VAR_secret_ids: ${{ vars.GCP_SECRET_IDS }}" in source
+        assert 'and (keys | sort) == ["api_key_pepper", "task_signing_hmac"]' in source
+        assert "expected exactly two non-empty secret container IDs" in source
 
-    assert "gcloud secrets versions list" in deploy
-    assert "has no enabled version" in deploy
+    assert ".secret_containers." not in deploy
+    assert "gcloud secrets versions list" not in deploy
     assert "terraform init -backend=false" not in deploy
 
 

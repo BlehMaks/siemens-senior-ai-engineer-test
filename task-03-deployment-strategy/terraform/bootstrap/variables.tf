@@ -74,6 +74,18 @@ variable "secret_ids" {
   }
 }
 
+variable "enable_runtime_policy" {
+  description = "Apply runtime service and queue IAM after the application resources exist."
+  type        = bool
+  default     = false
+}
+
+variable "api_allow_unauthenticated" {
+  description = "Grant public API invocation when the post-deployment runtime policy is enabled."
+  type        = bool
+  default     = true
+}
+
 variable "labels" {
   description = "Small set of lowercase labels applied to bootstrap resources."
   type        = map(string)

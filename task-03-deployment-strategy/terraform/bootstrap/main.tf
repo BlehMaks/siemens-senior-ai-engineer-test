@@ -6,6 +6,15 @@ resource "google_project_service" "required" {
   disable_on_destroy = false
 }
 
+resource "google_project_service_identity" "cloud_tasks" {
+  provider = google-beta
+
+  project = var.project_id
+  service = "cloudtasks.googleapis.com"
+
+  depends_on = [google_project_service.required]
+}
+
 resource "google_storage_bucket" "terraform_state" {
   name                        = var.state_bucket_name
   location                    = var.region
@@ -145,7 +154,7 @@ resource "google_project_iam_custom_role" "deployer_application" {
   project     = var.project_id
   role_id     = "${replace(var.system_code, "-", "_")}_${replace(var.environment, "-", "_")}_terraform_deployer"
   title       = "Assessment Terraform deployer"
-  description = "Database, budget, and Cloud Run control-plane permissions missing from safe predefined roles."
+  description = "Database, budget, Cloud Tasks, and Cloud Run lifecycle permissions missing from safe predefined roles."
   permissions = local.deployer_project_permissions
   stage       = "GA"
 
@@ -156,17 +165,6 @@ resource "google_project_iam_member" "deployer_custom_role" {
   project = var.project_id
   role    = google_project_iam_custom_role.deployer_application.name
   member  = "serviceAccount:${module.deployer_identity.email}"
-}
-
-resource "google_project_iam_custom_role" "tasks_policy" {
-  project     = var.project_id
-  role_id     = "${replace(var.system_code, "-", "_")}_${replace(var.environment, "-", "_")}_tasks_policy_admin"
-  title       = "Assessment tasks identity policy administrator"
-  description = "Read and update only the IAM policy of the Cloud Tasks caller identity."
-  permissions = local.tasks_policy_permissions
-  stage       = "GA"
-
-  depends_on = [google_project_service.required]
 }
 
 resource "google_storage_bucket_iam_member" "deployer_state_objects" {
@@ -183,8 +181,59 @@ resource "google_service_account_iam_member" "deployer_runtime_user" {
   member             = "serviceAccount:${module.deployer_identity.email}"
 }
 
-resource "google_service_account_iam_member" "deployer_tasks_policy_admin" {
+resource "google_service_account_iam_member" "tasks_service_agent_token_creator" {
   service_account_id = module.identity["tasks"].name
-  role               = google_project_iam_custom_role.tasks_policy.name
-  member             = "serviceAccount:${module.deployer_identity.email}"
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_project_service_identity.cloud_tasks.email}"
+}
+
+resource "google_cloud_run_v2_service_iam_binding" "worker_invoker" {
+  count = var.enable_runtime_policy ? 1 : 0
+
+  project  = var.project_id
+  location = var.region
+  name     = "${var.system_code}-${var.environment}-worker"
+  role     = "roles/run.invoker"
+  members  = ["serviceAccount:${module.identity["tasks"].email}"]
+}
+
+resource "google_cloud_run_v2_service_iam_member" "api_public_invoker" {
+  for_each = var.enable_runtime_policy && var.api_allow_unauthenticated ? toset(["baseline"]) : toset([])
+
+  project  = var.project_id
+  location = var.region
+  name     = "${var.system_code}-${var.environment}-api"
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+resource "google_cloud_tasks_queue_iam_member" "runtime" {
+  for_each = var.enable_runtime_policy ? {
+    api_enqueuer = {
+      role   = "roles/cloudtasks.enqueuer"
+      member = module.identity["api"].email
+    }
+    api_task_deleter = {
+      role   = "roles/cloudtasks.taskDeleter"
+      member = module.identity["api"].email
+    }
+    api_viewer = {
+      role   = "roles/cloudtasks.viewer"
+      member = module.identity["api"].email
+    }
+    worker_task_deleter = {
+      role   = "roles/cloudtasks.taskDeleter"
+      member = module.identity["worker"].email
+    }
+    worker_viewer = {
+      role   = "roles/cloudtasks.viewer"
+      member = module.identity["worker"].email
+    }
+  } : {}
+
+  project  = var.project_id
+  location = var.region
+  name     = "${var.system_code}-${var.environment}-run-dispatch"
+  role     = each.value.role
+  member   = "serviceAccount:${each.value.member}"
 }

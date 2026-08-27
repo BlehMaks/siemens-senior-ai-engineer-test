@@ -36,19 +36,26 @@ workflow accepts a service-account key or reads a GitHub secret.
    | `GCP_WORKER_SERVICE_ACCOUNT` | Worker runtime identity |
    | `GCP_TASKS_SERVICE_ACCOUNT` | Cloud Tasks OIDC caller |
    | `GCP_DEPLOYER_SERVICE_ACCOUNT` | Reviewed Terraform/deployment identity |
+   | `GCP_SECRET_IDS` | JSON object with exactly `api_key_pepper` and `task_signing_hmac` container IDs |
    | `GCP_BILLING_ACCOUNT_ID` | Optional budget billing account |
    | `GCP_BUDGET_NOTIFICATION_EMAILS` | Optional Terraform set, for example `["owner@example.com"]` |
 
 4. Add enabled values to the two Terraform-owned Secret Manager containers,
    `sai-dev-api-key-pepper` and `sai-dev-task-signing-hmac`, through an
    out-of-band administrator session. Terraform and GitHub never receive the
-   payloads. Deployment fails before Cloud Run creation if either container has
-   no enabled version.
+   payloads. The administrator must verify both enabled versions before the first
+   application apply; the deployer intentionally cannot inspect Secret Manager.
+5. Create the deterministic Cloud Run services and queue with one reviewed
+   application apply. Reapply `terraform/bootstrap` as the human administrator
+   with `enable_runtime_policy = true` and `api_allow_unauthenticated` matching
+   the ingress mode. This one-time second phase installs runtime IAM after its
+   targets exist. Keep these policies bootstrap-owned for later deployments.
 
-The deployer deliberately holds only Cloud Run service lifecycle and IAM-policy
-permissions required by the reviewed Terraform graph; it has no route-invoke or
-SSH permission. Because deploying code under a runtime service account is itself
-a privileged act, compromise of the approved deploy job can still exercise that
+The deployer deliberately holds Cloud Run and queue lifecycle permissions but no
+service, queue, project, or service-account IAM-policy mutation permission. It
+also has no route-invoke or SSH permission. Because deploying code under a
+runtime service account is itself a privileged act, compromise of the approved
+deploy job can still exercise that
 runtime's permissions through replacement code. The two protected approvals,
 exact WIF repository/ref/environment binding, immutable digest, and binary-plan
 verification are the controls for that release authority.
@@ -69,9 +76,8 @@ For deployment, dispatch `deploy.yml` on `master`. The unprivileged job creates
 the image and SBOM. A first `gcp-dev` approval admits the plan job, which:
 
 1. creates only the Terraform-managed foundation when the state is empty;
-2. verifies out-of-band secret versions without reading their payloads;
-3. pushes the exact tested tar artifact and resolves its registry digest;
-4. publishes the binary plan, its readable rendering, and a manifest binding it
+2. pushes the exact tested tar artifact and resolves its registry digest;
+3. publishes the binary plan, its readable rendering, and a manifest binding it
    to the workflow revision and push digest.
 
 The apply job references `gcp-dev` again, so it requires a separate approval
@@ -98,6 +104,6 @@ terraform -chdir=task-03-deployment-strategy/terraform/environments/dev validate
 
 The workflows stop on a non-`master` ref, missing environment input, malformed
 digest, failed tests, HIGH/CRITICAL image finding, unavailable remote state,
-missing secret version, failed plan, or failed apply. They do not fall back to
-static credentials, mutable image tags, local Terraform state, or a rebuild of
-an older revision.
+malformed secret-container IDs, failed plan, or failed apply. They do not fall
+back to static credentials, mutable image tags, local Terraform state, or a
+rebuild of an older revision.

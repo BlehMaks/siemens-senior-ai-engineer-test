@@ -191,24 +191,6 @@ resource "google_cloud_run_v2_service" "worker" {
   depends_on = [google_project_service.required]
 }
 
-resource "google_cloud_run_v2_service_iam_binding" "worker_invoker" {
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.worker.name
-  role     = "roles/run.invoker"
-  members  = ["serviceAccount:${var.tasks_service_account_email}"]
-}
-
-resource "google_cloud_run_v2_service_iam_member" "api_public_invoker" {
-  for_each = var.api_allow_unauthenticated ? toset(["baseline"]) : toset([])
-
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.api.name
-  role     = "roles/run.invoker"
-  member   = "allUsers"
-}
-
 resource "google_cloud_tasks_queue" "dispatch" {
   project  = var.project_id
   location = var.region
@@ -261,44 +243,4 @@ resource "google_cloud_tasks_queue" "dispatch" {
   }
 
   depends_on = [google_project_service.required]
-}
-
-resource "google_cloud_tasks_queue_iam_member" "api_enqueuer" {
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_tasks_queue.dispatch.name
-  role     = "roles/cloudtasks.enqueuer"
-  member   = "serviceAccount:${var.api_service_account_email}"
-}
-
-resource "google_cloud_tasks_queue_iam_member" "task_viewer" {
-  for_each = toset([
-    var.api_service_account_email,
-    var.worker_service_account_email,
-  ])
-
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_tasks_queue.dispatch.name
-  role     = "roles/cloudtasks.viewer"
-  member   = "serviceAccount:${each.value}"
-}
-
-resource "google_cloud_tasks_queue_iam_member" "task_deleter" {
-  for_each = toset([
-    var.api_service_account_email,
-    var.worker_service_account_email,
-  ])
-
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_tasks_queue.dispatch.name
-  role     = "roles/cloudtasks.taskDeleter"
-  member   = "serviceAccount:${each.value}"
-}
-
-resource "google_service_account_iam_member" "tasks_service_agent_token_creator" {
-  service_account_id = "projects/${var.project_id}/serviceAccounts/${var.tasks_service_account_email}"
-  role               = "roles/iam.serviceAccountTokenCreator"
-  member             = local.tasks_service_agent_member
 }

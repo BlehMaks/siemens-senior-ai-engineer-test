@@ -8,6 +8,8 @@
   service gets `roles/run.invoker`, and only for the dedicated Cloud Tasks
   caller identity.
 - The API runtime can enqueue only on the single reviewed queue.
+- The human-held bootstrap stack owns these service and queue IAM bindings; the
+  routine application deployer cannot edit any of those policies.
 
 ## Hardened mode
 

@@ -42,8 +42,8 @@ run "default_contract_is_bounded_and_digest_pinned" {
   }
 
   assert {
-    condition     = output.api_service.public_invoker_enabled
-    error_message = "Baseline mode should leave the API publicly callable."
+    condition     = output.api_service.public_invoker_required
+    error_message = "Baseline mode must declare the bootstrap-owned public invoker policy."
   }
 
   assert {
@@ -57,12 +57,7 @@ run "default_contract_is_bounded_and_digest_pinned" {
   }
 
   assert {
-    condition     = google_cloud_run_v2_service_iam_member.api_public_invoker["baseline"].member == "allUsers"
-    error_message = "Only baseline mode should grant unauthenticated API invocation."
-  }
-
-  assert {
-    condition     = output.worker_service.invoker_members == toset(["serviceAccount:sai-dev-tasks@contract-assignment-dev.iam.gserviceaccount.com"])
+    condition     = toset(output.worker_service.invoker_members) == toset(["serviceAccount:sai-dev-tasks@contract-assignment-dev.iam.gserviceaccount.com"])
     error_message = "Only the Cloud Tasks caller identity should invoke the worker."
   }
 
@@ -128,14 +123,10 @@ run "hardened_api_mode_blocks_url_bypass_and_keeps_lb_usable" {
   }
 
   assert {
-    condition     = !output.api_service.public_invoker_enabled
+    condition     = !output.api_service.public_invoker_required
     error_message = "Hardened mode must not grant unauthenticated Cloud Run invocation."
   }
 
-  assert {
-    condition     = length(google_cloud_run_v2_service_iam_member.api_public_invoker) == 0
-    error_message = "Hardened mode must omit the public API invoker binding."
-  }
 }
 
 run "invalid_digest_fails_closed" {

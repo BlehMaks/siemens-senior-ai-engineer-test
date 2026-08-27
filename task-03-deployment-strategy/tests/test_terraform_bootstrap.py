@@ -53,18 +53,19 @@ def test_bootstrap_enables_only_foundational_and_protected_services() -> None:
 
     for service in {
         "cloudresourcemanager.googleapis.com",
+        "cloudtasks.googleapis.com",
         "iam.googleapis.com",
         "iamcredentials.googleapis.com",
         "secretmanager.googleapis.com",
         "serviceusage.googleapis.com",
         "sts.googleapis.com",
         "storage.googleapis.com",
+        "run.googleapis.com",
     }:
         assert f'"{service}"' in locals_tf
 
     assert "artifactregistry.googleapis.com" not in locals_tf
     assert "firestore.googleapis.com" not in locals_tf
-    assert "run.googleapis.com" not in locals_tf
 
 
 def test_state_bucket_is_private_versioned_and_not_force_destroyed() -> None:
@@ -129,7 +130,7 @@ def test_no_keys_or_wildcard_principals_are_defined() -> None:
     assert "google_service_account_key" not in terraform_sources
     for role in ("owner", "editor", "viewer"):
         assert f'role    = "roles/{role}"' not in role_assignments.lower()
-    assert "allUsers" not in role_assignments
+    assert role_assignments.count('member   = "allUsers"') == 1
     assert "allAuthenticatedUsers" not in role_assignments
     assert "principalSet://iam.googleapis.com/*" not in terraform_sources
     assert 'member  = "*"' not in terraform_sources
@@ -141,7 +142,6 @@ def test_project_roles_match_reviewed_allowlist() -> None:
 
     expected_roles = {
         "roles/artifactregistry.admin",
-        "roles/cloudtasks.queueAdmin",
         "roles/datastore.indexAdmin",
         "roles/datastore.user",
         "roles/logging.configWriter",
@@ -180,6 +180,16 @@ def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
     expected_custom_permissions = {
         "billing.resourcebudgets.read",
         "billing.resourcebudgets.write",
+        "cloudtasks.locations.get",
+        "cloudtasks.locations.list",
+        "cloudtasks.operations.get",
+        "cloudtasks.queues.create",
+        "cloudtasks.queues.delete",
+        "cloudtasks.queues.get",
+        "cloudtasks.queues.list",
+        "cloudtasks.queues.pause",
+        "cloudtasks.queues.resume",
+        "cloudtasks.queues.update",
         "datastore.databases.create",
         "datastore.databases.delete",
         "datastore.databases.getMetadata",
@@ -195,7 +205,6 @@ def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
         "run.services.delete",
         "run.services.get",
         "run.services.getIamPolicy",
-        "run.services.setIamPolicy",
         "run.services.update",
     }
     permission_block = locals_tf.split(
@@ -209,6 +218,10 @@ def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
     assert permission_lines == expected_custom_permissions
     assert "run.routes.invoke" not in permission_lines
     assert "run.services.sshRoot" not in permission_lines
+    assert not any(
+        permission.endswith(".setIamPolicy") for permission in permission_lines
+    )
+    assert "roles/cloudtasks.queueAdmin" not in locals_tf
 
 
 def test_secrets_and_runtime_access_stay_in_human_bootstrap() -> None:
@@ -249,37 +262,30 @@ def test_deployer_can_attach_only_the_three_runtime_identities() -> None:
     )
 
 
-def test_deployer_policy_admin_is_limited_to_tasks_identity() -> None:
-    locals_tf = read(BOOTSTRAP / "locals.tf")
+def test_runtime_policy_is_owned_by_human_bootstrap() -> None:
     main_tf = read(BOOTSTRAP / "main.tf")
+    variables_tf = read(BOOTSTRAP / "variables.tf")
 
-    resource = main_tf.split(
-        'resource "google_service_account_iam_member" "deployer_tasks_policy_admin"',
-        maxsplit=1,
-    )[1]
-    assert 'service_account_id = module.identity["tasks"].name' in resource
-    assert (
-        "role               = google_project_iam_custom_role.tasks_policy.name"
-        in resource
-    )
-    assert (
-        'member             = "serviceAccount:${module.deployer_identity.email}"'
-        in resource
-    )
+    assert "deployer_tasks_policy_admin" not in main_tf
+    assert "iam.serviceAccounts.setIamPolicy" not in main_tf
     assert "roles/iam.serviceAccountAdmin" not in main_tf
-    expected_policy_permissions = {
-        "iam.serviceAccounts.get",
-        "iam.serviceAccounts.getIamPolicy",
-        "iam.serviceAccounts.setIamPolicy",
-    }
-    permission_block = locals_tf.split(
-        "tasks_policy_permissions = toset([", maxsplit=1
-    )[1].split("])", maxsplit=1)[0]
-    assert expected_policy_permissions == {
-        line.strip().strip('",')
-        for line in permission_block.splitlines()
-        if line.strip().startswith('"')
-    }
+    assert (
+        'resource "google_service_account_iam_member" '
+        '"tasks_service_agent_token_creator"' in main_tf
+    )
+    assert (
+        'member             = "serviceAccount:${google_project_service_identity.cloud_tasks.email}"'
+        in main_tf
+    )
+    assert 'role               = "roles/iam.serviceAccountTokenCreator"' in main_tf
+    assert 'variable "enable_runtime_policy"' in variables_tf
+    assert "count = var.enable_runtime_policy ? 1 : 0" in main_tf
+    assert (
+        "for_each = var.enable_runtime_policy && var.api_allow_unauthenticated"
+        in main_tf
+    )
+    assert "for_each = var.enable_runtime_policy ? {" in main_tf
+    assert main_tf.count('resource "google_cloud_tasks_queue_iam_member"') == 1
 
 
 def test_deployer_state_access_is_bucket_scoped() -> None:

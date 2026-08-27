@@ -48,6 +48,18 @@ output "secret_accessors" {
   }
 }
 
+output "runtime_policy" {
+  description = "Human-bootstrap IAM applied after the deterministic service and queue names exist."
+  value = {
+    enabled                        = var.enable_runtime_policy
+    api_public_invoker_enabled     = var.enable_runtime_policy && var.api_allow_unauthenticated
+    queue_binding_count            = length(google_cloud_tasks_queue_iam_member.runtime)
+    tasks_service_agent_member     = google_service_account_iam_member.tasks_service_agent_token_creator.member
+    tasks_service_agent_token_role = google_service_account_iam_member.tasks_service_agent_token_creator.role
+    worker_invoker_binding_count   = length(google_cloud_run_v2_service_iam_binding.worker_invoker)
+  }
+}
+
 output "remote_backend" {
   description = "Backend stanza values for later application stacks."
   value = {
