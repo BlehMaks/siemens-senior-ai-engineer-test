@@ -47,11 +47,20 @@ CONTENT_RULES = (
     ),
 )
 
-CREDENTIAL_ASSIGNMENT = re.compile(
-    r"(?:^|(?<=[{,;]))[ \t]*(?:-[ \t]+)?(?:\#[ \t]*)?(?:export[ \t]+)?"
+_CREDENTIAL_ASSIGNMENT_BODY = (
+    r"[ \t]*(?:-[ \t]+)?(?:\#[ \t]*)?"
+    r"(?:(?:export|local|readonly|declare|typeset)"
+    r"(?:[ \t]+(?:--|-[A-Za-z]+))*[ \t]+)?"
     r"(?P<key_quote>[\"']?)(?P<key>[A-Za-z0-9_.-]*"
     r"(?:api[_-]?key|password|secret|token))(?P=key_quote)"
-    r"[ \t]*[:=][ \t]*",
+    r"[ \t]*[:=][ \t]*"
+)
+CREDENTIAL_ASSIGNMENT = re.compile(
+    r"(?:^|(?<=[{,;]))" + _CREDENTIAL_ASSIGNMENT_BODY,
+    re.IGNORECASE,
+)
+SHELL_CREDENTIAL_ASSIGNMENT = re.compile(
+    r"(?:^|(?<=[{,;( \t]))" + _CREDENTIAL_ASSIGNMENT_BODY,
     re.IGNORECASE,
 )
 QUOTED_VALUE = re.compile(r"(?P<prefix>\$|(?i:[bruf]{0,3}))(?P<quote>\"\"\"|'''|\"|')")
@@ -198,6 +207,71 @@ def _quoted_literal(
     )
 
 
+def _shell_word(value: str, following_lines: list[str]) -> tuple[str, bool] | None:
+    """Return the complete first shell word and whether it performs expansion."""
+
+    source = "\n".join([value, *following_lines])
+    literal: list[str] = []
+    cursor = 0
+
+    while cursor < len(source):
+        char = source[cursor]
+        if char in " \t\r\n;":
+            break
+
+        ansi_c_quote = source.startswith("$'", cursor)
+        locale_quote = source.startswith('$"', cursor)
+        if ansi_c_quote or locale_quote:
+            quote = source[cursor + 1]
+            remainder = source[cursor + 2 :]
+            closing = _closing_quote_index(remainder, quote)
+            if closing is None:
+                return None
+            segment = remainder[:closing]
+            if locale_quote and SHELL_INTERPOLATION.search(segment):
+                return "", True
+            literal.append(segment)
+            cursor += closing + 3
+            continue
+
+        if char == "'":
+            closing = source.find("'", cursor + 1)
+            if closing < 0:
+                return None
+            literal.append(source[cursor + 1 : closing])
+            cursor = closing + 1
+            continue
+
+        if char == '"':
+            remainder = source[cursor + 1 :]
+            closing = _closing_quote_index(remainder, '"')
+            if closing is None:
+                return None
+            segment = remainder[:closing]
+            if SHELL_INTERPOLATION.search(segment):
+                return "", True
+            literal.append(segment)
+            cursor += closing + 2
+            continue
+
+        if char == "\\" and cursor + 1 < len(source):
+            escaped = source[cursor + 1]
+            if escaped != "\n":
+                literal.append(escaped)
+            cursor += 2
+            continue
+
+        if char == "`" or source.startswith(("$(", "<(", ">("), cursor):
+            return "", True
+        if char == "$" and SHELL_INTERPOLATION.match(source, cursor):
+            return "", True
+
+        literal.append(char)
+        cursor += 1
+
+    return "".join(literal), False
+
+
 def _contains_credential_assignment(path: str, content: bytes) -> bool:
     """Recognize committed credential literals while ignoring symbolic references."""
 
@@ -209,9 +283,20 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
     terraform_context = suffix in {".hcl", ".tf"} or path.lower().endswith(".tf.json")
     python_context = suffix == ".py"
     reference_context = shell_context or terraform_context or python_context
+    assignment_pattern = (
+        SHELL_CREDENTIAL_ASSIGNMENT if shell_context else CREDENTIAL_ASSIGNMENT
+    )
     for index, line in enumerate(lines):
-        for assignment in CREDENTIAL_ASSIGNMENT.finditer(line):
+        for assignment in assignment_pattern.finditer(line):
             value = line[assignment.end() :].strip()
+            if shell_context:
+                shell_word = _shell_word(value, lines[index + 1 :])
+                if shell_word is not None:
+                    literal, expands = shell_word
+                    if not expands and len(literal) >= 8:
+                        return True
+                continue
+
             if re.fullmatch(r"[|>][+-]?[1-9]?", value):
                 base_indent = len(line) - len(line.lstrip())
                 block_lines: list[str] = []

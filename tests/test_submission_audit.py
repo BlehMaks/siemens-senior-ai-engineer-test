@@ -432,6 +432,66 @@ def test_shell_expansion_classes_are_symbolic(repository: Path, value: str) -> N
 
 
 @pytest.mark.parametrize(
+    "declaration",
+    [
+        "local",
+        "readonly",
+        "declare -r",
+        "typeset -rx",
+    ],
+)
+def test_shell_declaration_builtins_do_not_hide_literals(
+    repository: Path, declaration: str
+) -> None:
+    target = repository / "runtime.sh"
+    target.write_text(
+        seed(declaration, " pass", "word=abcdefghijklmnop\n").decode(),
+        encoding="utf-8",
+    )
+    git(repository, "add", target.name)
+
+    assert any("credential assignment" in item for item in audit_repository(repository))
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "local harmless=1 password=abcdefghijklmnop\n",
+        "MODE=prod PASSWORD=abcdefghijklmnop command\n",
+        "if password=abcdefghijklmnop; then true; fi\n",
+    ],
+)
+def test_later_shell_assignments_do_not_hide_literals(
+    repository: Path, content: str
+) -> None:
+    target = repository / "runtime.sh"
+    target.write_text(content, encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert any("credential assignment" in item for item in audit_repository(repository))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "'abc''defghijklmnop'",
+        "$'abc'$'defghijklmnop'",
+        "'abc\ndefghijklmnop'",
+        "'settings.SERVICE_TOKEN'",
+        "'EnvPepperProvider()'",
+    ],
+)
+def test_complete_shell_literal_is_scanned_across_quote_segments(
+    repository: Path, value: str
+) -> None:
+    target = repository / "runtime.sh"
+    target.write_text(seed("pass", f"word={value}\n").decode(), encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert any("credential assignment" in item for item in audit_repository(repository))
+
+
+@pytest.mark.parametrize(
     ("path", "content"),
     [
         ("config.json", seed('{"tok', 'en": "${RUNTIME_TOKEN}"}\n').decode()),
