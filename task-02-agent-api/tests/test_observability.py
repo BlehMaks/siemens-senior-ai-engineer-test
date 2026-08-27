@@ -275,9 +275,9 @@ async def test_run_routes_emit_joinable_safe_logs_and_idempotent_audit(
             "auth.outcome",
             "auth.outcome",
         ]
-        assert {payload["correlation_id"] for payload in payloads} == {
-            "corr-observe-client-one"
-        }
+        logged_correlations = {payload["correlation_id"] for payload in payloads}
+        assert len(logged_correlations) == 1
+        assert next(iter(logged_correlations)).startswith("correlation-")
         auth_payloads = [
             payload for payload in payloads if payload["event"] == "auth.outcome"
         ]
@@ -296,6 +296,7 @@ async def test_run_routes_emit_joinable_safe_logs_and_idempotent_audit(
             "run-observe-one",
             generated.plaintext,
             read_only.plaintext,
+            "corr-observe-client-one",
             "prompt",
             "evidence",
             "private.example",
@@ -350,7 +351,7 @@ async def test_unexpected_errors_emit_a_safe_signal_and_private_response(
         with caplog.at_level(logging.INFO, logger="agent_api.operations"):
             response = await client.get(
                 "/v1/test-unexpected-error",
-                headers={"X-Correlation-ID": "corr-unexpected-one"},
+                headers={"X-Correlation-ID": "password-is-stolenproductioncredential"},
             )
 
     assert response.status_code == 500
@@ -359,19 +360,20 @@ async def test_unexpected_errors_emit_a_safe_signal_and_private_response(
         "error": {
             "code": "internal_error",
             "message": "Request could not be completed.",
-            "correlation_id": "corr-unexpected-one",
+            "correlation_id": "password-is-stolenproductioncredential",
             "retryable": False,
             "field_issues": [],
         }
     }
     payloads = [json.loads(record.message) for record in caplog.records]
-    assert payloads == [
-        {
-            "correlation_id": "corr-unexpected-one",
-            "event": "request.unexpected_error",
-            "occurred_at": "2026-08-27T10:00:00.000000+00:00",
-        }
-    ]
+    assert len(payloads) == 1
+    assert payloads[0] == {
+        "correlation_id": payloads[0]["correlation_id"],
+        "event": "request.unexpected_error",
+        "occurred_at": "2026-08-27T10:00:00.000000+00:00",
+    }
+    assert payloads[0]["correlation_id"].startswith("correlation-")
+    assert "password-is-stolenproductioncredential" not in caplog.records[0].message
     assert "private-production-secret" not in caplog.records[0].message
     sample = next(
         sample

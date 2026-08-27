@@ -259,6 +259,15 @@ def test_public_answer_rejects_non_public_or_sensitive_source_urls(
             update={"answer_text": "Authoriza" + "tion: Bearer stolen-credential"}
         ),
         answer().model_copy(
+            update={"answer_text": "Pass\u200bword = stolen-production-credential"}
+        ),
+        answer().model_copy(
+            update={"answer_text": "Pass\u034fword = stolen-production-credential"}
+        ),
+        answer().model_copy(
+            update={"answer_text": "Pass\ufe0fword = stolen-production-credential"}
+        ),
+        answer().model_copy(
             update={
                 "citations": (
                     answer()
@@ -284,7 +293,15 @@ def test_public_answer_rejects_non_public_or_sensitive_source_urls(
             }
         ),
     ],
-    ids=("answer", "citation-claim", "assistance-offer", "follow-up-query"),
+    ids=(
+        "answer",
+        "zero-width-answer",
+        "grapheme-joiner-answer",
+        "variation-selector-answer",
+        "citation-claim",
+        "assistance-offer",
+        "follow-up-query",
+    ),
 )
 def test_public_answer_rejects_sensitive_text_in_every_channel(
     unsafe_answer: ScopedAnswer,

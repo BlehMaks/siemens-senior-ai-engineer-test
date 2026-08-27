@@ -152,7 +152,7 @@ class OperationalTelemetry:
             tenant=self._pseudonym("tenant", tenant_id),
             session=self._pseudonym("session", session_id),
             run=self._pseudonym("run", run_id),
-            correlation_id=correlation_id,
+            correlation_id=self._pseudonym("correlation", correlation_id),
         )
         await self._append_audit(tenant_id, "run.submitted", run_id, at)
 
@@ -174,7 +174,7 @@ class OperationalTelemetry:
             run=self._pseudonym("run", run_id),
             state=state.value,
             changed=changed,
-            correlation_id=correlation_id,
+            correlation_id=self._pseudonym("correlation", correlation_id),
         )
         await self._append_audit(tenant_id, "run.cancellation-requested", run_id, at)
         if changed and state is RunState.CANCELLED:
@@ -279,7 +279,7 @@ class OperationalTelemetry:
         self._increment("api_auth_outcomes_total", outcome=outcome)
         fields: dict[str, object] = {
             "outcome": outcome,
-            "correlation_id": correlation_id,
+            "correlation_id": self._pseudonym("correlation", correlation_id),
         }
         if tenant_id is not None:
             fields["tenant"] = self._pseudonym("tenant", tenant_id)
@@ -290,7 +290,7 @@ class OperationalTelemetry:
         self._emit(
             "request.unexpected_error",
             at=at,
-            correlation_id=correlation_id,
+            correlation_id=self._pseudonym("correlation", correlation_id),
         )
 
     def snapshot(self) -> tuple[MetricSample, ...]:

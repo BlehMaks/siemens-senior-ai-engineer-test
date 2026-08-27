@@ -8,10 +8,10 @@ snapshot through the platform adapter selected in Task 3.
 ## Correlation and identity
 
 Every response includes `X-Correlation-ID`. A valid client value is preserved;
-otherwise the service creates an opaque value. Correlation IDs appear only in logs,
-never in metric labels. Tenant, session, and run identifiers are logged as stable
-HMAC pseudonyms derived with a telemetry-specific domain separator. API-key
-identifiers are not logged. The HMAC key and raw identifiers are never emitted.
+otherwise the service creates an opaque value. Logs store only its stable HMAC
+pseudonym, and correlation values never become metric labels. Tenant, session, and
+run identifiers use the same telemetry-specific HMAC boundary. API-key identifiers,
+the HMAC key, and raw identifiers are never emitted.
 
 The typed telemetry methods do not accept arbitrary extra fields. Logs exclude
 queries, prompts, reasoning, evidence, URLs, credentials, exception text, and PII.
@@ -20,11 +20,11 @@ counters, elapsed time, and pseudonymous identity. This is enough to join submis
 and worker records without exposing user content.
 
 HTTP authentication emits `auth.outcome` with only the bounded outcome, UTC time,
-correlation ID, and a tenant HMAC pseudonym when a key was verified. Unknown or
+correlation pseudonym, and a tenant HMAC pseudonym when a key was verified. Unknown or
 malformed credentials therefore disclose no claimed tenant or key identifier;
 wrong-scope denials remain attributable through the verified tenant pseudonym.
 The last-resort handler emits `request.unexpected_error` with only UTC time and the
-correlation ID, while the client receives the fixed generic error envelope.
+correlation pseudonym, while the client receives the fixed generic error envelope.
 
 ## Bounded signals
 

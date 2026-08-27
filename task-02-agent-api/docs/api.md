@@ -262,5 +262,7 @@ prompt, chain-of-thought, raw page, raw provider response, internal exception,
 traceback, lease, worker, queue, database, or storage identifier. Every initial
 or resumed connection is authenticated and tenant-scoped before its first event
 is read. Answer text, citation claims, assistance offers, and follow-up queries are
-all rejected if they match the sensitive-material boundary. Run state and its
-corresponding public event are committed together.
+all rejected if they match the sensitive-material boundary. Unicode
+default-ignorable characters are rejected so an invisible character cannot split a
+credential marker. Run state and its corresponding public event are committed
+together.
