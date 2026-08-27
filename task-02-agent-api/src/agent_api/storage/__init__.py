@@ -1,5 +1,17 @@
 """Concrete tenant-scoped SQLite storage adapters."""
 
+from .cloud import (
+    CloudTask,
+    CloudTaskAlreadyExistsError,
+    CloudTaskClient,
+    CloudTasksWorkQueue,
+    DocumentStore,
+    DocumentStoreTransaction,
+    FirestoreEventRepository,
+    FirestoreRunRepository,
+    SignedWorkItemCodec,
+    TaskDeliveryAuthError,
+)
 from .repositories import (
     ApiKeyHashRecord,
     ApiKeyScope,
@@ -23,6 +35,14 @@ __all__ = [
     "ApiKeyHashRecord",
     "ApiKeyScope",
     "AuditEntry",
+    "CloudTask",
+    "CloudTaskAlreadyExistsError",
+    "CloudTaskClient",
+    "CloudTasksWorkQueue",
+    "DocumentStore",
+    "DocumentStoreTransaction",
+    "FirestoreEventRepository",
+    "FirestoreRunRepository",
     "MigrationError",
     "SQLiteAuditRepository",
     "SQLiteEventRepository",
@@ -32,8 +52,10 @@ __all__ = [
     "SQLiteTenantRepository",
     "SQLiteWorkQueue",
     "SessionRecord",
+    "SignedWorkItemCodec",
     "StorageConflictError",
     "StorageError",
+    "TaskDeliveryAuthError",
     "TenantRecord",
     "migrate",
     "reflection_repository",

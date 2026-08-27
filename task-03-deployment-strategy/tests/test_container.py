@@ -156,3 +156,26 @@ def test_relative_database_paths_are_rejected(monkeypatch: pytest.MonkeyPatch) -
 
     with pytest.raises(ValueError, match="AGENT_API_DATABASE_PATH"):
         build_application()
+
+
+def test_cloud_run_production_rejects_sqlite_authoritative_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AGENT_API_DATABASE_PATH", str(tmp_path / "db.sqlite3"))
+    monkeypatch.setenv("AGENT_API_INFERENCE_MODE", "disabled")
+    monkeypatch.setenv("K_SERVICE", "agent-api")
+
+    with pytest.raises(ValueError, match="Firestore run state"):
+        build_application()
+
+
+def test_cloud_run_production_rejects_unwired_cloud_backends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AGENT_API_DATABASE_PATH", str(tmp_path / "db.sqlite3"))
+    monkeypatch.setenv("AGENT_API_INFERENCE_MODE", "disabled")
+    monkeypatch.setenv("K_SERVICE", "agent-api")
+    monkeypatch.setenv("AGENT_API_FIRESTORE_DATABASE", "(default)")
+
+    with pytest.raises(ValueError, match="injected run repository"):
+        build_application()

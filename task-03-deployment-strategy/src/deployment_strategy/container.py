@@ -58,6 +58,20 @@ def build_application() -> FastAPI:
         worker_shutdown_seconds=_bounded_integer(
             "AGENT_API_SHUTDOWN_SECONDS", default=10, minimum=1, maximum=30
         ),
+        production_environment=bool(os.environ.get("K_SERVICE")),
+        run_state_backend=(
+            "firestore"
+            if os.environ.get("AGENT_API_FIRESTORE_DATABASE") is not None
+            else "sqlite"
+        ),
+        queue_backend=(
+            "cloud_tasks"
+            if os.environ.get("AGENT_API_FIRESTORE_DATABASE") is not None
+            else "sqlite"
+        ),
+        queue_delivery_path=os.environ.get(
+            "AGENT_API_QUEUE_DELIVERY_PATH", "/internal/tasks/run-delivery"
+        ),
     )
 
 

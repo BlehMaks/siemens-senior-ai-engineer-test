@@ -29,6 +29,7 @@ from .ports import IdempotencyConflictError
 from .routes import (
     build_event_router,
     build_health_router,
+    build_internal_task_router,
     build_run_router,
     build_session_router,
 )
@@ -55,6 +56,9 @@ from .services import (
     SessionUnavailable,
 )
 from .storage import (
+    CloudTasksWorkQueue,
+    FirestoreEventRepository,
+    FirestoreRunRepository,
     SQLiteAuditRepository,
     SQLiteEventRepository,
     SQLiteKeyHashRepository,
@@ -62,9 +66,10 @@ from .storage import (
     SQLiteSessionRepository,
     SQLiteWorkQueue,
     StorageError,
+    TaskDeliveryAuthError,
     migrate,
 )
-from .workers import LocalWorker, RunExecutor, worker_lifespan
+from .workers import LocalWorker, QueueReceiver, RunExecutor, worker_lifespan
 
 _OPAQUE_ID = TypeAdapter(OpaqueId)
 
@@ -125,16 +130,45 @@ def create_app(
     quota_limiter: QuotaLimiter | None = None,
     telemetry: OperationalTelemetry | None = None,
     readiness_probe: ReadinessProbe | None = None,
+    run_repository: SQLiteRunRepository | FirestoreRunRepository | None = None,
+    event_repository: SQLiteEventRepository | FirestoreEventRepository | None = None,
+    work_queue: SQLiteWorkQueue | CloudTasksWorkQueue | None = None,
+    production_environment: bool = False,
+    run_state_backend: str = "sqlite",
+    queue_backend: str = "sqlite",
+    queue_delivery_path: str = "/internal/tasks/run-delivery",
+    task_delivery_enabled: bool = False,
 ) -> FastAPI:
     provider = EnvPepperProvider() if pepper_provider is None else pepper_provider
     now = _utc_now if clock is None else clock
     limits = LimitConfig() if limit_config is None else limit_config
+    _validate_authoritative_runtime(
+        production_environment=production_environment,
+        run_state_backend=run_state_backend,
+        queue_backend=queue_backend,
+        has_run_repository=run_repository is not None,
+        has_event_repository=event_repository is not None,
+        has_work_queue=work_queue is not None,
+        has_run_executor=run_executor is not None,
+        task_delivery_enabled=task_delivery_enabled,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await migrate(database_path)
-        run_repository = SQLiteRunRepository(database_path)
-        work_queue = SQLiteWorkQueue(database_path)
+        durable_runs = (
+            SQLiteRunRepository(database_path)
+            if run_repository is None
+            else run_repository
+        )
+        durable_queue = (
+            SQLiteWorkQueue(database_path) if work_queue is None else work_queue
+        )
+        durable_events = (
+            SQLiteEventRepository(database_path)
+            if event_repository is None
+            else event_repository
+        )
         limiter = (
             SQLiteQuotaLimiter(database_path, limits)
             if quota_limiter is None
@@ -164,23 +198,26 @@ def create_app(
             id_factory=session_id_factory,
         )
         app.state.run_service = RunService(
-            run_repository,
-            work_queue,
+            durable_runs,
+            durable_queue,
             clock=now,
             run_id_factory=run_id_factory,
             limiter=limiter,
         )
         app.state.event_stream_service = EventStreamService(
-            run_repository,
-            SQLiteEventRepository(database_path),
+            durable_runs,
+            durable_events,
             clock=now,
         )
+        app.state.work_queue = durable_queue
         worker = (
             None
             if run_executor is None
             else LocalWorker(
-                repository=run_repository,
-                queue=work_queue,
+                repository=durable_runs,
+                # Signed delivery calls process() directly; receive() is reached
+                # only by the local polling lifespan, which is disabled below.
+                queue=cast(QueueReceiver, durable_queue),
                 executor=run_executor,
                 worker_id="worker-local",
                 clock=now,
@@ -189,8 +226,9 @@ def create_app(
                 telemetry=runtime_telemetry,
             )
         )
+        app.state.internal_worker = worker
         async with worker_lifespan(
-            worker,
+            None if task_delivery_enabled else worker,
             shutdown_seconds=worker_shutdown_seconds,
         ):
             yield
@@ -206,6 +244,8 @@ def create_app(
     app.include_router(build_session_router())
     app.include_router(build_run_router())
     app.include_router(build_event_router())
+    if task_delivery_enabled:
+        app.include_router(build_internal_task_router(path=queue_delivery_path))
     app.add_middleware(
         RequestBodyLimitMiddleware,
         max_bytes=limits.max_request_bytes,
@@ -220,6 +260,7 @@ def create_app(
     app.add_exception_handler(StorageError, _unavailable)
     app.add_exception_handler(QuotaExceeded, _quota_exceeded)
     app.add_exception_handler(RequestTooLarge, _request_too_large)
+    app.add_exception_handler(TaskDeliveryAuthError, _task_delivery_auth_error)
     app.add_exception_handler(RequestValidationError, _invalid_request)
     app.add_exception_handler(StarletteHTTPException, _http_error)
     app.add_exception_handler(Exception, _internal_error)
@@ -256,6 +297,15 @@ async def _invalid_request(request: Request, exc: Exception) -> JSONResponse:
     del exc
     return _error_response(
         request, 422, ErrorCode.INVALID_REQUEST, "Request validation failed."
+    )
+
+
+async def _task_delivery_auth_error(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    del exc
+    return _error_response(
+        request, 401, ErrorCode.UNAUTHENTICATED, "Authentication failed."
     )
 
 
@@ -386,3 +436,30 @@ def _new_correlation_id() -> OpaqueId:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _validate_authoritative_runtime(
+    *,
+    production_environment: bool,
+    run_state_backend: str,
+    queue_backend: str,
+    has_run_repository: bool,
+    has_event_repository: bool,
+    has_work_queue: bool,
+    has_run_executor: bool,
+    task_delivery_enabled: bool,
+) -> None:
+    if not production_environment:
+        return
+    if run_state_backend != "firestore":
+        raise ValueError("production_environment requires Firestore run state")
+    if queue_backend != "cloud_tasks":
+        raise ValueError("production_environment requires Cloud Tasks delivery")
+    if not has_run_repository:
+        raise ValueError("production_environment requires an injected run repository")
+    if not has_event_repository:
+        raise ValueError("production_environment requires an injected event repository")
+    if not has_work_queue:
+        raise ValueError("production_environment requires an injected work queue")
+    if has_run_executor and not task_delivery_enabled:
+        raise ValueError("production worker requires signed task delivery")
