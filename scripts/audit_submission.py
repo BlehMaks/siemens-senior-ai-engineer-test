@@ -64,7 +64,9 @@ SYMBOLIC_VALUE = re.compile(
     r")",
     re.DOTALL,
 )
-INTERPOLATION = re.compile(r"\$\{[^{}\r\n]+\}|\{[A-Za-z_][^{}\r\n]*\}")
+DOLLAR_INTERPOLATION = re.compile(r"\$\{[^{}\r\n]+\}|\$[A-Za-z_][A-Za-z0-9_]*")
+BRACED_INTERPOLATION = re.compile(r"\{[A-Za-z_][^{}\r\n]*\}")
+EXPRESSION_SUFFIXES = {".bash", ".hcl", ".py", ".sh", ".tf", ".zsh"}
 
 
 def _git(repo: Path, *args: str) -> bytes:
@@ -118,11 +120,20 @@ def _strip_inline_comment(value: str) -> str:
     return re.split(r"[ \t]+#", value, maxsplit=1)[0].strip()
 
 
-def _is_literal(value: str, *, minimum_length: int) -> bool:
+def _is_literal(
+    value: str,
+    *,
+    minimum_length: int,
+    expression_context: bool = False,
+    reference_context: bool = False,
+    braced_interpolation: bool = False,
+) -> bool:
     candidate = value.strip()
     if len(candidate) < minimum_length or SYMBOLIC_VALUE.fullmatch(candidate):
         return False
-    if INTERPOLATION.search(candidate):
+    if expression_context and DOLLAR_INTERPOLATION.search(candidate):
+        return False
+    if braced_interpolation and BRACED_INTERPOLATION.search(candidate):
         return False
     if (
         candidate.startswith("$(")
@@ -130,7 +141,9 @@ def _is_literal(value: str, *, minimum_length: int) -> bool:
         or ") ->" in candidate
     ):
         return False
-    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*(?:\[[^\]\r\n]+\])+", candidate):
+    if reference_context and re.fullmatch(
+        r"[A-Za-z_][A-Za-z0-9_.]*(?:\[[^\]\r\n]+\])*", candidate
+    ):
         return False
     return re.match(r"[A-Za-z_][A-Za-z0-9_.]*\s*\(", candidate) is None
 
@@ -151,7 +164,7 @@ def _closing_quote_index(value: str, quote: str) -> int | None:
         offset = index + len(quote)
 
 
-def _quoted_literal(value: str, following_lines: list[str]) -> str | None:
+def _quoted_literal(value: str, following_lines: list[str]) -> tuple[str, str] | None:
     quote_match = QUOTED_VALUE.match(value)
     if quote_match is None:
         return None
@@ -162,12 +175,15 @@ def _quoted_literal(value: str, following_lines: list[str]) -> str | None:
     if len(quote) > 1:
         candidate = "\n".join([remainder, *following_lines])
     closing_index = _closing_quote_index(candidate, quote)
-    return candidate[:closing_index] if closing_index is not None else None
+    if closing_index is None:
+        return None
+    return candidate[:closing_index], quote_match.group("prefix").lower()
 
 
-def _contains_credential_assignment(content: bytes) -> bool:
+def _contains_credential_assignment(path: str, content: bytes) -> bool:
     """Recognize committed credential literals while ignoring symbolic references."""
 
+    expression_context = Path(path).suffix.lower() in EXPRESSION_SUFFIXES
     lines = content.decode("utf-8", errors="replace").splitlines()
     for index, line in enumerate(lines):
         for assignment in CREDENTIAL_ASSIGNMENT.finditer(line):
@@ -175,11 +191,17 @@ def _contains_credential_assignment(content: bytes) -> bool:
             if re.fullmatch(r"[|>][+-]?[1-9]?", value):
                 base_indent = len(line) - len(line.lstrip())
                 block_lines: list[str] = []
+                block_indent: int | None = None
                 for part in lines[index + 1 :]:
                     if not part.strip():
                         block_lines.append("")
                         continue
-                    if len(part) - len(part.lstrip()) <= base_indent:
+                    part_indent = len(part) - len(part.lstrip())
+                    if block_indent is None:
+                        if part_indent <= base_indent:
+                            break
+                        block_indent = part_indent
+                    elif part_indent < block_indent:
                         break
                     block_lines.append(part.strip())
                 block = "\n".join(block_lines)
@@ -189,11 +211,23 @@ def _contains_credential_assignment(content: bytes) -> bool:
 
             quoted = _quoted_literal(value, lines[index + 1 :])
             if quoted is not None:
-                if _is_literal(quoted, minimum_length=8):
+                literal, prefix = quoted
+                if _is_literal(
+                    literal,
+                    minimum_length=8,
+                    expression_context=expression_context,
+                    braced_interpolation="f" in prefix,
+                ):
                     return True
                 continue
 
-            if _is_literal(_strip_inline_comment(value), minimum_length=16):
+            unquoted = _strip_inline_comment(value).split(";", 1)[0].strip()
+            if _is_literal(
+                unquoted,
+                minimum_length=16,
+                expression_context=expression_context,
+                reference_context=expression_context,
+            ):
                 return True
 
     return False
@@ -215,7 +249,7 @@ def audit_repository(repo: Path) -> list[str]:
         if len(content) > MAX_PUBLIC_FILE_BYTES:
             findings.append(f"oversized tracked file: {path}")
             continue
-        if _contains_credential_assignment(content):
+        if _contains_credential_assignment(path, content):
             findings.append(f"credential assignment: {path}")
         for label, rule in CONTENT_RULES:
             if rule.search(content):

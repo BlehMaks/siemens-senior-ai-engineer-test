@@ -260,10 +260,57 @@ def test_later_credential_on_same_line_is_not_hidden_by_symbolic_value(
     target.write_text(
         seed(
             '{"tok',
-            'en": "${RUNTIME_TOKEN}", "clientSecret": "abcdefghijklmnop"}\n',
+            'en": "${RUNTIME_TOKEN}", "clientSec',
+            'ret": "abcdefghijklmnop"}\n',
         ).decode(),
         encoding="utf-8",
     )
     git(repository, "add", target.name)
 
     assert any("credential assignment" in item for item in audit_repository(repository))
+
+
+@pytest.mark.parametrize(
+    ("path", "content"),
+    [
+        (
+            "config.json",
+            seed('{"pass', 'word": "Correct{Horse}Battery"}\n').decode(),
+        ),
+        ("runtime.env", seed("PASS", "WORD=Correct{Horse}Battery\n").decode()),
+    ],
+)
+def test_braces_in_literal_credentials_do_not_bypass_audit(
+    repository: Path, path: str, content: str
+) -> None:
+    target = repository / path
+    target.write_text(content, encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert any("credential assignment" in item for item in audit_repository(repository))
+
+
+@pytest.mark.parametrize(
+    ("path", "content"),
+    [
+        ("runtime.sh", "token=$TOKEN; timeout=30\n"),
+        ("runtime.sh", 'token="Bearer-$TOKEN"\n'),
+        ("settings.py", "token = config.SERVICE_TOKEN\n"),
+        ("main.tf", "secret = each.value.secret_id\n"),
+        (
+            "config.yaml",
+            "credentials:\n"
+            "  - token: |\n"
+            "      short\n"
+            "    description: this-is-a-long-nonsecret-description\n",
+        ),
+    ],
+)
+def test_additional_symbolic_and_structural_values_pass(
+    repository: Path, path: str, content: str
+) -> None:
+    target = repository / path
+    target.write_text(content, encoding="utf-8")
+    git(repository, "add", target.name)
+
+    assert audit_repository(repository) == []
