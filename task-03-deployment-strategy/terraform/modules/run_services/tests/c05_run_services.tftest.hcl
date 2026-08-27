@@ -77,6 +77,22 @@ run "default_contract_is_bounded_and_digest_pinned" {
   }
 
   assert {
+    condition = toset(output.iam_contract.task_viewer_members) == toset([
+      "serviceAccount:sai-dev-api@contract-assignment-dev.iam.gserviceaccount.com",
+      "serviceAccount:sai-dev-worker@contract-assignment-dev.iam.gserviceaccount.com",
+    ])
+    error_message = "Only API and worker runtimes should inspect deterministic task state."
+  }
+
+  assert {
+    condition = toset(output.iam_contract.task_deleter_members) == toset([
+      "serviceAccount:sai-dev-api@contract-assignment-dev.iam.gserviceaccount.com",
+      "serviceAccount:sai-dev-worker@contract-assignment-dev.iam.gserviceaccount.com",
+    ])
+    error_message = "Only API and worker runtimes should remove terminal or cancelled tasks."
+  }
+
+  assert {
     condition     = output.iam_contract.tasks_service_agent_member == "serviceAccount:service-123456789012@gcp-sa-cloudtasks.iam.gserviceaccount.com"
     error_message = "Cloud Tasks token minting must use the resolved project service agent."
   }

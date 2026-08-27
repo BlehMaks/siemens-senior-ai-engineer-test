@@ -1,12 +1,28 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+from collections.abc import Awaitable, Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypeVar
 
 import httpx
 import pytest
 
+from agent_api.ports import WorkItem
+from agent_api.storage import (
+    CloudTask,
+    CloudTasksWorkQueue,
+    DocumentStoreTransaction,
+    FirestoreEventRepository,
+    FirestoreRunRepository,
+    FirestoreSessionRepository,
+    SignedWorkItemCodec,
+)
 from deployment_strategy.container import (
+    CloudAdapters,
+    CloudRuntimeSettings,
     FakeRunExecutor,
     _bounded_integer,
     build_application,
@@ -16,6 +32,59 @@ from search_agent.state import RunStatus
 TASK_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = TASK_ROOT.parent
 DOCKERFILE = TASK_ROOT / "container" / "Dockerfile"
+T = TypeVar("T")
+
+
+class CloudFakeStore(DocumentStoreTransaction):
+    async def get(
+        self, *, collection: str, document_id: str
+    ) -> dict[str, object] | None:
+        del collection, document_id
+        return None
+
+    async def set(
+        self, *, collection: str, document_id: str, document: Mapping[str, object]
+    ) -> None:
+        del collection, document_id, document
+
+    async def delete(self, *, collection: str, document_id: str) -> bool:
+        del collection, document_id
+        return False
+
+    async def list(
+        self,
+        *,
+        collection: str,
+        filters: Mapping[str, object] | None = None,
+        order_by: tuple[str, ...] = (),
+        start_after: Mapping[str, object] | None = None,
+        limit: int | None = None,
+    ) -> tuple[dict[str, object], ...]:
+        del collection, filters, order_by, start_after, limit
+        return ()
+
+    async def transaction(
+        self, operation: Callable[[DocumentStoreTransaction], Awaitable[T]]
+    ) -> T:
+        return await operation(self)
+
+
+class CloudFakeTaskClient:
+    async def create(self, task: CloudTask) -> CloudTask:
+        return task
+
+    async def get(self, *, name: str) -> CloudTask | None:
+        del name
+        return None
+
+    async def delete(self, *, name: str) -> bool:
+        del name
+        return False
+
+
+class ReadyProbe:
+    async def ready(self) -> bool:
+        return True
 
 
 def read(path: Path) -> str:
@@ -169,7 +238,7 @@ def test_cloud_run_production_rejects_sqlite_authoritative_state(
         build_application()
 
 
-def test_cloud_run_production_rejects_unwired_cloud_backends(
+def test_cloud_run_production_rejects_partial_cloud_configuration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("AGENT_API_DATABASE_PATH", str(tmp_path / "db.sqlite3"))
@@ -177,5 +246,165 @@ def test_cloud_run_production_rejects_unwired_cloud_backends(
     monkeypatch.setenv("K_SERVICE", "agent-api")
     monkeypatch.setenv("AGENT_API_FIRESTORE_DATABASE", "(default)")
 
-    with pytest.raises(ValueError, match="injected run repository"):
+    with pytest.raises(ValueError, match="AGENT_API_SERVICE_ROLE"):
         build_application()
+
+
+def _cloud_factory(
+    captured: dict[str, object],
+) -> Callable[[CloudRuntimeSettings, bytes], CloudAdapters]:
+    def build(settings: CloudRuntimeSettings, secret: bytes) -> CloudAdapters:
+        store = CloudFakeStore()
+        runs = FirestoreRunRepository(store)
+        codec = SignedWorkItemCodec(secret)
+        queue = CloudTasksWorkQueue(
+            store=store,
+            task_client=CloudFakeTaskClient(),
+            queue_name=settings.queue_name,
+            codec=codec,
+        )
+        captured.update(settings=settings, codec=codec)
+        return CloudAdapters(
+            sessions=FirestoreSessionRepository(store, runs),
+            runs=runs,
+            events=FirestoreEventRepository(store),
+            queue=queue,
+            readiness=ReadyProbe(),
+        )
+
+    return build
+
+
+def _set_cloud_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    role: str,
+) -> None:
+    secret = base64.urlsafe_b64encode(b"s" * 32).decode().rstrip("=")
+    pepper = base64.urlsafe_b64encode(b"p" * 32).decode().rstrip("=")
+    monkeypatch.setenv("AGENT_API_DATABASE_PATH", str(tmp_path / f"{role}.sqlite3"))
+    monkeypatch.setenv("AGENT_API_KEY_PEPPER", pepper)
+    monkeypatch.setenv("AGENT_API_TASK_SIGNING_HMAC", secret)
+    monkeypatch.setenv("AGENT_API_SERVICE_ROLE", role)
+    monkeypatch.setenv("AGENT_API_GCP_PROJECT_ID", "contract-assessment-dev")
+    monkeypatch.setenv("AGENT_API_FIRESTORE_DATABASE", "(default)")
+    monkeypatch.setenv(
+        "AGENT_API_CLOUD_TASKS_QUEUE",
+        "projects/contract-assessment-dev/locations/europe-west3/queues/dispatch",
+    )
+    monkeypatch.setenv(
+        "AGENT_API_INFERENCE_MODE", "disabled" if role == "api" else "fake"
+    )
+    monkeypatch.setenv("K_SERVICE", f"agent-{role}")
+    if role == "api":
+        monkeypatch.setenv(
+            "AGENT_API_TASK_TARGET_URL",
+            "https://worker.example.run.app/internal/tasks/run-delivery",
+        )
+
+
+@pytest.mark.asyncio
+async def test_cloud_fake_api_selects_managed_adapters_and_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_cloud_environment(monkeypatch, tmp_path, role="api")
+    captured: dict[str, object] = {}
+    app = build_application(cloud_adapter_factory=_cloud_factory(captured))
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://container"
+        ) as client,
+    ):
+        ready = await client.get("/health/ready")
+        assert app.state.internal_worker is None
+        assert isinstance(app.state.work_queue, CloudTasksWorkQueue)
+
+    settings = captured["settings"]
+    assert isinstance(settings, CloudRuntimeSettings)
+    assert settings.service_role == "api"
+    assert settings.delivery_path == "/internal/tasks/run-delivery"
+    assert settings.target_url == (
+        "https://worker.example.run.app/internal/tasks/run-delivery"
+    )
+    assert ready.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_cloud_fake_worker_accepts_signed_task_delivery_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_cloud_environment(monkeypatch, tmp_path, role="worker")
+    captured: dict[str, object] = {}
+    app = build_application(cloud_adapter_factory=_cloud_factory(captured))
+    settings = captured["settings"]
+    codec = captured["codec"]
+    assert isinstance(settings, CloudRuntimeSettings)
+    assert isinstance(codec, SignedWorkItemCodec)
+    item = WorkItem(
+        work_id="work-cloud-smoke",
+        tenant_id="tenant-cloud",
+        run_id="run-cloud",
+        enqueued_at=datetime(2026, 8, 27, 12, 0, tzinfo=UTC),
+        not_before=datetime(2026, 8, 27, 12, 0, tzinfo=UTC),
+    )
+    task_id = hashlib.sha256(item.work_id.encode()).hexdigest()[:32]
+    task_name = f"{settings.queue_name}/tasks/work-{task_id}"
+    body, signed_headers = codec.encode(
+        item,
+        task_name=task_name,
+        queue_name=settings.queue_name,
+    )
+    headers = dict(signed_headers) | {
+        "X-CloudTasks-TaskName": task_name.rsplit("/", 1)[-1],
+        "X-CloudTasks-QueueName": settings.queue_name.rsplit("/", 1)[-1],
+    }
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://container"
+        ) as client,
+    ):
+        accepted = await client.post(
+            "/internal/tasks/run-delivery", content=body, headers=headers
+        )
+        rejected = await client.post(
+            "/internal/tasks/run-delivery", content=body + b" ", headers=headers
+        )
+        assert app.state.internal_worker is not None
+
+    assert accepted.status_code == 503
+    assert rejected.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "AGENT_API_GCP_PROJECT_ID",
+        "AGENT_API_FIRESTORE_DATABASE",
+        "AGENT_API_CLOUD_TASKS_QUEUE",
+        "AGENT_API_TASK_TARGET_URL",
+        "AGENT_API_TASK_SIGNING_HMAC",
+    ],
+)
+def test_cloud_configuration_fails_closed_when_required_values_are_missing(
+    missing: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_cloud_environment(monkeypatch, tmp_path, role="api")
+    monkeypatch.delenv(missing)
+
+    with pytest.raises((ValueError, RuntimeError)):
+        build_application(cloud_adapter_factory=_cloud_factory({}))
+
+
+def test_cloud_target_must_match_delivery_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_cloud_environment(monkeypatch, tmp_path, role="api")
+    monkeypatch.setenv("AGENT_API_QUEUE_DELIVERY_PATH", "/internal/tasks/custom")
+
+    with pytest.raises(ValueError, match="delivery path"):
+        build_application(cloud_adapter_factory=_cloud_factory({}))

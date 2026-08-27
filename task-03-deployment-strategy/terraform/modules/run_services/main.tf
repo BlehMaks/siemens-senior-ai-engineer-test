@@ -24,17 +24,27 @@ locals {
     var.image_digest,
   )
 
+  dispatch_queue_name = "${var.system_code}-${var.environment}-run-dispatch"
+  dispatch_queue_path = "projects/${var.project_id}/locations/${var.region}/queues/${local.dispatch_queue_name}"
+
   api_plain_env = {
+    AGENT_API_SERVICE_ROLE        = "api"
     AGENT_API_INFERENCE_MODE      = "disabled"
     AGENT_API_SHUTDOWN_SECONDS    = tostring(var.shutdown_seconds)
+    AGENT_API_GCP_PROJECT_ID      = var.project_id
     AGENT_API_FIRESTORE_DATABASE  = var.firestore_database_name
+    AGENT_API_CLOUD_TASKS_QUEUE   = local.dispatch_queue_path
+    AGENT_API_TASK_TARGET_URL     = "${google_cloud_run_v2_service.worker.uri}${var.worker_dispatch_path}"
     AGENT_API_QUEUE_DELIVERY_PATH = var.worker_dispatch_path
   }
 
   worker_plain_env = {
+    AGENT_API_SERVICE_ROLE        = "worker"
     AGENT_API_INFERENCE_MODE      = "fake"
     AGENT_API_SHUTDOWN_SECONDS    = tostring(var.shutdown_seconds)
+    AGENT_API_GCP_PROJECT_ID      = var.project_id
     AGENT_API_FIRESTORE_DATABASE  = var.firestore_database_name
+    AGENT_API_CLOUD_TASKS_QUEUE   = local.dispatch_queue_path
     AGENT_API_QUEUE_DELIVERY_PATH = var.worker_dispatch_path
   }
 }
@@ -96,6 +106,17 @@ resource "google_cloud_run_v2_service" "api" {
         value_source {
           secret_key_ref {
             secret  = var.api_key_pepper_secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name = "AGENT_API_TASK_SIGNING_HMAC"
+
+        value_source {
+          secret_key_ref {
+            secret  = var.task_signing_hmac_secret_id
             version = "latest"
           }
         }
@@ -180,7 +201,7 @@ resource "google_cloud_run_v2_service_iam_member" "api_public_invoker" {
 resource "google_cloud_tasks_queue" "dispatch" {
   project  = var.project_id
   location = var.region
-  name     = "${var.system_code}-${var.environment}-run-dispatch"
+  name     = local.dispatch_queue_name
 
   lifecycle {
     prevent_destroy = true
@@ -237,6 +258,32 @@ resource "google_cloud_tasks_queue_iam_member" "api_enqueuer" {
   name     = google_cloud_tasks_queue.dispatch.name
   role     = "roles/cloudtasks.enqueuer"
   member   = "serviceAccount:${var.api_service_account_email}"
+}
+
+resource "google_cloud_tasks_queue_iam_member" "task_viewer" {
+  for_each = toset([
+    var.api_service_account_email,
+    var.worker_service_account_email,
+  ])
+
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_tasks_queue.dispatch.name
+  role     = "roles/cloudtasks.viewer"
+  member   = "serviceAccount:${each.value}"
+}
+
+resource "google_cloud_tasks_queue_iam_member" "task_deleter" {
+  for_each = toset([
+    var.api_service_account_email,
+    var.worker_service_account_email,
+  ])
+
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_tasks_queue.dispatch.name
+  role     = "roles/cloudtasks.taskDeleter"
+  member   = "serviceAccount:${each.value}"
 }
 
 resource "google_service_account_iam_member" "tasks_service_agent_token_creator" {
