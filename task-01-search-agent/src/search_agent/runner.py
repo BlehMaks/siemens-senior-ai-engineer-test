@@ -35,6 +35,7 @@ from .planning import (
     PlanningDecision,
     PlanningOutcome,
     PlanningPolicyError,
+    TaskCategory,
     validate_planning_decision,
 )
 from .providers import (
@@ -453,14 +454,29 @@ class ResearchRunner:
         ledger: _Ledger,
     ) -> RunSnapshot:
         decision = await self._plan(snapshot.request, ledger)
-        if not decision.requires_search or decision.query_plan is None:
-            snapshot, event = RunStateGraph.fail(
-                snapshot,
-                FailureReason.VALIDATION_FAILED,
-                message="Request needs a cited research plan before completion",
+        if not decision.requires_search:
+            if decision.task_category not in {
+                TaskCategory.DIRECT_REPLY,
+                TaskCategory.CLARIFICATION,
+            }:
+                raise PlanningPolicyError("no-search plan has an invalid category")
+            answer = ScopedAnswer(
+                answer_text=decision.answer_focus,
+                citations=(),
+                assistance=decision.assistance,
             )
+            AssistancePolicy.validate(
+                answer_completed=True,
+                request=snapshot.request,
+                assistance=answer.assistance,
+            )
+            snapshot, event = RunStateGraph.draft_direct_answer(snapshot, answer)
+            events.append(event)
+            snapshot, event = RunStateGraph.complete(snapshot)
             events.append(event)
             return snapshot
+        if decision.query_plan is None:
+            raise PlanningPolicyError("search plan is missing its query plan")
 
         snapshot, event = RunStateGraph.accept_plan(snapshot, decision.query_plan)
         events.append(event)

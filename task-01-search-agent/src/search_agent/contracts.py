@@ -130,10 +130,7 @@ class ScopedAnswer(StrictModel):
     assistance: OptionalAssistance | None = None
 
     @model_validator(mode="after")
-    def require_citations(self) -> ScopedAnswer:
-        if not self.citations:
-            msg = "scoped answers require at least one citation"
-            raise ValueError(msg)
+    def require_unique_citations(self) -> ScopedAnswer:
         citation_ids = {citation.evidence_id for citation in self.citations}
         if len(citation_ids) != len(self.citations):
             msg = "citation evidence ids must be unique"

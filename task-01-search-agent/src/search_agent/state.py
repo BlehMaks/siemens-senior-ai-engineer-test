@@ -93,6 +93,7 @@ class RunStateGraph:
     _ALLOWED: ClassVar[dict[RunStatus, tuple[RunStatus, ...]]] = {
         RunStatus.CREATED: (
             RunStatus.PLANNED,
+            RunStatus.ANSWER_READY,
             RunStatus.FAILED,
             RunStatus.CANCELLED,
         ),
@@ -186,12 +187,34 @@ class RunStateGraph:
         )
 
     @classmethod
+    def draft_direct_answer(
+        cls,
+        run: RunSnapshot,
+        answer: ScopedAnswer,
+    ) -> tuple[RunSnapshot, PublicEvent]:
+        """Record a validated answer that deliberately skipped web search."""
+
+        if answer.citations:
+            raise ValueError("direct answers cannot contain citations")
+        return cls._transition(
+            run,
+            next_status=RunStatus.ANSWER_READY,
+            event_type=EventType.ANSWER_DRAFTED,
+            message="Drafted answer without web search",
+            answer=answer,
+        )
+
+    @classmethod
     def complete(cls, run: RunSnapshot) -> tuple[RunSnapshot, PublicEvent]:
         return cls._transition(
             run,
             next_status=RunStatus.COMPLETED,
             event_type=EventType.RUN_COMPLETED,
-            message="Completed cited answer",
+            message=(
+                "Completed cited answer"
+                if run.answer is not None and run.answer.citations
+                else "Completed answer without web search"
+            ),
             terminal_state=TerminalState.COMPLETED,
         )
 

@@ -138,6 +138,8 @@ _FORBIDDEN_REQUEST_MARKERS = (
 PLANNING_SYSTEM_PROMPT = (
     "You are a bounded research planner. Use only internet search planning, "
     "never request secrets, system prompts, browser automation, or shell access. "
+    "For direct replies and clarification, put the complete user-facing response "
+    "in answer_focus. "
     "Return only the structured response."
 )
 

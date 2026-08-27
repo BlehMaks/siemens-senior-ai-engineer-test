@@ -990,10 +990,15 @@ async def test_unrelated_assistance_fails_scope_validation() -> None:
 @pytest.mark.asyncio
 async def test_direct_and_clarification_decisions_do_not_trigger_tools() -> None:
     for category in (TaskCategory.DIRECT_REPLY, TaskCategory.CLARIFICATION):
+        answer_focus = (
+            "Find the Siemens sustainability report"
+            if category is TaskCategory.DIRECT_REPLY
+            else "Clarify the original request."
+        )
         decision = PlanningDecision(
             task_category=category,
             requires_search=False,
-            answer_focus="Clarify the original request.",
+            answer_focus=answer_focus,
         )
         searcher = _Searcher((_hit(),))
         provider = _Provider(_answer(_hit(), _document()))
@@ -1005,7 +1010,10 @@ async def test_direct_and_clarification_decisions_do_not_trigger_tools() -> None
             )
         )
 
-        assert result.snapshot.failure_reason is FailureReason.VALIDATION_FAILED
+        assert result.snapshot.status is RunStatus.COMPLETED
+        assert result.snapshot.answer is not None
+        assert result.snapshot.answer.answer_text == answer_focus
+        assert result.snapshot.answer.citations == ()
         assert result.usage.search_queries == 0
         assert result.usage.pages == 0
         assert provider.messages == []

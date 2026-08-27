@@ -67,6 +67,12 @@ def test_scoped_answer_requires_unique_citations() -> None:
         )
 
 
+def test_scoped_answer_allows_a_direct_answer_without_citations() -> None:
+    answer = ScopedAnswer(answer_text="Please clarify the request.", citations=())
+
+    assert answer.citations == ()
+
+
 def test_public_event_failure_reason_only_exists_for_failed_runs() -> None:
     with pytest.raises(ValidationError, match="only public for failed runs"):
         PublicEvent(
