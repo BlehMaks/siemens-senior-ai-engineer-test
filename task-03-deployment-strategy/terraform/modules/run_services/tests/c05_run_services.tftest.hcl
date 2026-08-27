@@ -1,10 +1,16 @@
-mock_provider "google" {}
+mock_provider "google" {
+  override_data {
+    target = data.google_project.current
+    values = {
+      number = "123456789012"
+    }
+  }
+}
 
 mock_provider "google-beta" {}
 
 variables {
   project_id                   = "contract-assignment-dev"
-  project_number               = "123456789012"
   region                       = "europe-west3"
   environment                  = "dev"
   system_code                  = "sai"
@@ -58,6 +64,11 @@ run "default_contract_is_bounded_and_digest_pinned" {
   assert {
     condition     = output.iam_contract.api_queue_enqueuer_member == "serviceAccount:sai-dev-api@contract-assignment-dev.iam.gserviceaccount.com"
     error_message = "Only the API runtime should enqueue onto the queue."
+  }
+
+  assert {
+    condition     = output.iam_contract.tasks_service_agent_member == "serviceAccount:service-123456789012@gcp-sa-cloudtasks.iam.gserviceaccount.com"
+    error_message = "Cloud Tasks token minting must use the resolved project service agent."
   }
 
   assert {

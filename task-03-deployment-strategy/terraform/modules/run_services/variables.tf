@@ -8,16 +8,6 @@ variable "project_id" {
   }
 }
 
-variable "project_number" {
-  description = "Numeric GCP project number used for the Cloud Tasks service agent."
-  type        = string
-
-  validation {
-    condition     = can(regex("^[1-9][0-9]*$", var.project_number))
-    error_message = "project_number must be a positive numeric project number."
-  }
-}
-
 variable "region" {
   description = "Single assessment region."
   type        = string

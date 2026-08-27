@@ -24,7 +24,6 @@ module "run_services" {
   source = "../../modules/run_services"
 
   project_id                   = var.project_id
-  project_number               = var.project_number
   region                       = var.region
   environment                  = "dev"
   system_code                  = var.system_code
@@ -42,6 +41,8 @@ module "run_services" {
   firestore_database_name      = module.managed_services.firestore.name
   api_key_pepper_secret_id     = module.managed_services.secret_containers.api_key_pepper
   task_signing_hmac_secret_id  = module.managed_services.secret_containers.task_signing_hmac
+
+  depends_on = [module.managed_services]
 }
 
 output "managed_services" {

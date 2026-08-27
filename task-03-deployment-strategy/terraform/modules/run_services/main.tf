@@ -13,7 +13,7 @@ locals {
     },
   )
 
-  tasks_service_agent_member = "serviceAccount:service-${var.project_number}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
+  tasks_service_agent_member = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
 
   image = format(
     "%s-docker.pkg.dev/%s/%s/%s@%s",
@@ -37,6 +37,10 @@ locals {
     AGENT_API_FIRESTORE_DATABASE  = var.firestore_database_name
     AGENT_API_QUEUE_DELIVERY_PATH = var.worker_dispatch_path
   }
+}
+
+data "google_project" "current" {
+  project_id = var.project_id
 }
 
 resource "google_project_service" "required" {

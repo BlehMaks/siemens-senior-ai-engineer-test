@@ -6,6 +6,7 @@ TASK_ROOT = Path(__file__).resolve().parents[1]
 TERRAFORM_ROOT = TASK_ROOT / "terraform"
 RUN_SERVICES_MAIN = TERRAFORM_ROOT / "modules" / "run_services" / "main.tf"
 RUN_SERVICES_VARIABLES = TERRAFORM_ROOT / "modules" / "run_services" / "variables.tf"
+DEV_VARIABLES = TERRAFORM_ROOT / "environments" / "dev" / "variables.tf"
 INGRESS_POLICY_TEST = (
     TERRAFORM_ROOT / "modules" / "ingress_policy" / "tests" / "c05_ingress_policy.tftest.hcl"
 )
@@ -60,11 +61,21 @@ def test_run_services_is_digest_pinned_and_bounded() -> None:
     assert 'max_attempts       = var.queue_max_attempts' in source
 
 
+def test_run_services_resolves_cloud_tasks_service_agent_from_project() -> None:
+    source = read(RUN_SERVICES_MAIN)
+    variables = read(RUN_SERVICES_VARIABLES)
+
+    assert 'data "google_project" "current"' in source
+    assert "data.google_project.current.number" in source
+    assert 'variable "project_number"' not in variables
+
+
 def test_dev_environment_wires_c04_outputs_into_c05a() -> None:
     source = read(DEV_MAIN)
 
     assert 'source = "../../modules/ingress_policy"' in source
     assert 'source = "../../modules/run_services"' in source
+    assert "depends_on = [module.managed_services]" in source
     assert "module.managed_services.artifact_registry.location" in source
     assert "module.managed_services.artifact_registry.repository_id" in source
     assert "module.managed_services.secret_containers.api_key_pepper" in source
@@ -86,3 +97,9 @@ def test_c05a_docs_and_tests_cover_baseline_and_hardened_modes() -> None:
     assert "public_invoker_with_disabled_api_url_fails_closed" in run_test
     assert "invalid_digest_fails_closed" in run_test
     assert "invalid_worker_path_fails_closed" in run_test
+
+
+def test_dev_environment_keeps_tasks_and_deployer_identities_distinct() -> None:
+    variables = read(DEV_VARIABLES)
+
+    assert "var.tasks_service_account_email != var.deployer_service_account_email" in variables

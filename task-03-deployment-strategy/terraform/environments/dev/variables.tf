@@ -58,6 +58,11 @@ variable "deployer_service_account_email" {
 variable "tasks_service_account_email" {
   description = "Bootstrap Cloud Tasks caller identity email."
   type        = string
+
+  validation {
+    condition     = var.tasks_service_account_email != var.deployer_service_account_email
+    error_message = "tasks_service_account_email must differ from the deployer identity."
+  }
 }
 
 variable "image_digest" {
