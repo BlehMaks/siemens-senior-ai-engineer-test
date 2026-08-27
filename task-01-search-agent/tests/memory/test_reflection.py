@@ -177,6 +177,7 @@ def test_request_redacts_common_credential_forms(raw_request: str, secret: str) 
         "ABIA1234567890ABCDEF",
         "ASIA1234567890ABCDEF",
         "sk-admin-1234abcd",
+        f"sk-admin-{'A' * 24}",
         *(
             f"{prefix}-{'A' * 24}"
             for prefix in (
@@ -317,6 +318,9 @@ def test_too_many_events_and_invalid_completion_provenance_fail() -> None:
         "https://www.siemens.com/report#private-fragment",
         "https://user:password@www.siemens.com/report",
         "https://sk-admin-1234abcd.example.com/report",
+        f"https://sk-admin-{'A1' * 10}.example.com/report",
+        f"https://leak-sk-admin-{'A1' * 10}.example.com/report",
+        "https://www.siemens.com/reports/sk-admin-1234%E2%80%8Babcd",
     ],
 )
 def test_private_or_credentialed_completion_urls_are_not_retained(
@@ -336,15 +340,15 @@ def test_public_completion_url_allows_benign_query_name() -> None:
     assert str(reflected.completion_evidence[0].source_url).endswith("monkey=business")
 
 
-def test_public_completion_url_allows_benign_sk_admin_topic() -> None:
-    reflected = reflect_run(
-        completed_result(
-            source_url="https://www.siemens.com/reports/sk-admin-dashboard"
-        )
-    )
+@pytest.mark.parametrize(
+    "topic", ["sk-admin-dashboard-v2", "sk-admin-dashboard-version-2026"]
+)
+def test_public_completion_url_allows_benign_sk_admin_topic(topic: str) -> None:
+    source_url = f"https://www.siemens.com/reports/{topic}"
+    reflected = reflect_run(completed_result(source_url=source_url))
 
     assert str(reflected.completion_evidence[0].source_url).endswith(
-        "/reports/sk-admin-dashboard"
+        f"/reports/{topic}"
     )
 
 

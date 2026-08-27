@@ -14,6 +14,17 @@ ReflectionText = Annotated[
     str, StringConstraints(min_length=1, max_length=240, strip_whitespace=True)
 ]
 
+# Unicode Default_Ignorable ranges include marks outside category Cf. Treating the
+# complete set as sensitive prevents invisible characters from splitting secrets.
+_DEFAULT_IGNORABLE_PATTERN = re.compile(
+    "[\u00ad\u034f\u061c\u115f-\u1160\u17b4-\u17b5\u180b-\u180f"
+    "\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f"
+    "\ufeff\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3"
+    "\U0001d173-\U0001d17a\U000e0000-\U000e0fff]"
+)
+# DNS canonicalization removes token case, and an attacker can prefix a credential
+# inside one label. Search the entire hostname without broadening public path topics.
+_HOST_ADMIN_TOKEN_PATTERN = re.compile(r"(?i)sk-admin-[a-z0-9_-]{20,}")
 _REDACTIONS = (
     re.compile(r"(?i)\bbearer\b[^.!?]*"),
     re.compile(
@@ -22,12 +33,15 @@ _REDACTIONS = (
     ),
     re.compile(r"(?i)\bhttps?://[^/\s:@]+:[^@/\s]+@[^\s]*"),
     # Keep provider prefixes explicit: credential families stay blocked without
-    # treating every hyphenated public slug as a secret. Short admin examples are
-    # opaque mixed tokens, so a digit distinguishes them from public topic slugs.
+    # treating every hyphenated public slug as a secret. The short documented admin
+    # example has an exact opaque shape. Full forms require mixed-case opaque data,
+    # keeping arbitrarily long lowercase public topic slugs outside the boundary.
     re.compile(
         r"(?<![A-Za-z0-9])(?:"
         r"sk-(?:[A-Za-z0-9]{20,}|(?:proj|svcacct)-[A-Za-z0-9_-]{20,}|"
-        r"admin-(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{8,})|"
+        r"admin-(?:[0-9]{4}[A-Za-z]{4}|"
+        r"(?=[A-Za-z0-9_-]{20,}(?![A-Za-z0-9]))"
+        r"(?=[A-Za-z0-9_-]*[A-Z])[A-Za-z0-9_-]{20,}))|"
         r"gh[pousr]_[A-Za-z0-9]{8,}|"
         r"github_pat_[A-Za-z0-9_]{20,}|"
         r"xox[baprs]-[A-Za-z0-9-]{20,}|"
@@ -183,7 +197,7 @@ def redact_memory_text(value: str) -> str:
 
     if type(value) is not str:
         raise ReflectionInputError("memory text must be a string")
-    redacted = " ".join(value.split())
+    redacted = _DEFAULT_IGNORABLE_PATTERN.sub("", " ".join(value.split()))
     for pattern in _REDACTIONS:
         redacted = pattern.sub("[REDACTED]", redacted)
     redacted = " ".join(redacted.split()).strip()
@@ -193,4 +207,14 @@ def redact_memory_text(value: str) -> str:
 
 
 def contains_sensitive_memory_text(value: str) -> bool:
-    return any(pattern.search(value) for pattern in _REDACTIONS)
+    return bool(_DEFAULT_IGNORABLE_PATTERN.search(value)) or any(
+        pattern.search(value) for pattern in _REDACTIONS
+    )
+
+
+def contains_sensitive_memory_hostname(value: str) -> bool:
+    """Detect credentials after case-insensitive DNS canonicalization."""
+
+    return contains_sensitive_memory_text(value) or bool(
+        _HOST_ADMIN_TOKEN_PATTERN.search(value)
+    )

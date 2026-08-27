@@ -20,7 +20,10 @@ from pydantic import (
 )
 
 from search_agent.contracts import OpaqueId, QueryText, ScopedAnswer, StrictModel
-from search_agent.memory.contracts import contains_sensitive_memory_text
+from search_agent.memory.contracts import (
+    contains_sensitive_memory_hostname,
+    contains_sensitive_memory_text,
+)
 
 from .ports import TERMINAL_RUN_STATES, RunFailureCode, RunState
 
@@ -110,14 +113,6 @@ _PUBLIC_MESSAGE_PATTERNS = (
         r")\s*(?:=|:)(?=.)"
     ),
 )
-# Unicode Default_Ignorable ranges include marks outside category Cf; rejecting
-# the complete set prevents invisible characters from splitting credential words.
-_DEFAULT_IGNORABLE_PATTERN = re.compile(
-    "[\u00ad\u034f\u061c\u115f-\u1160\u17b4-\u17b5\u180b-\u180f"
-    "\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f"
-    "\ufeff\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3"
-    "\U0001d173-\U0001d17a\U000e0000-\U000e0fff]"
-)
 
 
 def _bounded_event_id(value: str) -> str:
@@ -169,10 +164,8 @@ def validate_public_answer(value: object) -> ScopedAnswer:
 
 
 def _reject_sensitive_text(value: str) -> str:
-    if (
-        _DEFAULT_IGNORABLE_PATTERN.search(value)
-        or contains_sensitive_memory_text(value)
-        or any(pattern.search(value) for pattern in _PUBLIC_MESSAGE_PATTERNS)
+    if contains_sensitive_memory_text(value) or any(
+        pattern.search(value) for pattern in _PUBLIC_MESSAGE_PATTERNS
     ):
         raise ValueError("public message contains sensitive material")
     return value
@@ -186,7 +179,7 @@ def _require_public_source_url(value: str) -> None:
     if parsed.username is not None or parsed.password is not None or host is None:
         raise ValueError("citation URL is not safe to expose")
     normalized_host = host.rstrip(".").lower()
-    if contains_sensitive_memory_text(normalized_host):
+    if contains_sensitive_memory_hostname(normalized_host):
         raise ValueError("citation URL contains sensitive material")
     try:
         address = ipaddress.ip_address(normalized_host)
