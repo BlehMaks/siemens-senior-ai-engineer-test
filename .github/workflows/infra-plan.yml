@@ -80,6 +80,7 @@ jobs:
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          delegates: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
           project_id: ${{ vars.GCP_PROJECT_ID }}
           create_credentials_file: true
           export_environment_variables: true

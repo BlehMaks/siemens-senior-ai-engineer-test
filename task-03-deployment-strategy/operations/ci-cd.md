@@ -6,9 +6,9 @@ The repository has three narrowly scoped workflows:
   checks for pull requests and protected `master` updates;
 - `infra-plan.yml` authenticates only after a manual dispatch on `master` and
   produces a one-day review artifact;
-- `deploy.yml` rebuilds and scans `master`, transfers that exact local image to
-  the protected job, promotes it to Artifact Registry, and applies Terraform by
-  the resulting immutable digest.
+- `deploy.yml` rebuilds and scans `master`, promotes that exact image, exposes a
+  Terraform plan bound to its push digest, and applies only that artifact after
+  a second protected-environment approval.
 
 Every third-party action is pinned to a full commit SHA. Repository permissions
 default to none. Only the protected jobs receive `id-token: write`; neither
@@ -31,6 +31,7 @@ workflow accepts a service-account key or reads a GitHub secret.
    | `GCP_REGION` | Single reviewed region, normally `europe-west3` |
    | `GCP_TERRAFORM_STATE_BUCKET` | Versioned C03 state bucket |
    | `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full WIF provider resource name |
+   | `GCP_CI_SERVICE_ACCOUNT` | WIF entry identity that delegates to the deployer |
    | `GCP_API_SERVICE_ACCOUNT` | API runtime identity |
    | `GCP_WORKER_SERVICE_ACCOUNT` | Worker runtime identity |
    | `GCP_TASKS_SERVICE_ACCOUNT` | Cloud Tasks OIDC caller |
@@ -57,13 +58,18 @@ reruns the same checks. An operator then dispatches `infra-plan.yml` with an OCI
 `sha256` digest and reviews the short-lived plan artifact.
 
 For deployment, dispatch `deploy.yml` on `master`. The unprivileged job creates
-the image and SBOM. The `gcp-dev` approval gate protects the second job, which:
+the image and SBOM. A first `gcp-dev` approval admits the plan job, which:
 
 1. creates only the Terraform-managed foundation when the state is empty;
 2. verifies out-of-band secret versions without reading their payloads;
 3. pushes the exact tested tar artifact and resolves its registry digest;
-4. saves a Terraform plan and applies only that plan;
-5. prints the ready revision of each state-owned service.
+4. publishes the binary plan, its readable rendering, and a manifest binding it
+   to the workflow revision and push digest.
+
+The apply job references `gcp-dev` again, so it requires a separate approval
+after the plan artifact is available for review. It verifies the manifest,
+downloads the artifact from the same workflow run, applies that exact binary
+plan, and prints the ready revision of each state-owned service.
 
 Deployment concurrency does not cancel an in-flight apply. CI and plan runs do
 cancel stale work. The GCS backend lock is the final serialization boundary.

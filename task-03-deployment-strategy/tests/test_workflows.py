@@ -6,7 +6,9 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_ROOT = REPOSITORY_ROOT / ".github" / "workflows"
 WORKFLOWS = tuple(sorted(WORKFLOW_ROOT.glob("*.yml")))
-FULL_ACTION_PIN = re.compile(r"^\s*uses:\s*[^\s@]+@[0-9a-f]{40}(?:\s*#.*)?$", re.MULTILINE)
+FULL_ACTION_PIN = re.compile(
+    r"^\s*uses:\s*[^\s@]+@[0-9a-f]{40}(?:\s*#.*)?$", re.MULTILINE
+)
 
 
 def read(path: Path) -> str:
@@ -51,6 +53,7 @@ def test_privileged_jobs_are_master_and_environment_gated() -> None:
         assert "id-token: write" in source
         assert "google-github-actions/auth@" in source
         assert "GCP_WORKLOAD_IDENTITY_PROVIDER" in source
+        assert "delegates: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}" in source
         assert "GCP_DEPLOYER_SERVICE_ACCOUNT" in source
 
 
@@ -61,9 +64,13 @@ def test_deploy_promotes_the_tested_artifact_by_digest() -> None:
     assert "docker save --output release-image.tar" in source
     assert "docker load --input release-image.tar" in source
     assert "gcloud artifacts docker images describe" in source
+    assert '"$registry_digest" != "$push_digest"' in source
     assert "^sha256:[a-f0-9]{64}$" in source
     assert "TF_VAR_image_digest: ${{ steps.image.outputs.digest }}" in source
     assert "apply only the reviewed plan" in source.lower()
+    assert "dev.tfplan" in source
+    assert "reviewed-plan-${{ github.run_id }}" in source
+    assert "needs.plan.outputs.image_digest" in source
     assert "AGENT_API_KEY_PEPPER" not in source
     assert "AGENT_API_TASK_SIGNING_HMAC" not in source
 
@@ -79,3 +86,12 @@ def test_remote_state_and_secret_container_guards_fail_closed() -> None:
     assert "gcloud secrets versions list" in deploy
     assert "has no enabled version" in deploy
     assert "terraform init -backend=false" not in deploy
+
+
+def test_ci_runs_the_cross_module_environment_contract() -> None:
+    source = read(WORKFLOW_ROOT / "ci.yml")
+    contract_step = source.split(
+        "- name: Run Terraform resource contracts", maxsplit=1
+    )[1]
+
+    assert "environments/dev" in contract_step
