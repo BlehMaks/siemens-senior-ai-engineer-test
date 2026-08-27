@@ -47,7 +47,13 @@ from ..ports import (
     WorkItem,
     WriteDisposition,
 )
-from ..schemas import RunEvent, RunFailure, SessionLabel
+from ..schemas import (
+    RunEvent,
+    RunEventType,
+    RunFailure,
+    SessionLabel,
+    public_run_failure,
+)
 
 DisplayName = Annotated[
     str, StringConstraints(min_length=1, max_length=120, strip_whitespace=True)
@@ -563,6 +569,7 @@ class SQLiteRunRepository(_PathRepository):
                 failure_code=None,
             )
             await _insert_run(connection, run)
+            await _append_run_event(connection, run)
             await connection.execute(
                 "INSERT INTO idempotency_records "
                 "(tenant_id, idempotency_key, request_hash, run_id, created_at) "
@@ -621,6 +628,7 @@ class SQLiteRunRepository(_PathRepository):
                     lease=None,
                 )
                 await _save_run(connection, run, cancelled)
+                await _append_run_event(connection, cancelled)
                 return ClaimResult(
                     disposition=ClaimDisposition.CANCELLATION_REQUESTED,
                     run=cancelled,
@@ -656,6 +664,7 @@ class SQLiteRunRepository(_PathRepository):
                 ),
             )
             await _save_run(connection, run, claimed)
+            await _append_run_event(connection, claimed)
             return ClaimResult(disposition=ClaimDisposition.CLAIMED, run=claimed)
 
     async def renew_lease(self, renewal: LeaseRenewal) -> LeaseResult:
@@ -759,6 +768,7 @@ class SQLiteRunRepository(_PathRepository):
                 session_id=run.session_id,
                 run_id=run.run_id,
             )
+            await _append_run_event(connection, changed)
             return StateUpdateResult(disposition=WriteDisposition.APPLIED, run=changed)
 
     async def request_cancellation(
@@ -786,6 +796,11 @@ class SQLiteRunRepository(_PathRepository):
                 lease=None if immediate else run.lease,
             )
             await _save_run(connection, run, cancelled)
+            await _append_run_event(
+                connection,
+                cancelled,
+                message=(None if immediate else "Run cancellation was requested."),
+            )
             return CancellationResult(run=cancelled, changed=True)
 
     async def delete_run(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> bool:
@@ -1088,6 +1103,65 @@ async def _insert_run(connection: aiosqlite.Connection, run: RunRecord) -> None:
             str(run.version),
             _timestamp(run.created_at),
             run.model_dump_json(),
+        ),
+    )
+
+
+_RUN_EVENT_TYPES = {
+    RunState.COMPLETED: RunEventType.COMPLETED,
+    RunState.FAILED: RunEventType.FAILED,
+    RunState.CANCELLED: RunEventType.CANCELLED,
+    RunState.EXPIRED: RunEventType.EXPIRED,
+}
+_RUN_EVENT_MESSAGES = {
+    RunState.QUEUED: "Run accepted and queued.",
+    RunState.RUNNING: "Run execution is in progress.",
+    RunState.WAITING_FOR_TOOL: "Run is waiting for a bounded tool operation.",
+    RunState.COMPLETED: "Run completed.",
+    RunState.CANCELLED: "Run cancelled.",
+}
+
+
+async def _append_run_event(
+    connection: aiosqlite.Connection,
+    run: RunRecord,
+    *,
+    message: str | None = None,
+) -> None:
+    row = await (
+        await connection.execute(
+            "SELECT MAX(sequence) FROM run_events WHERE tenant_id = ? AND run_id = ?",
+            (run.tenant_id, run.run_id),
+        )
+    ).fetchone()
+    sequence = 1 if row is None or row[0] is None else int(row[0]) + 1
+    failure = None if run.failure_code is None else public_run_failure(run.failure_code)
+    event = RunEvent(
+        sequence=sequence,
+        run_id=run.run_id,
+        event_type=_RUN_EVENT_TYPES.get(run.state, RunEventType.STATUS),
+        state=run.state,
+        occurred_at=run.updated_at,
+        message=(
+            message
+            or (
+                failure.message
+                if failure is not None
+                else _RUN_EVENT_MESSAGES[run.state]
+            )
+        ),
+        answer=run.answer,
+        failure=failure,
+    )
+    await connection.execute(
+        "INSERT INTO run_events "
+        "(tenant_id, run_id, sequence, occurred_at, payload) VALUES (?, ?, ?, ?, ?)",
+        (
+            run.tenant_id,
+            run.run_id,
+            event.sequence,
+            _timestamp(event.occurred_at),
+            event.model_dump_json(exclude_none=True),
         ),
     )
 

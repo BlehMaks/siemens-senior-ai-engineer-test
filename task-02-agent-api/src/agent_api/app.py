@@ -19,10 +19,11 @@ from starlette.responses import JSONResponse
 from search_agent.contracts import OpaqueId
 
 from .ports import IdempotencyConflictError
-from .routes import build_run_router, build_session_router
+from .routes import build_event_router, build_run_router, build_session_router
 from .schemas import ErrorCode, ErrorDetail, ErrorEnvelope
 from .security import ApiKeyAuthError, ApiKeyManager, EnvPepperProvider, PepperProvider
 from .services import (
+    EventStreamService,
     InvalidRequest,
     RunNotFound,
     RunService,
@@ -31,6 +32,7 @@ from .services import (
     SessionUnavailable,
 )
 from .storage import (
+    SQLiteEventRepository,
     SQLiteKeyHashRepository,
     SQLiteRunRepository,
     SQLiteSessionRepository,
@@ -79,6 +81,11 @@ def create_app(
             clock=now,
             run_id_factory=run_id_factory,
         )
+        app.state.event_stream_service = EventStreamService(
+            SQLiteRunRepository(database_path),
+            SQLiteEventRepository(database_path),
+            clock=now,
+        )
         yield
 
     app = FastAPI(
@@ -89,6 +96,7 @@ def create_app(
     )
     app.include_router(build_session_router())
     app.include_router(build_run_router())
+    app.include_router(build_event_router())
     app.add_exception_handler(ApiKeyAuthError, _auth_error)
     app.add_exception_handler(SessionNotFound, _not_found)
     app.add_exception_handler(RunNotFound, _run_not_found)

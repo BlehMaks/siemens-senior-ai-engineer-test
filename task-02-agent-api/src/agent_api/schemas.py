@@ -248,6 +248,21 @@ class RunFailure(StrictModel):
     _message_is_public = field_validator("message")(_reject_sensitive_text)
 
 
+_PUBLIC_RUN_FAILURES: dict[RunFailureCode, tuple[str, bool]] = {
+    RunFailureCode.BUDGET_EXHAUSTED: ("Run exhausted its configured budget.", False),
+    RunFailureCode.NO_EVIDENCE: ("No sufficient public evidence was found.", False),
+    RunFailureCode.SEARCH_FAILED: ("Public evidence search failed.", True),
+    RunFailureCode.VALIDATION_FAILED: ("Run output failed validation.", False),
+    RunFailureCode.EXECUTION_FAILED: ("Run execution failed.", True),
+    RunFailureCode.EXPIRED: ("Run expired before completion.", True),
+}
+
+
+def public_run_failure(code: RunFailureCode) -> RunFailure:
+    message, retryable = _PUBLIC_RUN_FAILURES[code]
+    return RunFailure(code=code, message=message, retryable=retryable)
+
+
 def _revalidate_failure(value: object) -> RunFailure:
     if isinstance(value, dict):
         return RunFailure.model_validate(value)
@@ -529,4 +544,5 @@ __all__ = [
     "SessionResponse",
     "encode_sse",
     "parse_last_event_id",
+    "public_run_failure",
 ]

@@ -153,7 +153,7 @@ async def test_run_and_event_order_survive_reopen(migrated_path: Path) -> None:
         await runs.create(run)
 
     events = SQLiteEventRepository(migrated_path)
-    for sequence in (3, 1, 2):
+    for sequence in (4, 2, 3):
         await events.append(
             tenant_id="tenant-one",
             event=RunEvent(
@@ -179,11 +179,11 @@ async def test_run_and_event_order_survive_reopen(migrated_path: Path) -> None:
         for event in await reopened_events.list(
             tenant_id="tenant-one", run_id="run-alpha"
         )
-    ) == (1, 2, 3)
+    ) == (1, 2, 3, 4)
     assert await reopened_events.list(tenant_id="tenant-two", run_id="run-alpha") == ()
 
     completed = RunEvent(
-        sequence=4,
+        sequence=5,
         run_id="run-alpha",
         event_type=RunEventType.COMPLETED,
         state=RunState.COMPLETED,
@@ -203,9 +203,40 @@ async def test_run_and_event_order_survive_reopen(migrated_path: Path) -> None:
     assert await reopened_events.append(tenant_id="tenant-one", event=completed)
     assert (
         await reopened_events.list(
-            tenant_id="tenant-one", run_id="run-alpha", after_sequence=3
+            tenant_id="tenant-one", run_id="run-alpha", after_sequence=4
         )
     ) == (completed,)
+
+
+@pytest.mark.asyncio
+async def test_idempotent_create_and_cancel_emit_one_event_per_change(
+    migrated_path: Path,
+) -> None:
+    await seed_session(migrated_path)
+    runs = SQLiteRunRepository(migrated_path)
+
+    first = await runs.create(submission())
+    duplicate = await runs.create(submission())
+    cancelled = await runs.request_cancellation(
+        tenant_id="tenant-one", run_id="run-one", at=NOW
+    )
+    repeated = await runs.request_cancellation(
+        tenant_id="tenant-one", run_id="run-one", at=NOW
+    )
+
+    assert first.created
+    assert not duplicate.created
+    assert cancelled.changed
+    assert not repeated.changed
+    events = await SQLiteEventRepository(migrated_path).list(
+        tenant_id="tenant-one", run_id="run-one"
+    )
+    assert tuple(
+        (event.sequence, event.event_type, event.state) for event in events
+    ) == (
+        (1, RunEventType.STATUS, RunState.QUEUED),
+        (2, RunEventType.CANCELLED, RunState.CANCELLED),
+    )
 
 
 @pytest.mark.asyncio
@@ -446,17 +477,7 @@ async def test_session_deletion_cascades_runs_events_and_memory(
     runs = SQLiteRunRepository(migrated_path)
     await runs.create(submission())
     events = SQLiteEventRepository(migrated_path)
-    await events.append(
-        tenant_id="tenant-one",
-        event=RunEvent(
-            sequence=1,
-            run_id="run-one",
-            event_type=RunEventType.STATUS,
-            state=RunState.QUEUED,
-            occurred_at=NOW,
-            message="Run accepted.",
-        ),
-    )
+    assert len(await events.list(tenant_id="tenant-one", run_id="run-one")) == 1
     memory = reflection_repository(migrated_path)
     memory.put(reflection(tenant_id="tenant-one", run_id="run-one"))
     memory.close()
@@ -563,6 +584,18 @@ async def test_completed_outcome_and_reflection_survive_reopen(
             session_id="session-one",
             run_id="run-one",
         ) == reflection(tenant_id="tenant-one", run_id="run-one")
+        events = await SQLiteEventRepository(migrated_path).list(
+            tenant_id="tenant-one", run_id="run-one"
+        )
+        assert tuple(
+            (event.sequence, event.event_type, event.state) for event in events
+        ) == (
+            (1, RunEventType.STATUS, RunState.QUEUED),
+            (2, RunEventType.STATUS, RunState.RUNNING),
+            (3, RunEventType.COMPLETED, RunState.COMPLETED),
+        )
+        assert events[-1].answer == answer
+        assert events[-1].failure is None
     finally:
         reopened_memory.close()
 
@@ -617,6 +650,17 @@ async def test_failed_outcome_and_reflection_survive_reopen(
             session_id="session-one",
             run_id="run-one",
         ) == failed_reflection(tenant_id="tenant-one", run_id="run-one")
+        events = await SQLiteEventRepository(migrated_path).list(
+            tenant_id="tenant-one", run_id="run-one"
+        )
+        assert tuple(event.state for event in events) == (
+            RunState.QUEUED,
+            RunState.RUNNING,
+            RunState.FAILED,
+        )
+        assert events[-1].failure is not None
+        assert events[-1].failure.code is RunFailureCode.EXECUTION_FAILED
+        assert events[-1].answer is None
     finally:
         reopened_memory.close()
 

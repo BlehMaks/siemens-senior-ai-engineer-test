@@ -1,5 +1,6 @@
 """Application services shared by HTTP routes and background workers."""
 
+from .events import EventStreamService
 from .runs import RunNotFound, RunService
 from .sessions import (
     InvalidCursor,
@@ -10,6 +11,7 @@ from .sessions import (
 )
 
 __all__ = [
+    "EventStreamService",
     "InvalidCursor",
     "InvalidRequest",
     "RunNotFound",

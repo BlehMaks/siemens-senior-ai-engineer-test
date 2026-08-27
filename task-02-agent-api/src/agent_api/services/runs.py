@@ -13,7 +13,6 @@ from ..ports import (
     TERMINAL_RUN_STATES,
     IdempotencyKey,
     QueueConflictError,
-    RunFailureCode,
     RunParentNotFoundError,
     RunRecord,
     RunRepository,
@@ -22,18 +21,9 @@ from ..ports import (
     WorkItem,
     WorkQueue,
 )
-from ..schemas import RunAcceptedResponse, RunFailure, RunStatusResponse
+from ..schemas import RunAcceptedResponse, RunStatusResponse, public_run_failure
 from ..storage import StorageError
 from .sessions import SessionNotFound
-
-_FAILURES: dict[RunFailureCode, tuple[str, bool]] = {
-    RunFailureCode.BUDGET_EXHAUSTED: ("Run exhausted its configured budget.", False),
-    RunFailureCode.NO_EVIDENCE: ("No sufficient public evidence was found.", False),
-    RunFailureCode.SEARCH_FAILED: ("Public evidence search failed.", True),
-    RunFailureCode.VALIDATION_FAILED: ("Run output failed validation.", False),
-    RunFailureCode.EXECUTION_FAILED: ("Run execution failed.", True),
-    RunFailureCode.EXPIRED: ("Run expired before completion.", True),
-}
 
 
 class RunNotFound(LookupError):
@@ -119,12 +109,7 @@ def _new_run_id() -> str:
 def _public_status(run: RunRecord) -> RunStatusResponse:
     failure = None
     if run.failure_code is not None:
-        message, retryable = _FAILURES[run.failure_code]
-        failure = RunFailure(
-            code=run.failure_code,
-            message=message,
-            retryable=retryable,
-        )
+        failure = public_run_failure(run.failure_code)
     return RunStatusResponse(
         session_id=run.session_id,
         run_id=run.run_id,

@@ -1,8 +1,8 @@
 # Research Agent API contract
 
-This document freezes the public HTTP and event-stream contract for API v1. It
-does not define route implementations or queue processing. All identifiers are
-opaque strings; clients must not parse meaning from them.
+This document freezes the public HTTP and event-stream contract for API v1 and
+documents the implemented local durable path. All identifiers are opaque
+strings; clients must not parse meaning from them.
 
 ## HTTP surface
 
@@ -190,6 +190,15 @@ The stream media type is `text/event-stream`. Each application event is one
 UTF-8 frame with a decimal sequence ID, a typed event name, and a single JSON
 data line:
 
+```bash
+curl -N -H "Authorization: Bearer $AGENT_API_KEY" \
+  http://127.0.0.1:8000/v1/runs/run-one/events
+
+curl -N -H "Authorization: Bearer $AGENT_API_KEY" \
+  -H "Last-Event-ID: 7" \
+  http://127.0.0.1:8000/v1/runs/run-one/events
+```
+
 ```text
 id: 7
 event: run.status
@@ -207,14 +216,14 @@ blank line and therefore does not advance the resume cursor.
 Delivery can be duplicated. Clients must process events in ascending sequence
 order and deduplicate by `(run_id, sequence)`. Reconnect with the last fully
 processed sequence in `Last-Event-ID`; a missing header starts at the earliest
-available event. The exact retention window and unavailable-history response
-are lifecycle implementation decisions, not part of this schema-only unit.
+available event. Local durable events are retained with the run and are removed
+when that run or its parent session is deleted. A terminal event is the final
+frame; reconnecting after that sequence closes the stream without another event.
 
 ## Information boundary
 
 Public schemas forbid extra fields. They expose no authenticated tenant ID,
 prompt, chain-of-thought, raw page, raw provider response, internal exception,
-traceback, lease, worker, queue, database, or storage identifier. Authorization,
-tenant scoping, idempotent persistence, event retention, and cancellation
-execution belong to their implementation units; this document only states the
-public contract they must preserve.
+traceback, lease, worker, queue, database, or storage identifier. Every initial
+or resumed connection is authenticated and tenant-scoped before its first event
+is read. Run state and its corresponding public event are committed together.
