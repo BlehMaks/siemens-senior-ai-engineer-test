@@ -463,16 +463,19 @@ class SQLiteQuotaLimiter:
         now = _utc(at)
         if type(lease_seconds) is not int or lease_seconds <= 0:
             raise ValueError("execution lease must be a positive integer")
+        now_timestamp = _timestamp(now)
         expires_at = now + timedelta(seconds=lease_seconds)
         async with _write_connection(self._path) as connection:
             cursor = await connection.execute(
                 "UPDATE quota_execution_leases SET expires_at = ? "
-                "WHERE tenant_id = ? AND run_id = ? AND permit_id = ?",
+                "WHERE tenant_id = ? AND run_id = ? AND permit_id = ? "
+                "AND expires_at > ?",
                 (
                     _timestamp(expires_at),
                     permit.tenant_id,
                     permit.run_id,
                     permit.permit_id,
+                    now_timestamp,
                 ),
             )
             return cursor.rowcount == 1
@@ -522,15 +525,18 @@ class SQLiteQuotaLimiter:
 
     async def renew_sse(self, permit: SSEPermit, *, at: datetime) -> bool:
         now = _utc(at)
+        now_timestamp = _timestamp(now)
         async with _write_connection(self._path) as connection:
             cursor = await connection.execute(
                 "UPDATE quota_sse_leases SET expires_at = ? "
-                "WHERE tenant_id = ? AND key_id = ? AND permit_id = ?",
+                "WHERE tenant_id = ? AND key_id = ? AND permit_id = ? "
+                "AND expires_at > ?",
                 (
                     _timestamp(now + timedelta(seconds=self._config.sse_lease_seconds)),
                     permit.tenant_id,
                     permit.key_id,
                     permit.permit_id,
+                    now_timestamp,
                 ),
             )
             return cursor.rowcount == 1

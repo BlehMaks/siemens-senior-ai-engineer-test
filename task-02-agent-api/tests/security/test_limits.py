@@ -226,6 +226,46 @@ async def test_execution_and_sse_admission_are_atomic_tenant_caps(
 
 
 @pytest.mark.asyncio
+async def test_expired_execution_and_sse_leases_cannot_be_renewed(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "expired-live.sqlite3"
+    await migrate(path)
+    key = await seed_identity(path, tenant_id="tenant-one", key_id_hint="one")
+    for run_id in ("run-before", "run-exact", "run-after"):
+        await seed_run(path, tenant_id="tenant-one", run_id=run_id)
+    limiter = SQLiteQuotaLimiter(
+        path, LimitConfig(max_concurrent_runs=3, max_sse_connections=3)
+    )
+    executions = [
+        await limiter.acquire_execution(
+            tenant_id="tenant-one", run_id=run_id, at=NOW, lease_seconds=5
+        )
+        for run_id in ("run-before", "run-exact", "run-after")
+    ]
+    streams = [
+        await limiter.acquire_sse(tenant_id="tenant-one", key_id=key, at=NOW)
+        for _ in range(3)
+    ]
+    assert all(permit is not None for permit in executions)
+    before, exact, after = executions
+    assert before is not None and exact is not None and after is not None
+
+    assert await limiter.renew_execution(
+        before, at=NOW + timedelta(seconds=4), lease_seconds=5
+    )
+    assert not await limiter.renew_execution(
+        exact, at=NOW + timedelta(seconds=5), lease_seconds=5
+    )
+    assert not await limiter.renew_execution(
+        after, at=NOW + timedelta(seconds=6), lease_seconds=5
+    )
+    assert await limiter.renew_sse(streams[0], at=NOW + timedelta(seconds=29))
+    assert not await limiter.renew_sse(streams[1], at=NOW + timedelta(seconds=30))
+    assert not await limiter.renew_sse(streams[2], at=NOW + timedelta(seconds=31))
+
+
+@pytest.mark.asyncio
 async def test_accounting_storage_failure_fails_closed(tmp_path: Path) -> None:
     path = tmp_path / "outage.sqlite3"
     await migrate(path)
