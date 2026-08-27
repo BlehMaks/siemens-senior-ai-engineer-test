@@ -51,10 +51,20 @@ uv run material-similarity "input/IT DA AI Tasks/Fuse.csv" --part-id <PART_ID>
 uv run material-similarity "input/IT DA AI Tasks/Fuse.csv" --output alternatives.json
 ```
 
-The implementation combines word and character TF-IDF cosine scores with neutral
-`0.5/0.5` weights; the reviewed relevance stage will validate or revise those
-weights. Each JSON record has `ok`, `insufficient_description`, or
+The implementation combines word and character TF-IDF cosine scores with reviewed
+`0.25/0.75` weights. The versioned eight-query relevance benchmark selected this
+mixture by graded nDCG@5 from a fixed five-weight grid; the full metrics and limits
+are in `reports/retrieval-evaluation.md`. Each JSON record has
+`ok`, `insufficient_description`, or
 `insufficient_candidates` status. Successful records contain five unique non-self
 IDs, the combined and per-channel scores, and the strongest shared word and
 character features by inverse document frequency. Blank text always produces an
 explicit empty result.
+
+Run the deterministic benchmark with:
+
+```bash
+uv run python -m material_similarity.evaluation \
+  "input/IT DA AI Tasks/Fuse.csv" \
+  task-05-material-similarity/evals/relevance.yaml
+```

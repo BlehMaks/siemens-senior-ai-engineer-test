@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from math import isfinite
 from typing import Literal, cast
 
 # scikit-learn does not publish ``py.typed`` metadata; these two imports are the
@@ -21,8 +22,7 @@ from material_similarity.data import (
 from material_similarity.normalize import normalize_description
 
 TOP_K = 5
-WORD_WEIGHT = 0.5
-CHARACTER_WEIGHT = 0.5
+WORD_WEIGHT = 0.25
 _EVIDENCE_LIMIT = 5
 
 RetrievalStatus = Literal["ok", "insufficient_description", "insufficient_candidates"]
@@ -52,8 +52,13 @@ class RetrievalResult:
 
 def rank_alternatives(
     materials: Sequence[Mapping[str, str]],
+    *,
+    word_weight: float = WORD_WEIGHT,
 ) -> tuple[RetrievalResult, ...]:
     """Return one deterministic, self-excluding top-five result per material."""
+
+    if not isfinite(word_weight) or not 0.0 <= word_weight <= 1.0:
+        raise ValueError("word_weight must be finite and between 0 and 1")
 
     # Reuse the catalog boundary so direct callers cannot bypass unique-ID and
     # schema invariants already enforced by the loader.
@@ -101,6 +106,7 @@ def rank_alternatives(
             part_ids=part_ids,
             word=word,
             character=character,
+            word_weight=word_weight,
         )
         status: RetrievalStatus = (
             "ok" if len(alternatives) == TOP_K else ("insufficient_candidates")
@@ -144,15 +150,19 @@ def _rank_query(
     part_ids: tuple[str, ...],
     word: _Channel,
     character: _Channel,
+    word_weight: float,
 ) -> tuple[Alternative, ...]:
     candidates: list[tuple[float, str, int]] = []
     for candidate_position, material_index in enumerate(usable_indices):
         if candidate_position == query_position:
             continue
         score = (
-            WORD_WEIGHT * word.scores[query_position][candidate_position]
-            + CHARACTER_WEIGHT * character.scores[query_position][candidate_position]
+            word_weight * word.scores[query_position][candidate_position]
+            + (1.0 - word_weight) * character.scores[query_position][candidate_position]
         )
+        # Quantize machine noise so mathematically tied candidates always reach the
+        # documented PART_ID tie-break regardless of source row order.
+        score = round(score, 12)
         # Zero overlap is not text evidence, so it must not be padded into a top five.
         if score > 0.0:
             candidates.append((score, part_ids[material_index], candidate_position))
