@@ -1,0 +1,462 @@
+{
+  "evaluations": [
+    {
+      "character_weight": 1.0,
+      "metrics": {
+        "coverage": 0.875,
+        "expected_status_rate": 1.0,
+        "ndcg_at_5": 0.802445,
+        "precision_at_5": 0.542857,
+        "query_count": 8,
+        "ranked_query_count": 7
+      },
+      "slices": [
+        {
+          "metrics": {
+            "coverage": 0.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.0,
+            "precision_at_5": 0.0,
+            "query_count": 1,
+            "ranked_query_count": 0
+          },
+          "name": "blank_description"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.723423,
+            "precision_at_5": 0.4,
+            "query_count": 5,
+            "ranked_query_count": 5
+          },
+          "name": "channel_disagreement"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 1.0,
+            "precision_at_5": 0.9,
+            "query_count": 2,
+            "ranked_query_count": 2
+          },
+          "name": "duplicate_text"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 1.0,
+            "precision_at_5": 0.9,
+            "query_count": 2,
+            "ranked_query_count": 2
+          },
+          "name": "exact_variant"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.723423,
+            "precision_at_5": 0.56,
+            "query_count": 5,
+            "ranked_query_count": 5
+          },
+          "name": "hard_negative"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.723597,
+            "precision_at_5": 0.75,
+            "query_count": 4,
+            "ranked_query_count": 4
+          },
+          "name": "near_match"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 1.0,
+            "precision_at_5": 0.0,
+            "query_count": 1,
+            "ranked_query_count": 1
+          },
+          "name": "sparse_description"
+        }
+      ],
+      "word_weight": 0.0
+    },
+    {
+      "character_weight": 0.75,
+      "metrics": {
+        "coverage": 0.875,
+        "expected_status_rate": 1.0,
+        "ndcg_at_5": 0.846792,
+        "precision_at_5": 0.542857,
+        "query_count": 8,
+        "ranked_query_count": 7
+      },
+      "slices": [
+        {
+          "metrics": {
+            "coverage": 0.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.0,
+            "precision_at_5": 0.0,
+            "query_count": 1,
+            "ranked_query_count": 0
+          },
+          "name": "blank_description"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.785508,
+            "precision_at_5": 0.4,
+            "query_count": 5,
+            "ranked_query_count": 5
+          },
+          "name": "channel_disagreement"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 1.0,
+            "precision_at_5": 0.9,
+            "query_count": 2,
+            "ranked_query_count": 2
+          },
+          "name": "duplicate_text"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 1.0,
+            "precision_at_5": 0.9,
+            "query_count": 2,
+            "ranked_query_count": 2
+          },
+          "name": "exact_variant"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.785508,
+            "precision_at_5": 0.56,
+            "query_count": 5,
+            "ranked_query_count": 5
+          },
+          "name": "hard_negative"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.801204,
+            "precision_at_5": 0.75,
+            "query_count": 4,
+            "ranked_query_count": 4
+          },
+          "name": "near_match"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 1.0,
+            "precision_at_5": 0.0,
+            "query_count": 1,
+            "ranked_query_count": 1
+          },
+          "name": "sparse_description"
+        }
+      ],
+      "word_weight": 0.25
+    },
+    {
+      "character_weight": 0.5,
+      "metrics": {
+        "coverage": 0.875,
+        "expected_status_rate": 1.0,
+        "ndcg_at_5": 0.833304,
+        "precision_at_5": 0.542857,
+        "query_count": 8,
+        "ranked_query_count": 7
+      },
+      "slices": [
+        {
+          "metrics": {
+            "coverage": 0.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.0,
+            "precision_at_5": 0.0,
+            "query_count": 1,
+            "ranked_query_count": 0
+          },
+          "name": "blank_description"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.771288,
+            "precision_at_5": 0.4,
+            "query_count": 5,
+            "ranked_query_count": 5
+          },
+          "name": "channel_disagreement"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.988344,
+            "precision_at_5": 0.9,
+            "query_count": 2,
+            "ranked_query_count": 2
+          },
+          "name": "duplicate_text"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.988344,
+            "precision_at_5": 0.9,
+            "query_count": 2,
+            "ranked_query_count": 2
+          },
+          "name": "exact_variant"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.766626,
+            "precision_at_5": 0.56,
+            "query_count": 5,
+            "ranked_query_count": 5
+          },
+          "name": "hard_negative"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.746911,
+            "precision_at_5": 0.75,
+            "query_count": 4,
+            "ranked_query_count": 4
+          },
+          "name": "near_match"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 1.0,
+            "precision_at_5": 0.0,
+            "query_count": 1,
+            "ranked_query_count": 1
+          },
+          "name": "sparse_description"
+        }
+      ],
+      "word_weight": 0.5
+    },
+    {
+      "character_weight": 0.25,
+      "metrics": {
+        "coverage": 0.875,
+        "expected_status_rate": 1.0,
+        "ndcg_at_5": 0.761708,
+        "precision_at_5": 0.542857,
+        "query_count": 8,
+        "ranked_query_count": 7
+      },
+      "slices": [
+        {
+          "metrics": {
+            "coverage": 0.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.0,
+            "precision_at_5": 0.0,
+            "query_count": 1,
+            "ranked_query_count": 0
+          },
+          "name": "blank_description"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.671053,
+            "precision_at_5": 0.4,
+            "query_count": 5,
+            "ranked_query_count": 5
+          },
+          "name": "channel_disagreement"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.988344,
+            "precision_at_5": 0.9,
+            "query_count": 2,
+            "ranked_query_count": 2
+          },
+          "name": "duplicate_text"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.988344,
+            "precision_at_5": 0.9,
+            "query_count": 2,
+            "ranked_query_count": 2
+          },
+          "name": "exact_variant"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.77702,
+            "precision_at_5": 0.56,
+            "query_count": 5,
+            "ranked_query_count": 5
+          },
+          "name": "hard_negative"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.727103,
+            "precision_at_5": 0.75,
+            "query_count": 4,
+            "ranked_query_count": 4
+          },
+          "name": "near_match"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.446854,
+            "precision_at_5": 0.0,
+            "query_count": 1,
+            "ranked_query_count": 1
+          },
+          "name": "sparse_description"
+        }
+      ],
+      "word_weight": 0.75
+    },
+    {
+      "character_weight": 0.0,
+      "metrics": {
+        "coverage": 0.875,
+        "expected_status_rate": 1.0,
+        "ndcg_at_5": 0.672381,
+        "precision_at_5": 0.485714,
+        "query_count": 8,
+        "ranked_query_count": 7
+      },
+      "slices": [
+        {
+          "metrics": {
+            "coverage": 0.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.0,
+            "precision_at_5": 0.0,
+            "query_count": 1,
+            "ranked_query_count": 0
+          },
+          "name": "blank_description"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.545996,
+            "precision_at_5": 0.32,
+            "query_count": 5,
+            "ranked_query_count": 5
+          },
+          "name": "channel_disagreement"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.988344,
+            "precision_at_5": 0.9,
+            "query_count": 2,
+            "ranked_query_count": 2
+          },
+          "name": "duplicate_text"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.988344,
+            "precision_at_5": 0.9,
+            "query_count": 2,
+            "ranked_query_count": 2
+          },
+          "name": "exact_variant"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.741334,
+            "precision_at_5": 0.48,
+            "query_count": 5,
+            "ranked_query_count": 5
+          },
+          "name": "hard_negative"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.682495,
+            "precision_at_5": 0.65,
+            "query_count": 4,
+            "ranked_query_count": 4
+          },
+          "name": "near_match"
+        },
+        {
+          "metrics": {
+            "coverage": 1.0,
+            "expected_status_rate": 1.0,
+            "ndcg_at_5": 0.0,
+            "precision_at_5": 0.0,
+            "query_count": 1,
+            "ranked_query_count": 1
+          },
+          "name": "sparse_description"
+        }
+      ],
+      "word_weight": 1.0
+    }
+  ],
+  "selected_character_weight": 0.75,
+  "selected_word_weight": 0.25,
+  "stability": 1.0
+}

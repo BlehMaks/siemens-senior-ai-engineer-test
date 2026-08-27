@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "catalog": {
+    "sha256": "40e91ed9d802011cbac078ac18045f17870ada35b776201ce57494caff2de62a",
+    "row_count": 998
+  },
+  "grade_scale": {
+    "0": "Known conflict or no useful replacement evidence.",
+    "1": "Same broad family, but a key attribute conflicts or is missing.",
+    "2": "Close variant with compatible family and form; engineering approval is still required.",
+    "3": "Exact described match or same reviewed key attributes; engineering approval is still required."
+  },
+  "queries": [
+    {
+      "part_id": "A42",
+      "expected_status": "ok",
+      "slices": ["duplicate_text", "exact_variant", "near_match"],
+      "rationale": "Exact duplicate and same-series packaging/rating variants test deterministic duplicate handling.",
+      "judgments": [
+        {"part_id": "A41", "grade": 3, "rationale": "Same acting, 4A ratings, voltages, material, dimensions, and mount; packaging differs."},
+        {"part_id": "A43", "grade": 3, "rationale": "The source description and reviewed technical fields are identical."},
+        {"part_id": "A44", "grade": 2, "rationale": "Same family, acting, voltage, size, and mount, but rated current is 5A rather than 4A."},
+        {"part_id": "A46", "grade": 2, "rationale": "Same family, acting, voltage, size, and mount, but rated current is 5A rather than 4A."},
+        {"part_id": "A49", "grade": 2, "rationale": "Same family, acting, voltage, size, and mount, but rated current is 6.3A rather than 4A."}
+      ]
+    },
+    {
+      "part_id": "A114",
+      "expected_status": "ok",
+      "slices": ["channel_disagreement", "hard_negative"],
+      "rationale": "The channels trade exact current against the required 6.3x32mm form and slow-blow behavior.",
+      "judgments": [
+        {"part_id": "A22", "grade": 1, "rationale": "Same slow-blow 6.3x32mm glass family, but 6.3A conflicts with 2A."},
+        {"part_id": "A23", "grade": 1, "rationale": "Same slow-blow 6.3x32mm glass family, but 16A conflicts with 2A."},
+        {"part_id": "A34", "grade": 1, "rationale": "Current and acting match, but 5x20mm ceramic surface-mount construction conflicts."},
+        {"part_id": "A115", "grade": 1, "rationale": "Same slow-blow 6.3x32mm glass family, but 20A conflicts with 2A."},
+        {"part_id": "A233", "grade": 1, "rationale": "Current, voltage, and acting match, but 5x20mm ceramic construction conflicts."},
+        {"part_id": "A234", "grade": 1, "rationale": "Current, voltage, and acting match, but 5x20mm ceramic construction conflicts."},
+        {"part_id": "A295", "grade": 1, "rationale": "Current, voltage, acting, and glass match, but 5x20mm dimensions conflict."},
+        {"part_id": "A472", "grade": 0, "rationale": "The 0.2A fast-blow rating conflicts despite matching 6.3x32mm glass dimensions."},
+        {"part_id": "A477", "grade": 0, "rationale": "The 0.5A fast-blow rating conflicts despite matching 6.3x32mm glass dimensions."}
+      ]
+    },
+    {
+      "part_id": "A244",
+      "expected_status": "ok",
+      "slices": ["channel_disagreement", "hard_negative", "near_match"],
+      "rationale": "Exact 4A tokens attract incompatible slow-blow parts while family phrasing attracts fast-blow current variants.",
+      "judgments": [
+        {"part_id": "A41", "grade": 0, "rationale": "Current and size match, but slow-blow action and surface mounting conflict."},
+        {"part_id": "A42", "grade": 0, "rationale": "Current and size match, but slow-blow action and surface mounting conflict."},
+        {"part_id": "A43", "grade": 0, "rationale": "Current and size match, but slow-blow action and surface mounting conflict."},
+        {"part_id": "A239", "grade": 0, "rationale": "The description is slow-blow 2.5A rather than the query's fast-blow 4A."},
+        {"part_id": "A242", "grade": 2, "rationale": "Same fast-blow Melf 5x20mm family and voltage; current differs at 1A."},
+        {"part_id": "A243", "grade": 2, "rationale": "Same fast-blow Melf 5x20mm family and voltage; current differs at 2A."},
+        {"part_id": "A245", "grade": 2, "rationale": "Same fast-blow Melf 5x20mm family and voltage; current differs at 5A."},
+        {"part_id": "A247", "grade": 2, "rationale": "Same fast-blow Melf 5x20mm family and voltage; current differs at 8A."},
+        {"part_id": "A250", "grade": 2, "rationale": "Same fast-blow Melf 5x20mm family and voltage; current differs at 10A."},
+        {"part_id": "A256", "grade": 2, "rationale": "Same fast-blow Melf 5x20mm family and voltage; current differs at 2.5A."}
+      ]
+    },
+    {
+      "part_id": "A441",
+      "expected_status": "ok",
+      "slices": ["channel_disagreement", "sparse_description"],
+      "rationale": "The generic description supplies mount wording but no rating, size, action, or breaking-capacity evidence.",
+      "judgments": [
+        {"part_id": "A2", "grade": 0, "rationale": "Only generic fuse words match; the candidate is inline and has unsupported ratings."},
+        {"part_id": "A4", "grade": 0, "rationale": "Only generic fuse words match; the candidate is inline and has unsupported ratings."},
+        {"part_id": "A10", "grade": 0, "rationale": "Only generic fuse words match; the candidate is inline and has unsupported ratings."},
+        {"part_id": "A15", "grade": 0, "rationale": "Only generic fuse words match; the candidate is inline and has unsupported ratings."},
+        {"part_id": "A16", "grade": 0, "rationale": "Only generic fuse words match; the candidate is inline and has unsupported ratings."},
+        {"part_id": "A25", "grade": 1, "rationale": "Surface mounting matches, but the query lacks enough technical detail to approve the rated candidate."},
+        {"part_id": "A33", "grade": 1, "rationale": "Surface mounting matches, but the query lacks enough technical detail to approve the rated candidate."},
+        {"part_id": "A36", "grade": 1, "rationale": "Surface mounting matches, but the query lacks enough technical detail to approve the rated candidate."},
+        {"part_id": "A45", "grade": 1, "rationale": "Surface mounting matches, but the query lacks enough technical detail to approve the rated candidate."},
+        {"part_id": "A51", "grade": 1, "rationale": "Surface mounting matches, but the query lacks enough technical detail to approve the rated candidate."}
+      ]
+    },
+    {
+      "part_id": "A623",
+      "expected_status": "ok",
+      "slices": ["channel_disagreement", "hard_negative", "near_match"],
+      "rationale": "Exact 3A tokens compete with 0603 dimensions and a truncated exact-family record.",
+      "judgments": [
+        {"part_id": "A590", "grade": 1, "rationale": "Current, voltage, and action match, but 1206 dimensions conflict with 0603."},
+        {"part_id": "A617", "grade": 2, "rationale": "Same 0603 family, action, and voltage; current differs at 1A."},
+        {"part_id": "A620", "grade": 2, "rationale": "Same 0603 family, action, and voltage; current differs at 2A."},
+        {"part_id": "A624", "grade": 3, "rationale": "Same 3A, 32V, 0603 family and action; the candidate description is merely truncated."},
+        {"part_id": "A626", "grade": 2, "rationale": "Same 0603 family, action, and voltage; current differs at 4A."},
+        {"part_id": "A629", "grade": 2, "rationale": "Same 0603 family, action, and voltage; current differs at 5A."},
+        {"part_id": "A634", "grade": 2, "rationale": "Same 0603 family, action, and voltage; current differs at 2.5A."},
+        {"part_id": "A664", "grade": 1, "rationale": "Current, voltage, and action match, but 0402 dimensions conflict with 0603."},
+        {"part_id": "A747", "grade": 0, "rationale": "Current and voltage match, but 1206 dimensions and fast rather than very-fast action conflict."}
+      ]
+    },
+    {
+      "part_id": "A688",
+      "expected_status": "ok",
+      "slices": ["channel_disagreement", "hard_negative", "near_match"],
+      "rationale": "The current token attracts wrong-voltage packages while word phrases retain the 0402 family with different current.",
+      "judgments": [
+        {"part_id": "A611", "grade": 0, "rationale": "Current matches, but 125V and 1206 dimensions conflict with 32V 0402."},
+        {"part_id": "A662", "grade": 2, "rationale": "Same 32V 0402 family, action, and mount; current differs at 2A."},
+        {"part_id": "A666", "grade": 2, "rationale": "Same 32V 0402 family, action, and mount; current differs at 4A."},
+        {"part_id": "A668", "grade": 2, "rationale": "Same 32V 0402 family, action, and mount; current differs at 5A."},
+        {"part_id": "A673", "grade": 2, "rationale": "Same 32V 0402 family, action, and mount; current differs at 2.5A."},
+        {"part_id": "A687", "grade": 3, "rationale": "Current, voltage, 0402 dimensions, action, and mount match; labeling differs between 0402 and NANO."},
+        {"part_id": "A740", "grade": 1, "rationale": "Current and voltage match, but 0603 dimensions and fast action conflict."},
+        {"part_id": "A815", "grade": 0, "rationale": "Current matches, but 125V and 2410 dimensions conflict with 32V 0402."},
+        {"part_id": "A942", "grade": 0, "rationale": "Current matches, but 125V and 2410 dimensions conflict with 32V 0402."},
+        {"part_id": "A943", "grade": 0, "rationale": "Current matches, but 125V and 2410 dimensions conflict with 32V 0402."},
+        {"part_id": "A944", "grade": 0, "rationale": "Current matches, but 125V and 2410 dimensions conflict with 32V 0402."}
+      ]
+    },
+    {
+      "part_id": "A823",
+      "expected_status": "ok",
+      "slices": ["duplicate_text", "exact_variant", "hard_negative"],
+      "rationale": "Four duplicate descriptions test deterministic ties while different current and slow-blow parts are hard negatives.",
+      "judgments": [
+        {"part_id": "A776", "grade": 2, "rationale": "Current, voltage, size, acting field, and mount match; blow wording differs and needs review."},
+        {"part_id": "A824", "grade": 3, "rationale": "The source description and reviewed technical fields are identical."},
+        {"part_id": "A825", "grade": 3, "rationale": "The source description and reviewed technical fields are identical."},
+        {"part_id": "A826", "grade": 3, "rationale": "The source description and reviewed technical fields are identical."},
+        {"part_id": "A850", "grade": 1, "rationale": "Family, voltage, size, and action match, but 5A conflicts with 1A."},
+        {"part_id": "A967", "grade": 0, "rationale": "Current, voltage, and size match, but slow-blow action conflicts with very-fast action."}
+      ]
+    },
+    {
+      "part_id": "A8",
+      "expected_status": "insufficient_description",
+      "slices": ["blank_description"],
+      "rationale": "Structured fields exist, but the assignment's text-only stage must abstain without a description.",
+      "judgments": []
+    }
+  ]
+}
