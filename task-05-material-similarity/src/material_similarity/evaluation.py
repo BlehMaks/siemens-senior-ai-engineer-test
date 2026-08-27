@@ -299,8 +299,10 @@ def _query(
     )
     if expected_status == "insufficient_description" and has_description:
         raise BenchmarkError(f"{location} expects abstention for usable text")
-    if expected_status == "ok" and not has_description:
-        raise BenchmarkError(f"{location} expects ranking for blank text")
+    if not has_description and expected_status != "insufficient_description":
+        raise BenchmarkError(
+            f"{location} expects a non-abstaining result without usable text"
+        )
     if expected_status == "ok" and not judgments:
         raise BenchmarkError(f"{location} has no reviewed candidates")
     if expected_status == "insufficient_description" and judgments:

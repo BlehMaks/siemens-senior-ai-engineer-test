@@ -34,11 +34,13 @@ vocabulary, query membership, or a score threshold.
 | 0.75 | 0.25 | 0.542857 | 0.761708 | 0.875 |
 | 1.00 | 0.00 | 0.485714 | 0.672381 | 0.875 |
 
-The deterministic selection rule maximizes nDCG@5, then precision@5, then proximity
-to the neutral 0.5 prior. It selects 0.25 word / 0.75 character. Character n-grams
-help distinguish compact ratings and dimensions while the word channel still keeps
-family phrases. Reversing all 998 input rows leaves every selected benchmark result
-identical (`stability = 1.0`). All eight expected statuses match.
+The deterministic selection rule
+maximizes expected-status agreement, then coverage, then nDCG@5, then precision@5,
+and finally proximity to the neutral 0.5 prior. It selects 0.25 word / 0.75
+character. Character n-grams help distinguish compact ratings and dimensions while
+the word channel still keeps family phrases. Reversing all 998 input rows leaves
+every selected benchmark result identical (`stability = 1.0`). All eight expected
+statuses match.
 
 Benchmark coverage is 7/8 because the blank-description query correctly abstains.
 It is not catalog coverage: the complete catalog has text-backed results for

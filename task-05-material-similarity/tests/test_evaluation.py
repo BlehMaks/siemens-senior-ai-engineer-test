@@ -144,6 +144,28 @@ def test_benchmark_requires_a_lowercase_sha256(digest: str, tmp_path: Path) -> N
             load_benchmark(path, materials)
 
 
+def test_benchmark_rejects_non_abstaining_status_for_blank_text(
+    tmp_path: Path,
+) -> None:
+    materials = tuple(
+        _material(part_id, "" if part_id == "Q" else "shared fuse")
+        for part_id in "QABCDE"
+    )
+    payload = _benchmark_payload()
+    queries = payload["queries"]
+    assert isinstance(queries, list)
+    query = queries[0]
+    assert isinstance(query, dict)
+    query["expected_status"] = "insufficient_candidates"
+    path = tmp_path / "relevance.yaml"
+    _write_benchmark(path, payload)
+
+    with pytest.raises(
+        BenchmarkError, match="non-abstaining result without usable text"
+    ):
+        load_benchmark(path, materials, catalog_sha256=_FIXTURE_DIGEST)
+
+
 def test_metrics_detect_a_deliberately_permuted_ranking() -> None:
     query = BenchmarkQuery(
         part_id="Q",
