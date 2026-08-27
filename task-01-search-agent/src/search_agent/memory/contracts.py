@@ -22,10 +22,12 @@ _REDACTIONS = (
     ),
     re.compile(r"(?i)\bhttps?://[^/\s:@]+:[^@/\s]+@[^\s]*"),
     # Keep provider prefixes explicit: credential families stay blocked without
-    # treating every hyphenated public slug as a secret.
+    # treating every hyphenated public slug as a secret. Short admin examples are
+    # opaque mixed tokens, so a digit distinguishes them from public topic slugs.
     re.compile(
         r"(?<![A-Za-z0-9])(?:"
-        r"sk-(?:[A-Za-z0-9]{20,}|(?:proj|svcacct)-[A-Za-z0-9_-]{20,})|"
+        r"sk-(?:[A-Za-z0-9]{20,}|(?:proj|svcacct)-[A-Za-z0-9_-]{20,}|"
+        r"admin-(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{8,})|"
         r"gh[pousr]_[A-Za-z0-9]{8,}|"
         r"github_pat_[A-Za-z0-9_]{20,}|"
         r"xox[baprs]-[A-Za-z0-9-]{20,}|"
