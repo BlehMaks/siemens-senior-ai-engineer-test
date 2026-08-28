@@ -41,3 +41,21 @@ def test_cli_serializes_one_part_and_the_complete_catalog(
     assert main([str(catalog), "--output", str(output)]) == 0
     all_results = json.loads(output.read_text(encoding="utf-8"))
     assert [result["part_id"] for result in all_results] == [str(i) for i in range(6)]
+
+
+def test_cli_exposes_hybrid_only_by_explicit_mode(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    catalog = tmp_path / "Fuse.csv"
+    _catalog(catalog)
+
+    assert main([str(catalog), "--part-id", "2"]) == 0
+    text_result = json.loads(capsys.readouterr().out)
+    assert "excluded" not in text_result
+    assert "mode" not in text_result["alternatives"][0]
+
+    assert main([str(catalog), "--mode", "hybrid", "--part-id", "2"]) == 0
+    hybrid_result = json.loads(capsys.readouterr().out)
+    assert hybrid_result["excluded"] == []
+    assert all(item["mode"] == "text_only" for item in hybrid_result["alternatives"])
+    assert all("text" in item for item in hybrid_result["alternatives"])

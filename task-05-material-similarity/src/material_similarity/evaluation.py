@@ -17,6 +17,10 @@ from material_similarity.data import (
     load_materials,
     profile_materials,
 )
+from material_similarity.hybrid import (
+    HybridRetrievalResult,
+    rank_hybrid_alternatives,
+)
 from material_similarity.normalize import normalize_description
 from material_similarity.retrieval import (
     TOP_K,
@@ -103,6 +107,19 @@ class EvaluationReport:
     selected_character_weight: float
     stability: float
     evaluations: tuple[WeightEvaluation, ...]
+
+
+@dataclass(frozen=True)
+class HybridEvaluationReport:
+    """Baseline comparison and the explicit hybrid promotion decision."""
+
+    text_metrics: Metrics
+    hybrid_metrics: Metrics
+    text_hard_negative_rate: float
+    hybrid_hard_negative_rate: float
+    hybrid_stability: float
+    promoted: bool
+    non_promotion_reasons: tuple[str, ...]
 
 
 def load_benchmark(
@@ -216,6 +233,52 @@ def evaluate_benchmark(
     )
 
 
+def evaluate_hybrid_benchmark(
+    materials: Sequence[Mapping[str, str]],
+    benchmark: Benchmark,
+) -> HybridEvaluationReport:
+    """Compare the prototype with the unchanged text default on reviewed labels."""
+
+    text_results = rank_alternatives(materials)
+    hybrid_results = _hybrid_retrieval_results(rank_hybrid_alternatives(materials))
+    reversed_hybrid = _hybrid_retrieval_results(
+        rank_hybrid_alternatives(tuple(reversed(materials)))
+    )
+    text_metrics = score_results(benchmark, text_results)
+    hybrid_metrics = score_results(benchmark, hybrid_results)
+    text_hard_negative_rate = _hard_negative_rate(
+        benchmark.queries, _results_by_id(text_results)
+    )
+    hybrid_hard_negative_rate = _hard_negative_rate(
+        benchmark.queries, _results_by_id(hybrid_results)
+    )
+    stability = _stability(
+        benchmark.queries,
+        _results_by_id(hybrid_results),
+        _results_by_id(reversed_hybrid),
+    )
+    reasons: list[str] = []
+    if hybrid_metrics.ndcg_at_5 <= text_metrics.ndcg_at_5:
+        reasons.append("hybrid nDCG@5 did not improve")
+    if hybrid_hard_negative_rate >= text_hard_negative_rate:
+        reasons.append("hybrid hard-negative rate did not decrease")
+    if hybrid_metrics.coverage < text_metrics.coverage:
+        reasons.append("hybrid coverage regressed")
+    if hybrid_metrics.expected_status_rate < text_metrics.expected_status_rate:
+        reasons.append("hybrid expected-status agreement regressed")
+    if stability != 1.0:
+        reasons.append("hybrid results changed with input order")
+    return HybridEvaluationReport(
+        text_metrics=text_metrics,
+        hybrid_metrics=hybrid_metrics,
+        text_hard_negative_rate=text_hard_negative_rate,
+        hybrid_hard_negative_rate=hybrid_hard_negative_rate,
+        hybrid_stability=stability,
+        promoted=not reasons,
+        non_promotion_reasons=tuple(reasons),
+    )
+
+
 def select_weight(evaluations: Sequence[WeightEvaluation]) -> WeightEvaluation:
     """Choose usable retrieval first, then relevance and the neutral prior."""
 
@@ -240,6 +303,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("catalog", type=Path)
     parser.add_argument("benchmark", type=Path)
+    parser.add_argument(
+        "--mode",
+        choices=("text", "hybrid"),
+        default="text",
+        help="Evaluate the text weight grid or compare the hybrid prototype",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     catalog_path = cast(Path, args.catalog)
@@ -248,9 +317,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         digest = file_digest(handle, "sha256").hexdigest()
     materials = load_materials(catalog_path)
     benchmark = load_benchmark(benchmark_path, materials, catalog_sha256=digest)
+    report = (
+        evaluate_hybrid_benchmark(materials, benchmark)
+        if args.mode == "hybrid"
+        else evaluate_benchmark(materials, benchmark)
+    )
     rendered = (
         json.dumps(
-            asdict(evaluate_benchmark(materials, benchmark)),
+            asdict(report),
             ensure_ascii=False,
             indent=2,
             sort_keys=True,
@@ -416,6 +490,34 @@ def _stability(
 ) -> float:
     stable = sum(first[query.part_id] == second[query.part_id] for query in queries)
     return round(stable / len(queries), 6)
+
+
+def _hybrid_retrieval_results(
+    results: Sequence[HybridRetrievalResult],
+) -> tuple[RetrievalResult, ...]:
+    return tuple(
+        RetrievalResult(
+            part_id=result.part_id,
+            status=result.status,
+            alternatives=tuple(item.text for item in result.alternatives),
+        )
+        for result in results
+    )
+
+
+def _hard_negative_rate(
+    queries: Sequence[BenchmarkQuery],
+    results_by_id: Mapping[str, RetrievalResult],
+) -> float:
+    hard_negatives = 0
+    returned = 0
+    for query in queries:
+        result = results_by_id[query.part_id]
+        grades = {judgment.part_id: judgment.grade for judgment in query.judgments}
+        for alternative in result.alternatives:
+            hard_negatives += grades[alternative.part_id] == 0
+            returned += 1
+    return round(hard_negatives / returned, 6) if returned else 0.0
 
 
 def _results_by_id(

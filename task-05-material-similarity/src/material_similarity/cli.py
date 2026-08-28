@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 from material_similarity.data import load_materials
+from material_similarity.hybrid import rank_hybrid_alternatives
 from material_similarity.retrieval import rank_alternatives
 
 
@@ -20,11 +21,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "catalog", type=Path, help="Path to semicolon-delimited Fuse.csv"
     )
+    parser.add_argument(
+        "--mode",
+        choices=("text", "hybrid"),
+        default="text",
+        help="Use the reviewed text baseline or the non-promoted structured prototype",
+    )
     parser.add_argument("--part-id", help="Return only this PART_ID")
     parser.add_argument("--output", type=Path, help="Write JSON to this path")
     args = parser.parse_args(argv)
 
-    results = rank_alternatives(load_materials(cast(Path, args.catalog)))
+    materials = load_materials(cast(Path, args.catalog))
+    results = (
+        rank_hybrid_alternatives(materials)
+        if args.mode == "hybrid"
+        else rank_alternatives(materials)
+    )
     part_id = cast(str | None, args.part_id)
     if part_id is None:
         payload: object = [asdict(result) for result in results]
