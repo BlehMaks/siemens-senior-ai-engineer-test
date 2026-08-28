@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 
 import pytest
 from pydantic import ValidationError
@@ -445,6 +445,39 @@ def test_review_queue_validates_every_sqlite_row(tmp_path: Path) -> None:
         pytest.raises(ReflectionStorageError, match="stored semantic fact"),
     ):
         repository.list_proposed(tenant_id="tenant-one")
+
+
+def test_review_queue_reads_one_validated_sqlite_snapshot(tmp_path: Path) -> None:
+    path = tmp_path / "corrupt-before-single-read.sqlite3"
+    with SQLiteSemanticFactRepository(path) as repository:
+        repository.propose(fact(fact_id="fact-alpha"))
+        repository.propose(fact(fact_id="fact-zulu", source_id="source-two"))
+
+    read_started = Event()
+    corruption_finished = Event()
+
+    def corrupt_later_row() -> None:
+        assert read_started.wait(timeout=5)
+        with sqlite3.connect(path) as connection:
+            connection.execute(
+                "UPDATE semantic_facts SET state = ? WHERE fact_id = ?",
+                (FactReviewState.REJECTED, "fact-zulu"),
+            )
+        corruption_finished.set()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        attack = executor.submit(corrupt_later_row)
+        with SQLiteSemanticFactRepository(path) as repository:
+
+            def synchronize_read(statement: str) -> None:
+                if "ORDER BY fact_id LIMIT" in statement:
+                    read_started.set()
+                    assert corruption_finished.wait(timeout=5)
+
+            repository._connection.set_trace_callback(synchronize_read)
+            with pytest.raises(ReflectionStorageError, match="stored semantic fact"):
+                repository.list_proposed(tenant_id="tenant-one")
+        attack.result(timeout=5)
 
 
 @pytest.mark.parametrize("mutation", ("missing_state", "mismatched_expiry"))

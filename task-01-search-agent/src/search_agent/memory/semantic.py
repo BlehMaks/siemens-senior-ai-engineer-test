@@ -503,27 +503,28 @@ class SQLiteSemanticFactRepository:
         self, *, tenant_id: OpaqueId, limit: int = 100
     ) -> tuple[SemanticFact, ...]:
         checked_tenant = _scope_id(tenant_id)
-        self._validate_tenant_metadata(checked_tenant)
-        return self._list(
-            "tenant_id = ? AND state = ? ORDER BY fact_id LIMIT ?",
-            (checked_tenant, FactReviewState.PROPOSED, _limit(limit)),
+        values = tuple(
+            fact
+            for fact in self._tenant_facts(checked_tenant)
+            if fact.state is FactReviewState.PROPOSED
         )
+        return values[: _limit(limit)]
 
     def list_active(
         self, *, tenant_id: OpaqueId, at: datetime, limit: int = 100
     ) -> tuple[SemanticFact, ...]:
         checked_tenant = _scope_id(tenant_id)
-        self._validate_tenant_metadata(checked_tenant)
-        return self._list(
-            "tenant_id = ? AND state = ? AND expires_at > ? "
-            "ORDER BY conflict_key, fact_id LIMIT ?",
+        checked_at = _timestamp(at)
+        values = sorted(
             (
-                checked_tenant,
-                FactReviewState.APPROVED,
-                _iso(_timestamp(at)),
-                _limit(limit),
+                fact
+                for fact in self._tenant_facts(checked_tenant)
+                if fact.state is FactReviewState.APPROVED
+                and fact.expires_at > checked_at
             ),
+            key=lambda fact: (fact.conflict_key, fact.fact_id),
         )
+        return tuple(values[: _limit(limit)])
 
     def delete_fact(self, *, tenant_id: OpaqueId, fact_id: OpaqueId) -> bool:
         return (
@@ -544,21 +545,6 @@ class SQLiteSemanticFactRepository:
 
     def delete_tenant(self, *, tenant_id: OpaqueId) -> int:
         return self._delete("tenant_id = ?", (_scope_id(tenant_id),))
-
-    def _list(
-        self, predicate: str, parameters: tuple[object, ...]
-    ) -> tuple[SemanticFact, ...]:
-        self._require_open()
-        try:
-            rows = self._connection.execute(
-                "SELECT tenant_id, fact_id, origin_session_id, origin_run_id, "
-                "source_id, conflict_key, state, expires_at, payload "
-                f"FROM semantic_facts WHERE {predicate}",
-                parameters,
-            ).fetchall()
-        except sqlite3.Error as exc:
-            raise ReflectionStorageError("SQLite semantic fact list failed") from exc
-        return tuple(_decode_row(row) for row in rows)
 
     def _delete(self, predicate: str, parameters: tuple[str, ...]) -> int:
         self._require_open()
@@ -583,21 +569,20 @@ class SQLiteSemanticFactRepository:
             self._closed = True
             raise ReflectionStorageError("SQLite semantic fact schema is incompatible")
 
-    def _validate_tenant_metadata(self, tenant_id: str) -> None:
+    def _tenant_facts(self, tenant_id: str) -> tuple[SemanticFact, ...]:
         self._require_open()
         try:
             rows = self._connection.execute(
                 "SELECT tenant_id, fact_id, origin_session_id, origin_run_id, "
                 "source_id, conflict_key, state, expires_at, payload FROM "
-                "semantic_facts WHERE tenant_id = ? ORDER BY fact_id",
+                "semantic_facts WHERE tenant_id = ? ORDER BY fact_id LIMIT -1",
                 (tenant_id,),
             ).fetchall()
         except sqlite3.Error as exc:
             raise ReflectionStorageError(
                 "SQLite semantic fact metadata validation failed"
             ) from exc
-        for row in rows:
-            _decode_row(row)
+        return tuple(_decode_row(row) for row in rows)
 
     def _require_open(self) -> None:
         if self._closed:
