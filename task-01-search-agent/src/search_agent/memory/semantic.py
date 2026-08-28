@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -31,6 +32,13 @@ FactClaim = Annotated[
 ]
 
 _MAX_SERIALIZED_BYTES = 16 * 1024
+_CONTROL_INSTRUCTION_PATTERN = re.compile(
+    r"(?i)\b(?:ignore|disregard|override)\s+(?:all\s+)?"
+    r"(?:previous|prior|system|developer)\s+(?:instructions?|rules?|prompts?)\b|"
+    r"\b(?:grant|enable|allow)\s+(?:me\s+|the\s+agent\s+|it\s+)?"
+    r"(?:admin|browser|code|network|system|tool)\s+"
+    r"(?:access|capabilit(?:y|ies)|permissions?)\b"
+)
 
 
 class FactAuthor(StrEnum):
@@ -75,7 +83,11 @@ class SemanticFact(StrictModel):
     @field_validator("claim", mode="before")
     @classmethod
     def normalize_claim(cls, value: object) -> object:
-        if type(value) is not str or contains_sensitive_memory_text(value):
+        if (
+            type(value) is not str
+            or contains_sensitive_memory_text(value)
+            or _CONTROL_INSTRUCTION_PATTERN.search(value)
+        ):
             raise ValueError("fact claim contains sensitive material")
         return " ".join(value.split()).casefold()
 
@@ -204,12 +216,15 @@ class InMemorySemanticFactRepository:
         self, *, tenant_id: OpaqueId, limit: int = 100
     ) -> tuple[SemanticFact, ...]:
         checked_tenant = _scope_id(tenant_id)
-        values = [
+        tenant_facts = [
             _validate_stored_fact(key, fact)
             for key, fact in self._items.items()
-            if key[0] == checked_tenant and fact.state is FactReviewState.PROPOSED
+            if key[0] == checked_tenant
         ]
-        values.sort(key=lambda fact: (fact.proposed_at, fact.fact_id))
+        values = [
+            fact for fact in tenant_facts if fact.state is FactReviewState.PROPOSED
+        ]
+        values.sort(key=lambda fact: fact.fact_id)
         return tuple(values[: _limit(limit)])
 
     def list_active(
@@ -217,12 +232,15 @@ class InMemorySemanticFactRepository:
     ) -> tuple[SemanticFact, ...]:
         checked_tenant = _scope_id(tenant_id)
         checked_at = _timestamp(at)
-        values = [
+        tenant_facts = [
             _validate_stored_fact(key, fact)
             for key, fact in self._items.items()
             if key[0] == checked_tenant
-            and fact.state is FactReviewState.APPROVED
-            and fact.expires_at > checked_at
+        ]
+        values = [
+            fact
+            for fact in tenant_facts
+            if fact.state is FactReviewState.APPROVED and fact.expires_at > checked_at
         ]
         values.sort(key=lambda fact: (fact.conflict_key, fact.fact_id))
         return tuple(values[: _limit(limit)])
@@ -308,6 +326,7 @@ class SQLiteSemanticFactRepository:
         try:
             self._connection = sqlite3.connect(path)
             self._connection.execute("PRAGMA foreign_keys = ON")
+            self._connection.execute("PRAGMA busy_timeout = 10000")
             self._connection.execute(self._CREATE)
             self._connection.commit()
             self._validate_schema()
@@ -365,63 +384,68 @@ class SQLiteSemanticFactRepository:
         self._require_open()
         key = _key(tenant_id, fact_id)
         try:
-            with self._connection:
-                row = self._connection.execute(
+            self._connection.execute("BEGIN IMMEDIATE")
+            row = self._connection.execute(
+                "SELECT tenant_id, fact_id, origin_session_id, origin_run_id, "
+                "source_id, conflict_key, state, expires_at, payload "
+                "FROM semantic_facts WHERE tenant_id = ? AND fact_id = ?",
+                key,
+            ).fetchone()
+            if row is None:
+                raise ReflectionInputError("fact does not exist")
+            current = _decode_row(row)
+            if current.state is not FactReviewState.PROPOSED:
+                raise ReflectionInputError("fact must be proposed before review")
+            updated = _reviewed(
+                current,
+                state=state,
+                reviewer_id=reviewer_id,
+                reviewed_at=reviewed_at,
+            )
+            if updated.state is FactReviewState.APPROVED:
+                assert updated.review is not None
+                conflicts = self._connection.execute(
                     "SELECT tenant_id, fact_id, origin_session_id, origin_run_id, "
                     "source_id, conflict_key, state, expires_at, payload "
-                    "FROM semantic_facts WHERE tenant_id = ? AND fact_id = ?",
-                    key,
-                ).fetchone()
-                if row is None:
-                    raise ReflectionInputError("fact does not exist")
-                current = _decode_row(row)
-                if current.state is not FactReviewState.PROPOSED:
-                    raise ReflectionInputError("fact must be proposed before review")
-                updated = _reviewed(
-                    current,
-                    state=state,
-                    reviewer_id=reviewer_id,
-                    reviewed_at=reviewed_at,
-                )
-                if updated.state is FactReviewState.APPROVED:
-                    assert updated.review is not None
-                    conflicts = self._connection.execute(
-                        "SELECT tenant_id, fact_id, origin_session_id, origin_run_id, "
-                        "source_id, conflict_key, state, expires_at, payload "
-                        "FROM semantic_facts WHERE tenant_id = ? AND conflict_key = ? "
-                        "AND state = ? AND fact_id <> ? AND expires_at > ? LIMIT 1",
-                        (
-                            updated.tenant_id,
-                            updated.conflict_key,
-                            FactReviewState.APPROVED,
-                            updated.fact_id,
-                            _iso(updated.review.reviewed_at),
-                        ),
-                    ).fetchall()
-                    _reject_conflict(
-                        updated,
-                        (_decode_row(item) for item in conflicts),
-                        at=updated.review.reviewed_at,
-                    )
-                cursor = self._connection.execute(
-                    "UPDATE semantic_facts SET state = ?, expires_at = ?, payload = ? "
-                    "WHERE tenant_id = ? AND fact_id = ? AND state = ?",
+                    "FROM semantic_facts WHERE tenant_id = ? AND conflict_key = ? "
+                    "AND state = ? AND fact_id <> ? AND expires_at > ? LIMIT 1",
                     (
-                        updated.state,
-                        _iso(updated.expires_at),
-                        updated.model_dump_json(),
                         updated.tenant_id,
+                        updated.conflict_key,
+                        FactReviewState.APPROVED,
                         updated.fact_id,
-                        FactReviewState.PROPOSED,
+                        _iso(updated.review.reviewed_at),
                     ),
+                ).fetchall()
+                _reject_conflict(
+                    updated,
+                    (_decode_row(item) for item in conflicts),
+                    at=updated.review.reviewed_at,
                 )
-                if cursor.rowcount != 1:
-                    raise ReflectionStorageError(
-                        "semantic fact review raced another update"
-                    )
+            cursor = self._connection.execute(
+                "UPDATE semantic_facts SET state = ?, expires_at = ?, payload = ? "
+                "WHERE tenant_id = ? AND fact_id = ? AND state = ?",
+                (
+                    updated.state,
+                    _iso(updated.expires_at),
+                    updated.model_dump_json(),
+                    updated.tenant_id,
+                    updated.fact_id,
+                    FactReviewState.PROPOSED,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ReflectionStorageError(
+                    "semantic fact review raced another update"
+                )
+            self._connection.commit()
         except (FactConflictError, ReflectionInputError, ReflectionStorageError):
+            if self._connection.in_transaction:
+                self._connection.rollback()
             raise
         except sqlite3.Error as exc:
+            if self._connection.in_transaction:
+                self._connection.rollback()
             raise ReflectionStorageError("SQLite semantic fact review failed") from exc
         return _copy(updated)
 
@@ -481,19 +505,23 @@ class SQLiteSemanticFactRepository:
     def list_proposed(
         self, *, tenant_id: OpaqueId, limit: int = 100
     ) -> tuple[SemanticFact, ...]:
+        checked_tenant = _scope_id(tenant_id)
+        self._validate_tenant_metadata(checked_tenant)
         return self._list(
             "tenant_id = ? AND state = ? ORDER BY fact_id LIMIT ?",
-            (_scope_id(tenant_id), FactReviewState.PROPOSED, _limit(limit)),
+            (checked_tenant, FactReviewState.PROPOSED, _limit(limit)),
         )
 
     def list_active(
         self, *, tenant_id: OpaqueId, at: datetime, limit: int = 100
     ) -> tuple[SemanticFact, ...]:
+        checked_tenant = _scope_id(tenant_id)
+        self._validate_tenant_metadata(checked_tenant)
         return self._list(
             "tenant_id = ? AND state = ? AND expires_at > ? "
             "ORDER BY conflict_key, fact_id LIMIT ?",
             (
-                _scope_id(tenant_id),
+                checked_tenant,
                 FactReviewState.APPROVED,
                 _iso(_timestamp(at)),
                 _limit(limit),
@@ -558,6 +586,31 @@ class SQLiteSemanticFactRepository:
             self._closed = True
             raise ReflectionStorageError("SQLite semantic fact schema is incompatible")
 
+    def _validate_tenant_metadata(self, tenant_id: str) -> None:
+        self._require_open()
+        try:
+            row = self._connection.execute(
+                "SELECT tenant_id, fact_id, origin_session_id, origin_run_id, "
+                "source_id, conflict_key, state, expires_at, payload "
+                "FROM semantic_facts WHERE tenant_id = ? AND CASE "
+                "WHEN json_valid(payload) THEN "
+                "tenant_id != json_extract(payload, '$.tenant_id') OR "
+                "fact_id != json_extract(payload, '$.fact_id') OR "
+                "origin_session_id != json_extract(payload, '$.origin_session_id') OR "
+                "origin_run_id != json_extract(payload, '$.origin_run_id') OR "
+                "source_id != json_extract(payload, '$.source_id') OR "
+                "conflict_key != json_extract(payload, '$.conflict_key') OR "
+                "state != json_extract(payload, '$.state') "
+                "ELSE 1 END LIMIT 1",
+                (tenant_id,),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise ReflectionStorageError(
+                "SQLite semantic fact metadata validation failed"
+            ) from exc
+        if row is not None:
+            _decode_row(row)
+
     def _require_open(self) -> None:
         if self._closed:
             raise RepositoryClosedError("SQLite semantic fact repository is closed")
@@ -621,6 +674,8 @@ def _reviewed(
             reviewer_id=_scope_id(reviewer_id),
             reviewed_at=_timestamp(reviewed_at),
         )
+        if review.reviewed_at >= fact.expires_at:
+            raise ValueError("expired facts cannot be reviewed")
         return SemanticFact.model_validate(
             {**fact.model_dump(mode="python"), "state": state, "review": review},
             strict=True,
