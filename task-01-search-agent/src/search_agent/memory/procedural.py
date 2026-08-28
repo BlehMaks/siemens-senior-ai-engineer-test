@@ -165,6 +165,8 @@ class InMemoryProcedureRepository:
         self._versions: dict[tuple[str, str, int], ProcedureVersion] = {}
         self._active: dict[tuple[str, str], int] = {}
         self._latest: dict[tuple[str, str], int] = {}
+        self._generations: dict[tuple[str, str, int], int] = {}
+        self._next_generation = 0
         self._lock = RLock()
 
     def propose(
@@ -187,7 +189,10 @@ class InMemoryProcedureRepository:
                 raise ProcedureVersionConflictError(
                     "procedure version expectation is stale"
                 )
-            self._versions[(*scope, checked.version)] = checked
+            key = (*scope, checked.version)
+            self._next_generation += 1
+            self._versions[key] = checked
+            self._generations[key] = self._next_generation
             self._latest[scope] = checked.version
         return _copy(checked)
 
@@ -204,6 +209,7 @@ class InMemoryProcedureRepository:
         key = (*_scope(tenant_id, procedure_id), _version(version))
         with self._lock:
             current = self._required(key)
+            generation = self._generation(key)
         updated = _reviewed(
             current,
             state=state,
@@ -211,7 +217,10 @@ class InMemoryProcedureRepository:
             reviewed_at=reviewed_at,
         )
         with self._lock:
-            if self._versions.get(key) != current:
+            if (
+                self._versions.get(key) != current
+                or self._generation(key) != generation
+            ):
                 raise ProcedureVersionConflictError(
                     "procedure review raced another update"
                 )
@@ -231,6 +240,7 @@ class InMemoryProcedureRepository:
         with self._lock:
             current_active = self._active.get(scope)
             stored = self._versions.get(key)
+            generation = None if stored is None else self._generation(key)
         _require_expected(current_active, expected_active_version)
         if stored is None:
             raise ReflectionInputError("procedure version does not exist")
@@ -242,7 +252,7 @@ class InMemoryProcedureRepository:
                 raise ProcedureVersionConflictError(
                     "procedure version expectation is stale"
                 )
-            if self._versions.get(key) != stored:
+            if self._versions.get(key) != stored or self._generation(key) != generation:
                 raise ProcedureVersionConflictError(
                     "procedure version changed during activation"
                 )
@@ -292,11 +302,13 @@ class InMemoryProcedureRepository:
     ) -> tuple[ProcedureVersion, ...]:
         checked_tenant = _scope_id(tenant_id)
         with self._lock:
-            values = [
-                self._version_for_activation((*scope, version))
-                for scope, version in self._active.items()
-                if scope[0] == checked_tenant
-            ]
+            values: list[ProcedureVersion] = []
+            for scope, version in self._active.items():
+                if scope[0] != checked_tenant:
+                    continue
+                if type(version) is not int:
+                    raise ReflectionStorageError("active procedure pointer is invalid")
+                values.append(self._version_for_activation((*scope, version)))
         values.sort(key=lambda item: item.procedure_id)
         return tuple(values[: _active_limit(limit)])
 
@@ -313,6 +325,7 @@ class InMemoryProcedureRepository:
             selected = set(keys)
             for key in keys:
                 del self._versions[key]
+                self._generations.pop(key, None)
             for scope, version in tuple(self._active.items()):
                 if (*scope, version) in selected:
                     del self._active[scope]
@@ -324,6 +337,7 @@ class InMemoryProcedureRepository:
             keys = [key for key in self._versions if key[:2] == scope]
             for key in keys:
                 del self._versions[key]
+                self._generations.pop(key, None)
             self._active.pop(scope, None)
         return len(keys)
 
@@ -333,6 +347,7 @@ class InMemoryProcedureRepository:
             keys = [key for key in self._versions if key[0] == checked_tenant]
             for key in keys:
                 del self._versions[key]
+                self._generations.pop(key, None)
             scopes = [scope for scope in self._active if scope[0] == checked_tenant]
             for scope in scopes:
                 del self._active[scope]
@@ -371,6 +386,12 @@ class InMemoryProcedureRepository:
         if maximum is not None and latest < maximum:
             raise ReflectionStorageError("procedure version head is invalid")
         return latest
+
+    def _generation(self, key: tuple[str, str, int]) -> int:
+        generation = self._generations.get(key)
+        if type(generation) is not int or generation <= 0:
+            raise ReflectionStorageError("procedure record generation is invalid")
+        return generation
 
     def _version_for_activation(self, key: tuple[str, str, int]) -> ProcedureVersion:
         value = self._versions.get(key)
@@ -549,6 +570,7 @@ class SQLiteProcedureRepository:
         try:
             self._connection.execute("BEGIN IMMEDIATE")
             self._validate_scope_metadata(key[0], key[1])
+            self._latest_version(key[:2])
             current = self._required_row(key)
             if current.state is not ProcedureReviewState.PROPOSED:
                 raise ReflectionInputError(
@@ -601,6 +623,7 @@ class SQLiteProcedureRepository:
         try:
             self._connection.execute("BEGIN IMMEDIATE")
             self._validate_scope_metadata(*scope)
+            self._latest_version(scope)
             current_row = self._connection.execute(
                 "SELECT version FROM active_procedures "
                 "WHERE tenant_id = ? AND procedure_id = ?",
@@ -637,6 +660,7 @@ class SQLiteProcedureRepository:
         self._require_open()
         scope = _scope(tenant_id, procedure_id)
         self._validate_scope_metadata(*scope)
+        self._latest_version(scope)
         key = (*scope, _version(version))
         row = self._fetch_row(key)
         return None if row is None else _decode_row(row)
@@ -647,6 +671,7 @@ class SQLiteProcedureRepository:
         self._require_open()
         scope = _scope(tenant_id, procedure_id)
         self._validate_scope_metadata(*scope)
+        self._latest_version(scope)
         try:
             pointer = self._connection.execute(
                 "SELECT version FROM active_procedures "
@@ -677,6 +702,7 @@ class SQLiteProcedureRepository:
         self._require_open()
         scope = _scope(tenant_id, procedure_id)
         self._validate_scope_metadata(*scope)
+        self._latest_version(scope)
         try:
             rows = self._connection.execute(
                 "SELECT tenant_id, procedure_id, version, origin_session_id, "
@@ -712,6 +738,7 @@ class SQLiteProcedureRepository:
                 or type(pointer[2]) is not int
             ):
                 raise ReflectionStorageError("active procedure pointer is invalid")
+            self._latest_version((pointer[0], pointer[1]))
             row = self._fetch_row(pointer)
             if row is None:
                 raise ReflectionStorageError("active procedure pointer is dangling")
@@ -747,18 +774,19 @@ class SQLiteProcedureRepository:
     ) -> int:
         try:
             self._connection.execute("BEGIN IMMEDIATE")
-            scopes = self._connection.execute(
-                "SELECT DISTINCT tenant_id, procedure_id FROM procedure_versions "
-                f"WHERE {predicate}",
+            selected_rows = self._connection.execute(
+                "SELECT tenant_id, procedure_id, version, origin_session_id, "
+                "origin_run_id, state, payload FROM procedure_versions "
+                f"WHERE {predicate} ORDER BY tenant_id, procedure_id, version",
                 parameters,
             ).fetchall()
+            selected_versions = tuple(_decode_row(row) for row in selected_rows)
+            scopes = {(item.tenant_id, item.procedure_id) for item in selected_versions}
+            for scope in scopes:
+                self._latest_version(scope)
             selected = {
-                tuple(row)
-                for row in self._connection.execute(
-                    "SELECT tenant_id, procedure_id, version FROM procedure_versions "
-                    f"WHERE {predicate}",
-                    parameters,
-                ).fetchall()
+                (item.tenant_id, item.procedure_id, item.version)
+                for item in selected_versions
             }
             pointers = self._connection.execute(
                 "SELECT tenant_id, procedure_id, version FROM active_procedures"
@@ -773,7 +801,7 @@ class SQLiteProcedureRepository:
             cursor = self._connection.execute(
                 f"DELETE FROM procedure_versions WHERE {predicate}", parameters
             )
-            for scope in scopes:
+            for scope in sorted(scopes):
                 remaining = self._connection.execute(
                     "SELECT 1 FROM procedure_versions WHERE tenant_id = ? "
                     "AND procedure_id = ? LIMIT 1",
