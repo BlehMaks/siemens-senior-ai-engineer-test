@@ -175,34 +175,26 @@ class ReviewedMemoryContext(StrictModel):
         facts: tuple[SemanticFact, ...],
         procedures: tuple[ProcedureVersion, ...],
     ) -> ReviewedMemoryContext:
-        return cls(
-            tenant_id=tenant_id,
-            observed_at=observed_at,
-            facts=facts,
-            procedures=tuple(
-                ActiveProcedure._from_repository(procedure)
-                for procedure in procedures
-            ),
-        )
+        del tenant_id, observed_at, facts, procedures
+        raise ValueError("active procedures require a live repository lookup")
 
     def revalidated_copy(self) -> ReviewedMemoryContext:
         """Rebuild while preserving only valid repository-bound selections."""
 
         self._validate_records()
+        if self.procedures:
+            raise ValueError("active procedures require live repository revalidation")
         facts = tuple(
             SemanticFact.model_validate(
                 fact.model_dump(mode="python", warnings="error"), strict=True
             )
             for fact in self.facts
         )
-        procedures = tuple(
-            selection._validated_procedure() for selection in self.procedures
-        )
-        return self._from_repository(
+        return ReviewedMemoryContext(
             tenant_id=self.tenant_id,
             observed_at=self.observed_at,
             facts=facts,
-            procedures=procedures,
+            procedures=(),
         )
 
     def to_untrusted_payload(self) -> dict[str, object]:
@@ -233,6 +225,14 @@ class ReviewedMemoryContext(StrictModel):
 class ReviewedMemoryReadPort(Protocol):
     async def read_active(
         self, *, tenant_id: OpaqueId, at: datetime
+    ) -> ReviewedMemoryContext: ...
+
+    async def revalidate_active(
+        self,
+        context: ReviewedMemoryContext,
+        *,
+        tenant_id: OpaqueId,
+        at: datetime,
     ) -> ReviewedMemoryContext: ...
 
 
@@ -278,6 +278,21 @@ class RepositoryReviewedMemoryReader:
             partial(self._read_active, tenant_id, at),
         )
 
+    async def revalidate_active(
+        self,
+        context: ReviewedMemoryContext,
+        *,
+        tenant_id: OpaqueId,
+        at: datetime,
+    ) -> ReviewedMemoryContext:
+        if self._closed.is_set():
+            raise RuntimeError("reviewed memory reader is closed")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._executor,
+            partial(self._revalidate_active, context, tenant_id, at),
+        )
+
     def _read_active(
         self, tenant_id: OpaqueId, at: datetime
     ) -> ReviewedMemoryContext:
@@ -291,17 +306,52 @@ class RepositoryReviewedMemoryReader:
                 tenant_id=tenant_id,
                 limit=MAX_CONTEXT_PROCEDURES,
             )
-        return ReviewedMemoryContext._from_repository(
+        return _attested_context(
             tenant_id=tenant_id,
             observed_at=at,
             facts=facts,
             procedures=procedures,
         )
 
+    def _revalidate_active(
+        self,
+        context: ReviewedMemoryContext,
+        tenant_id: OpaqueId,
+        at: datetime,
+    ) -> ReviewedMemoryContext:
+        context._validate_records()
+        refreshed = self._read_active(tenant_id, at)
+        try:
+            current = context.model_dump(mode="python", warnings="error")
+            latest = refreshed.model_dump(mode="python", warnings="error")
+        except (AttributeError, TypeError, ValueError):
+            raise ValueError("active procedure context is invalid") from None
+        if current != latest:
+            raise ValueError("active procedure selection changed")
+        return refreshed
+
 
 def _active_selection_attestation(procedure: ProcedureVersion) -> bytes:
     payload = procedure.model_dump_json().encode("utf-8")
     return hmac.digest(_ACTIVE_SELECTION_KEY, payload, "sha256")
+
+
+def _attested_context(
+    *,
+    tenant_id: OpaqueId,
+    observed_at: datetime,
+    facts: tuple[SemanticFact, ...],
+    procedures: tuple[ProcedureVersion, ...],
+) -> ReviewedMemoryContext:
+    return ReviewedMemoryContext(
+        tenant_id=tenant_id,
+        observed_at=observed_at,
+        facts=facts,
+        procedures=tuple(
+            ActiveProcedure._from_repository(procedure)
+            for procedure in procedures
+        ),
+    )
 
 
 __all__ = [

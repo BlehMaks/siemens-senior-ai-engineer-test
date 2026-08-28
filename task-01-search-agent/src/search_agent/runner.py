@@ -28,7 +28,11 @@ from .contracts import (
     StrictModel,
 )
 from .evidence import EvidenceRecord, EvidenceValidationError, build_evidence
-from .memory import ReviewedMemoryContext, ReviewedMemoryReadPort
+from .memory import (
+    RepositoryReviewedMemoryReader,
+    ReviewedMemoryContext,
+    ReviewedMemoryReadPort,
+)
 from .planning import (
     PLANNING_SYSTEM_PROMPT,
     AnswerScopePolicy,
@@ -776,7 +780,22 @@ class ResearchRunner:
         try:
             if type(value) is not ReviewedMemoryContext:
                 raise TypeError
-            checked = value.revalidated_copy()
+            if value.procedures:
+                if type(reader) is not RepositoryReviewedMemoryReader:
+                    raise TypeError
+                ledger.start_iteration()
+                checked = await self._await_boundary(
+                    lambda: reader.revalidate_active(
+                        value,
+                        tenant_id=tenant_id,
+                        at=observed_at,
+                    ),
+                    ledger,
+                )
+                if type(checked) is not ReviewedMemoryContext:
+                    raise TypeError
+            else:
+                checked = value.revalidated_copy()
             if (
                 checked != value
                 or checked.tenant_id != tenant_id

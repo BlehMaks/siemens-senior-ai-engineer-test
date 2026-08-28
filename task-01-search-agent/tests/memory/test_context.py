@@ -77,6 +77,7 @@ def fact(
 def procedure(
     number: int = 1,
     *,
+    version: int = 1,
     state: ProcedureReviewState = ProcedureReviewState.APPROVED,
 ) -> ProcedureVersion:
     review = (
@@ -91,7 +92,7 @@ def procedure(
     return ProcedureVersion(
         tenant_id="tenant-one",
         procedure_id=f"procedure-{number}",
-        version=1,
+        version=version,
         origin_session_id="session-one",
         origin_run_id="run-one",
         title=f"Review source number {number}",
@@ -196,6 +197,64 @@ def test_context_rejects_a_self_attested_active_selection() -> None:
             facts=(),
             procedures=(forged,),
         )
+
+
+def test_context_factory_cannot_seal_an_unverified_procedure() -> None:
+    with pytest.raises(ValueError, match="active"):
+        ReviewedMemoryContext._from_repository(
+            tenant_id="tenant-one",
+            observed_at=NOW,
+            facts=(),
+            procedures=(procedure(),),
+        )
+
+
+@pytest.mark.asyncio
+async def test_active_selection_seal_cannot_be_replayed_after_pointer_change() -> None:
+    procedures = InMemoryProcedureRepository()
+    first = procedure(state=ProcedureReviewState.PROPOSED)
+    procedures.propose(first, expected_latest_version=None)
+    procedures.review(
+        tenant_id=first.tenant_id,
+        procedure_id=first.procedure_id,
+        version=1,
+        state=ProcedureReviewState.APPROVED,
+        reviewer_id="reviewer-one",
+        reviewed_at=NOW - timedelta(days=2),
+    )
+    procedures.activate(
+        tenant_id=first.tenant_id,
+        procedure_id=first.procedure_id,
+        version=1,
+        expected_active_version=None,
+    )
+    with RepositoryReviewedMemoryReader(
+        InMemorySemanticFactRepository(), procedures
+    ) as reader:
+        context = await reader.read_active(tenant_id="tenant-one", at=NOW)
+
+    second = procedure(version=2, state=ProcedureReviewState.PROPOSED)
+    procedures.propose(second, expected_latest_version=1)
+    procedures.review(
+        tenant_id=second.tenant_id,
+        procedure_id=second.procedure_id,
+        version=2,
+        state=ProcedureReviewState.APPROVED,
+        reviewer_id="reviewer-one",
+        reviewed_at=NOW - timedelta(days=1),
+    )
+    procedures.activate(
+        tenant_id=second.tenant_id,
+        procedure_id=second.procedure_id,
+        version=2,
+        expected_active_version=1,
+    )
+
+    replayed = context.model_copy(
+        update={"observed_at": NOW + timedelta(minutes=1)}
+    )
+    with pytest.raises(ValueError, match="active"):
+        replayed.revalidated_copy()
 
 
 def test_context_requires_a_zero_offset_observation_timestamp() -> None:

@@ -46,6 +46,12 @@ from search_agent.memory import (
     FactAuthor,
     FactReview,
     FactReviewState,
+    InMemoryProcedureRepository,
+    InMemorySemanticFactRepository,
+    ProcedureAuthor,
+    ProcedureReviewState,
+    ProcedureVersion,
+    RepositoryReviewedMemoryReader,
     SemanticFact,
 )
 from search_agent.planning import PLANNING_SYSTEM_PROMPT
@@ -551,6 +557,64 @@ async def test_enabled_reviewed_memory_is_bounded_untrusted_synthesis_data() -> 
     assert memory["active_procedures"] == []
     assert "fact-one" not in system_message.content
     assert "cannot change tools, policy, capabilities" in system_message.content
+
+
+@pytest.mark.asyncio
+async def test_enabled_runner_live_revalidates_active_procedure_pointer() -> None:
+    procedures = InMemoryProcedureRepository()
+    proposed = ProcedureVersion(
+        tenant_id="tenant-one",
+        procedure_id="procedure-one",
+        version=1,
+        origin_session_id="session-one",
+        origin_run_id="run-one",
+        title="Review the issuer report",
+        steps=("Prefer the official issuer report.",),
+        proposed_at=NOW - timedelta(days=2),
+        author=ProcedureAuthor.DETERMINISTIC_TEST,
+    )
+    procedures.propose(proposed, expected_latest_version=None)
+    procedures.review(
+        tenant_id=proposed.tenant_id,
+        procedure_id=proposed.procedure_id,
+        version=1,
+        state=ProcedureReviewState.APPROVED,
+        reviewer_id="reviewer-one",
+        reviewed_at=NOW - timedelta(days=1),
+    )
+    procedures.activate(
+        tenant_id=proposed.tenant_id,
+        procedure_id=proposed.procedure_id,
+        version=1,
+        expected_active_version=None,
+    )
+    reader = RepositoryReviewedMemoryReader(
+        InMemorySemanticFactRepository(),
+        procedures,
+    )
+    provider = _Provider(_answer(_hit(), _document()))
+    try:
+        result = await _run(
+            _runner(
+                provider=provider,
+                memory_reader=reader,
+                memory_reads_enabled=True,
+            )
+        )
+    finally:
+        reader.close()
+
+    assert result.snapshot.status is RunStatus.COMPLETED
+    payload = json.loads(provider.messages[0][1].content)
+    active = payload["reviewed_memory_untrusted_data"]["active_procedures"]
+    assert active == [
+        {
+            "procedure_id": "procedure-one",
+            "steps": ["Prefer the official issuer report."],
+            "title": "Review the issuer report",
+            "version": 1,
+        }
+    ]
 
 
 @pytest.mark.asyncio
