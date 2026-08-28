@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
+from functools import wraps
 from pathlib import Path
 from threading import RLock
-from typing import Annotated, Literal, Protocol, cast
+from typing import (
+    Annotated,
+    Concatenate,
+    Literal,
+    Protocol,
+    cast,
+)
 
 from pydantic import (
     Field,
@@ -37,6 +44,22 @@ ProcedureStep = Annotated[
 ]
 
 _MAX_SERIALIZED_BYTES = 16 * 1024
+
+class _RepositoryLockOwner(Protocol):
+    _lock: RLock
+
+
+def _serialized[LockOwner: _RepositoryLockOwner, **P, R](
+    method: Callable[Concatenate[LockOwner, P], R],
+) -> Callable[Concatenate[LockOwner, P], R]:
+    @wraps(method)
+    def locked(
+        self: LockOwner, /, *args: P.args, **kwargs: P.kwargs
+    ) -> R:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return locked
 
 
 class ProcedureAuthor(StrEnum):
@@ -569,6 +592,7 @@ class SQLiteProcedureRepository:
         if not path.parent.is_dir():
             raise ReflectionStorageError("SQLite parent directory does not exist")
         self._closed = False
+        self._lock = RLock()
         try:
             self._connection = sqlite3.connect(path, check_same_thread=False)
             self._connection.execute("PRAGMA foreign_keys = ON")
@@ -600,6 +624,7 @@ class SQLiteProcedureRepository:
                 "SQLite procedure repository could not be opened"
             ) from exc
 
+    @_serialized
     def __enter__(self) -> SQLiteProcedureRepository:
         self._require_open()
         return self
@@ -607,11 +632,13 @@ class SQLiteProcedureRepository:
     def __exit__(self, *_args: object) -> None:
         self.close()
 
+    @_serialized
     def close(self) -> None:
         if not self._closed:
             self._connection.close()
             self._closed = True
 
+    @_serialized
     def propose(
         self,
         procedure: ProcedureVersion,
@@ -668,6 +695,7 @@ class SQLiteProcedureRepository:
             raise
         return _copy(checked)
 
+    @_serialized
     def review(
         self,
         *,
@@ -723,6 +751,7 @@ class SQLiteProcedureRepository:
             raise
         return _copy(updated)
 
+    @_serialized
     def activate(
         self,
         *,
@@ -770,6 +799,7 @@ class SQLiteProcedureRepository:
             raise
         return _copy(selected)
 
+    @_serialized
     def get_version(
         self, *, tenant_id: OpaqueId, procedure_id: OpaqueId, version: int
     ) -> ProcedureVersion | None:
@@ -783,6 +813,7 @@ class SQLiteProcedureRepository:
             row = self._fetch_row(key)
         return None if row is None else _decode_row(row)
 
+    @_serialized
     def get_active(
         self, *, tenant_id: OpaqueId, procedure_id: OpaqueId
     ) -> ProcedureVersion | None:
@@ -821,6 +852,7 @@ class SQLiteProcedureRepository:
                     raise ReflectionStorageError("active procedure is not approved")
         return selected
 
+    @_serialized
     def list_versions(
         self, *, tenant_id: OpaqueId, procedure_id: OpaqueId, limit: int = 100
     ) -> tuple[ProcedureVersion, ...]:
@@ -843,6 +875,7 @@ class SQLiteProcedureRepository:
             values = tuple(_decode_row(row) for row in rows)
         return values
 
+    @_serialized
     def list_active(
         self, *, tenant_id: OpaqueId, limit: int = 20
     ) -> tuple[ProcedureVersion, ...]:
@@ -886,6 +919,7 @@ class SQLiteProcedureRepository:
                 raise ReflectionStorageError("active procedure is not approved")
         return values
 
+    @_serialized
     def _list_active_snapshot(
         self, *, tenant_id: OpaqueId, limit: int = 20
     ) -> tuple[tuple[ProcedureVersion, ...], int]:
@@ -932,6 +966,7 @@ class SQLiteProcedureRepository:
             revision = self._read_activation_revision()
         return values, revision
 
+    @_serialized
     def delete_session(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> int:
         self._require_open()
         scope = (_scope_id(tenant_id), _scope_id(session_id))
@@ -940,11 +975,13 @@ class SQLiteProcedureRepository:
             scope,
         )
 
+    @_serialized
     def delete_procedure(self, *, tenant_id: OpaqueId, procedure_id: OpaqueId) -> int:
         self._require_open()
         scope = _scope(tenant_id, procedure_id)
         return self._delete("tenant_id = ? AND procedure_id = ?", scope)
 
+    @_serialized
     def delete_tenant(self, *, tenant_id: OpaqueId) -> int:
         self._require_open()
         return self._delete("tenant_id = ?", (_scope_id(tenant_id),), delete_heads=True)

@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier, Event
+from time import sleep
 
 import pytest
 from pydantic import ValidationError
@@ -401,6 +402,65 @@ def test_in_memory_concurrent_activations_use_compare_and_swap(
     with ThreadPoolExecutor(max_workers=2) as executor:
         outcomes = tuple(executor.map(activate, (1, 2)))
     assert sorted(outcomes) == ["activated", "conflict"]
+
+
+def test_sqlite_snapshot_serializes_concurrent_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with SQLiteProcedureRepository(tmp_path / "procedures.sqlite3") as repository:
+        approve(repository, procedure())
+        approve(
+            repository,
+            procedure(version=2, origin_session_id="session-two"),
+        )
+        repository.activate(
+            tenant_id="tenant-one",
+            procedure_id="playbook-one",
+            version=1,
+            expected_active_version=None,
+        )
+        snapshot_waiting = Event()
+        release_snapshot = Event()
+        activation_started = Event()
+        original_read_revision = repository._read_activation_revision
+
+        def paused_read_revision() -> int:
+            snapshot_waiting.set()
+            assert release_snapshot.wait(timeout=2)
+            return original_read_revision()
+
+        monkeypatch.setattr(
+            repository,
+            "_read_activation_revision",
+            paused_read_revision,
+        )
+
+        def activate_second() -> ProcedureVersion:
+            activation_started.set()
+            return repository.activate(
+                tenant_id="tenant-one",
+                procedure_id="playbook-one",
+                version=2,
+                expected_active_version=1,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            snapshot_future = executor.submit(
+                repository._list_active_snapshot,
+                tenant_id="tenant-one",
+            )
+            assert snapshot_waiting.wait(timeout=1)
+            activation_future = executor.submit(activate_second)
+            assert activation_started.wait(timeout=1)
+            sleep(0.05)
+            assert not activation_future.done()
+            release_snapshot.set()
+            snapshot, _revision = snapshot_future.result(timeout=2)
+            activated = activation_future.result(timeout=2)
+
+    assert snapshot[0].version == 1
+    assert activated.version == 2
 
 
 def test_in_memory_active_pointer_type_is_strict() -> None:
