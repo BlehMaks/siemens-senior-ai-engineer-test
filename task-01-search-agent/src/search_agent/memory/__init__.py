@@ -3,6 +3,7 @@
 from .context import (
     MAX_CONTEXT_FACTS,
     MAX_CONTEXT_PROCEDURES,
+    ActiveProcedure,
     RepositoryReviewedMemoryReader,
     ReviewedMemoryContext,
     ReviewedMemoryReadPort,
@@ -49,6 +50,7 @@ from .semantic import (
 __all__ = [
     "MAX_CONTEXT_FACTS",
     "MAX_CONTEXT_PROCEDURES",
+    "ActiveProcedure",
     "CompletionEvidence",
     "FactAuthor",
     "FactConflictError",

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import json
-from datetime import UTC, datetime, timedelta
+import time
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from pydantic import AnyHttpUrl, TypeAdapter, ValidationError
 
 from search_agent.memory import (
+    ActiveProcedure,
     FactAuthor,
     FactReview,
     FactReviewState,
@@ -20,6 +23,8 @@ from search_agent.memory import (
     RepositoryReviewedMemoryReader,
     ReviewedMemoryContext,
     SemanticFact,
+    SQLiteProcedureRepository,
+    SQLiteSemanticFactRepository,
 )
 
 NOW = datetime(2026, 8, 28, 12, tzinfo=UTC)
@@ -96,12 +101,17 @@ def procedure(
     )
 
 
+def active_procedure(number: int = 1) -> ActiveProcedure:
+    selected = procedure(number)
+    return ActiveProcedure(active_version=selected.version, procedure=selected)
+
+
 def test_context_exposes_only_bounded_answer_data() -> None:
     context = ReviewedMemoryContext(
         tenant_id="tenant-one",
         observed_at=NOW,
         facts=(fact(),),
-        procedures=(procedure(),),
+        procedures=(active_procedure(),),
     )
 
     payload = context.to_untrusted_payload()
@@ -139,6 +149,27 @@ def test_context_rejects_inactive_or_malicious_records(
             observed_at=NOW,
             facts=facts,
             procedures=procedures,
+        )
+
+
+def test_context_rejects_an_approved_version_without_active_selection() -> None:
+    with pytest.raises(ValidationError, match="active"):
+        ReviewedMemoryContext(
+            tenant_id="tenant-one",
+            observed_at=NOW,
+            facts=(),
+            procedures=(procedure(),),  # type: ignore[arg-type]
+        )
+
+
+def test_context_requires_a_zero_offset_observation_timestamp() -> None:
+    non_utc = NOW.astimezone(timezone(timedelta(hours=2)))
+    with pytest.raises(ValidationError, match="UTC"):
+        ReviewedMemoryContext(
+            tenant_id="tenant-one",
+            observed_at=non_utc,
+            facts=(),
+            procedures=(),
         )
 
 
@@ -198,7 +229,8 @@ async def test_repository_reader_selects_only_active_records_with_hard_caps() ->
     assert all(item.expires_at > NOW for item in context.facts)
     assert all(item.state is FactReviewState.APPROVED for item in context.facts)
     assert all(
-        item.state is ProcedureReviewState.APPROVED for item in context.procedures
+        item.procedure.state is ProcedureReviewState.APPROVED
+        for item in context.procedures
     )
 
 
@@ -245,3 +277,73 @@ async def test_repository_reader_reflects_deletion_without_caching() -> None:
     context = await reader.read_active(tenant_id="tenant-one", at=NOW)
     assert context.facts == ()
     assert context.procedures == ()
+
+
+class _SlowSemanticRepository:
+    def list_active(self, **_kwargs: object) -> tuple[()]:
+        time.sleep(0.1)
+        return ()
+
+
+class _EmptyProcedureRepository:
+    def list_active(self, **_kwargs: object) -> tuple[()]:
+        return ()
+
+
+@pytest.mark.asyncio
+async def test_repository_reader_does_not_block_the_async_timeout() -> None:
+    reader = RepositoryReviewedMemoryReader(
+        semantic_facts=_SlowSemanticRepository(),  # type: ignore[arg-type]
+        procedures=_EmptyProcedureRepository(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(
+            reader.read_active(tenant_id="tenant-one", at=NOW),
+            timeout=0.01,
+        )
+
+
+@pytest.mark.asyncio
+async def test_repository_reader_supports_sqlite_repositories(
+    tmp_path: Path,
+) -> None:
+    with (
+        SQLiteSemanticFactRepository(tmp_path / "facts.sqlite3") as facts,
+        SQLiteProcedureRepository(tmp_path / "procedures.sqlite3") as procedures,
+    ):
+        candidate = fact(state=FactReviewState.PROPOSED)
+        facts.propose(candidate)
+        expected_fact = facts.review(
+            tenant_id=candidate.tenant_id,
+            fact_id=candidate.fact_id,
+            state=FactReviewState.APPROVED,
+            reviewer_id="reviewer-one",
+            reviewed_at=NOW - timedelta(days=2),
+        )
+        playbook = procedure(state=ProcedureReviewState.PROPOSED)
+        procedures.propose(playbook, expected_latest_version=None)
+        expected_procedure = procedures.review(
+            tenant_id=playbook.tenant_id,
+            procedure_id=playbook.procedure_id,
+            version=1,
+            state=ProcedureReviewState.APPROVED,
+            reviewer_id="reviewer-one",
+            reviewed_at=NOW - timedelta(days=2),
+        )
+        procedures.activate(
+            tenant_id=playbook.tenant_id,
+            procedure_id=playbook.procedure_id,
+            version=1,
+            expected_active_version=None,
+        )
+
+        context = await RepositoryReviewedMemoryReader(
+            facts,
+            procedures,
+        ).read_active(tenant_id="tenant-one", at=NOW)
+
+    assert context.facts == (expected_fact,)
+    assert tuple(item.procedure for item in context.procedures) == (
+        expected_procedure,
+    )

@@ -317,7 +317,7 @@ class SQLiteSemanticFactRepository:
             raise ReflectionStorageError("SQLite parent directory does not exist")
         self._closed = False
         try:
-            self._connection = sqlite3.connect(path)
+            self._connection = sqlite3.connect(path, check_same_thread=False)
             self._connection.execute("PRAGMA foreign_keys = ON")
             self._connection.execute("PRAGMA busy_timeout = 10000")
             self._connection.execute(self._CREATE)
