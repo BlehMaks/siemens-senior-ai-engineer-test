@@ -776,9 +776,7 @@ class ResearchRunner:
         try:
             if type(value) is not ReviewedMemoryContext:
                 raise TypeError
-            checked = ReviewedMemoryContext.model_validate(
-                value.model_dump(mode="python", warnings="error"), strict=True
-            )
+            checked = value.revalidated_copy()
             if (
                 checked != value
                 or checked.tenant_id != tenant_id

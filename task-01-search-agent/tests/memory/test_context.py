@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from threading import Event, Lock
 
 import pytest
 from pydantic import AnyHttpUrl, TypeAdapter, ValidationError
@@ -101,18 +103,37 @@ def procedure(
     )
 
 
-def active_procedure(number: int = 1) -> ActiveProcedure:
-    selected = procedure(number)
-    return ActiveProcedure(active_version=selected.version, procedure=selected)
-
-
-def test_context_exposes_only_bounded_answer_data() -> None:
-    context = ReviewedMemoryContext(
-        tenant_id="tenant-one",
-        observed_at=NOW,
-        facts=(fact(),),
-        procedures=(active_procedure(),),
+@pytest.mark.asyncio
+async def test_context_exposes_only_bounded_answer_data() -> None:
+    facts = InMemorySemanticFactRepository()
+    fact_candidate = fact(state=FactReviewState.PROPOSED)
+    facts.propose(fact_candidate)
+    facts.review(
+        tenant_id=fact_candidate.tenant_id,
+        fact_id=fact_candidate.fact_id,
+        state=FactReviewState.APPROVED,
+        reviewer_id="reviewer-one",
+        reviewed_at=NOW - timedelta(days=2),
     )
+    procedures = InMemoryProcedureRepository()
+    procedure_candidate = procedure(state=ProcedureReviewState.PROPOSED)
+    procedures.propose(procedure_candidate, expected_latest_version=None)
+    procedures.review(
+        tenant_id=procedure_candidate.tenant_id,
+        procedure_id=procedure_candidate.procedure_id,
+        version=1,
+        state=ProcedureReviewState.APPROVED,
+        reviewer_id="reviewer-one",
+        reviewed_at=NOW - timedelta(days=2),
+    )
+    procedures.activate(
+        tenant_id=procedure_candidate.tenant_id,
+        procedure_id=procedure_candidate.procedure_id,
+        version=1,
+        expected_active_version=None,
+    )
+    with RepositoryReviewedMemoryReader(facts, procedures) as reader:
+        context = await reader.read_active(tenant_id="tenant-one", at=NOW)
 
     payload = context.to_untrusted_payload()
 
@@ -159,6 +180,21 @@ def test_context_rejects_an_approved_version_without_active_selection() -> None:
             observed_at=NOW,
             facts=(),
             procedures=(procedure(),),  # type: ignore[arg-type]
+        )
+
+
+def test_context_rejects_a_self_attested_active_selection() -> None:
+    selected = procedure()
+    forged = ActiveProcedure(
+        active_version=selected.version,
+        procedure=selected,
+    )
+    with pytest.raises(ValidationError, match="active"):
+        ReviewedMemoryContext(
+            tenant_id="tenant-one",
+            observed_at=NOW,
+            facts=(),
+            procedures=(forged,),
         )
 
 
@@ -220,9 +256,8 @@ async def test_repository_reader_selects_only_active_records_with_hard_caps() ->
             expected_active_version=None,
         )
 
-    context = await RepositoryReviewedMemoryReader(facts, procedures).read_active(
-        tenant_id="tenant-one", at=NOW
-    )
+    with RepositoryReviewedMemoryReader(facts, procedures) as reader:
+        context = await reader.read_active(tenant_id="tenant-one", at=NOW)
 
     assert len(context.facts) == 8
     assert len(context.procedures) == 4
@@ -275,6 +310,7 @@ async def test_repository_reader_reflects_deletion_without_caching() -> None:
     )
 
     context = await reader.read_active(tenant_id="tenant-one", at=NOW)
+    reader.close()
     assert context.facts == ()
     assert context.procedures == ()
 
@@ -290,6 +326,22 @@ class _EmptyProcedureRepository:
         return ()
 
 
+class _BlockingSemanticRepository:
+    def __init__(self, started: Event, release: Event, starts: list[int], lock: Lock):
+        self._started = started
+        self._release = release
+        self._starts = starts
+        self._lock = lock
+
+    def list_active(self, **_kwargs: object) -> tuple[()]:
+        with self._lock:
+            self._starts.append(1)
+            if len(self._starts) == 2:
+                self._started.set()
+        self._release.wait(timeout=2)
+        return ()
+
+
 @pytest.mark.asyncio
 async def test_repository_reader_does_not_block_the_async_timeout() -> None:
     reader = RepositoryReviewedMemoryReader(
@@ -297,11 +349,64 @@ async def test_repository_reader_does_not_block_the_async_timeout() -> None:
         procedures=_EmptyProcedureRepository(),  # type: ignore[arg-type]
     )
 
-    with pytest.raises(TimeoutError):
-        await asyncio.wait_for(
-            reader.read_active(tenant_id="tenant-one", at=NOW),
-            timeout=0.01,
+    try:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(
+                reader.read_active(tenant_id="tenant-one", at=NOW),
+                timeout=0.01,
+            )
+    finally:
+        reader.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_reads_do_not_consume_the_shared_async_executor() -> None:
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=2)
+    loop.set_default_executor(executor)
+    started = Event()
+    release = Event()
+    starts: list[int] = []
+    starts_lock = Lock()
+    readers = tuple(
+        RepositoryReviewedMemoryReader(
+            semantic_facts=_BlockingSemanticRepository(
+                started,
+                release,
+                starts,
+                starts_lock,
+            ),  # type: ignore[arg-type]
+            procedures=_EmptyProcedureRepository(),  # type: ignore[arg-type]
         )
+        for _ in range(2)
+    )
+    tasks = tuple(
+        asyncio.create_task(reader.read_active(tenant_id="tenant-one", at=NOW))
+        for reader in readers
+    )
+    try:
+        for _ in range(100):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.001)
+        assert started.is_set()
+
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        assert (
+            await asyncio.wait_for(
+                asyncio.to_thread(lambda: "worker-available"),
+                timeout=0.05,
+            )
+            == "worker-available"
+        )
+    finally:
+        release.set()
+        for reader in readers:
+            reader.close()
+        executor.shutdown(wait=True)
 
 
 @pytest.mark.asyncio
@@ -338,10 +443,8 @@ async def test_repository_reader_supports_sqlite_repositories(
             expected_active_version=None,
         )
 
-        context = await RepositoryReviewedMemoryReader(
-            facts,
-            procedures,
-        ).read_active(tenant_id="tenant-one", at=NOW)
+        with RepositoryReviewedMemoryReader(facts, procedures) as reader:
+            context = await reader.read_active(tenant_id="tenant-one", at=NOW)
 
     assert context.facts == (expected_fact,)
     assert tuple(item.procedure for item in context.procedures) == (
