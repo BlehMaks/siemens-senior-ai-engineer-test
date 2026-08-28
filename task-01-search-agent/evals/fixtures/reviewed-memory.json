@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "disabled": {
+    "reader_calls": 0,
+    "prompt_field_present": false
+  },
+  "enabled": {
+    "reader_calls": 1,
+    "prompt_field_present": true,
+    "memory": {
+      "semantic_facts": [
+        {
+          "fact_id": "fact-1",
+          "claim": "siemens fact number 1 is supported.",
+          "source_id": "source-1",
+          "evidence_id": "ev-fact-1",
+          "source_url": "https://example.com/reports/1",
+          "expires_at": "2026-08-29T12:00:00+00:00"
+        }
+      ],
+      "active_procedures": [
+        {
+          "procedure_id": "procedure-1",
+          "version": 1,
+          "title": "Review source number 1",
+          "steps": ["Prefer the official issuer report."]
+        }
+      ]
+    }
+  }
+}

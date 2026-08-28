@@ -1,5 +1,12 @@
 """Tenant-scoped episodic reflections and repository adapters."""
 
+from .context import (
+    MAX_CONTEXT_FACTS,
+    MAX_CONTEXT_PROCEDURES,
+    RepositoryReviewedMemoryReader,
+    ReviewedMemoryContext,
+    ReviewedMemoryReadPort,
+)
 from .contracts import (
     CompletionEvidence,
     FailureCode,
@@ -40,6 +47,8 @@ from .semantic import (
 )
 
 __all__ = [
+    "MAX_CONTEXT_FACTS",
+    "MAX_CONTEXT_PROCEDURES",
     "CompletionEvidence",
     "FactAuthor",
     "FactConflictError",
@@ -62,6 +71,9 @@ __all__ = [
     "ReflectionStorageError",
     "ReflectionUsage",
     "RepositoryClosedError",
+    "RepositoryReviewedMemoryReader",
+    "ReviewedMemoryContext",
+    "ReviewedMemoryReadPort",
     "RunReflection",
     "SQLiteProcedureRepository",
     "SQLiteReflectionRepository",

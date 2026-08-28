@@ -41,7 +41,28 @@ The production-oriented version adds:
 - episodic memory for one research run, semantic memory for verified user-scoped facts, and procedural memory for reviewed playbooks;
 - traceable agent states so Task 2 can expose meaningful progress rather than a generic busy flag.
 
-Memory is external state, so a local model does not prevent its implementation. The constraint is quality: model-generated summaries and playbooks must be validated before they can influence future runs. Procedural memory must be versioned and promoted through an explicit review step instead of allowing the agent to rewrite its own operating rules silently.
+Memory is external state, so a local model does not prevent its implementation. The
+implemented lifecycle is deliberately model-independent:
+
+- semantic candidates carry tenant, source, evidence, conflict, expiry, and origin
+  identities; only an explicit review can approve them;
+- procedures contain bounded declarative text, retain immutable version history, and
+  require both review and an explicit active-version selection;
+- source, session, procedure, fact, and tenant deletion are durable, and SQLite
+  reopen preserves lifecycle state and consumed procedure version numbers;
+- `RepositoryReviewedMemoryReader` exposes at most eight active facts and four active
+  procedures to answer synthesis. `ResearchRunner.memory_reads_enabled` is `False`
+  by default, and disabled runs do not call the reader or add a prompt field;
+- enabled memory is reduced to public fact provenance and declarative steps, appears
+  only under `reviewed_memory_untrusted_data`, and cannot change planning, tools,
+  capabilities, system instructions, budgets, or citation validation.
+
+There is no model proposal, automatic approval, automatic activation, or executable
+procedure path. Those paths remain unavailable because the excluded model benchmark
+does not establish proposal quality. See the
+[memory threat model](docs/memory-threat-model.md),
+[memory evaluation notes](docs/memory-evaluation.md), and
+[ADR-0003](../docs/adr/0003-application-managed-memory.md).
 
 ## Constraints and acceptance checks
 
@@ -53,3 +74,21 @@ Memory is external state, so a local model does not prevent its implementation. 
 - Tool failures, empty results, conflicting sources, duplicate results, timeouts, and cancellation must produce defined states.
 - Memory is scoped to an authenticated user/session contract even before Task 2 supplies the transport layer.
 - The model license must permit the intended local demonstration and proposed deployment.
+
+## Verify
+
+Run the deterministic 34-case behavior evaluation and the Task 1 tests from the
+repository root:
+
+```bash
+uv run --locked python task-01-search-agent/evals/run.py --mode fixed
+uv run --locked pytest -q task-01-search-agent/tests tests
+```
+
+The fixed evaluation covers routing, terminal budgets, prompt and raw-page
+disclosure, private-address blocking, citation fidelity, and abstention. Live Ollama
+captures are optional and follow [the frozen model-selection protocol](docs/model-selection.md).
+The checked `evals/fixtures/reviewed-memory.json` before/after fixture additionally
+proves the default-off prompt shape, bounded opt-in payload, and deterministic reader
+call count. Memory repository, corruption, prompt-precedence, and deletion cases run
+with the Task 1 tests above and the Task 2 storage suite.

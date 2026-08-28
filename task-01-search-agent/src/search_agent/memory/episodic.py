@@ -6,6 +6,7 @@ import re
 import sqlite3
 from ipaddress import ip_address
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl, unquote, unquote_plus, urlsplit
 
 from pydantic import TypeAdapter, ValidationError
@@ -20,7 +21,6 @@ from ..contracts import (
     SearchHit,
     TerminalState,
 )
-from ..runner import RunResult, RunUsage
 from ..security import SitePolicy
 from ..state import RunSnapshot
 from .contracts import (
@@ -38,6 +38,9 @@ from .contracts import (
     contains_sensitive_memory_text,
     redact_memory_text,
 )
+
+if TYPE_CHECKING:
+    from ..runner import RunResult
 
 _ID_ADAPTER = TypeAdapter(OpaqueId)
 _MAX_SERIALIZED_BYTES = 64 * 1024
@@ -364,6 +367,9 @@ class SQLiteReflectionRepository:
 
 
 def _validate_run_result(result: RunResult) -> RunResult:
+    # The runtime import avoids a cycle when the runner loads its optional memory seam.
+    from ..runner import RunResult, RunUsage
+
     try:
         if (
             type(result) is not RunResult

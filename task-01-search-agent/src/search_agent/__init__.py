@@ -22,6 +22,11 @@ from .evidence import (
     build_evidence,
     validate_record,
 )
+from .memory import (
+    RepositoryReviewedMemoryReader,
+    ReviewedMemoryContext,
+    ReviewedMemoryReadPort,
+)
 from .planning import (
     AnswerScopePolicy,
     AssistancePolicy,
@@ -134,7 +139,10 @@ __all__ = [
     "PublicEvent",
     "QueryPlan",
     "QueryPlanner",
+    "RepositoryReviewedMemoryReader",
     "ResearchRunner",
+    "ReviewedMemoryContext",
+    "ReviewedMemoryReadPort",
     "RunBudget",
     "RunResult",
     "RunSnapshot",

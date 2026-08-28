@@ -18,7 +18,8 @@ client -> bounded ASGI body -> API-key authentication and scope -> quota admissi
 ## Assets, actors, and boundaries
 
 - Assets: tenant and key identity; key HMAC digests and pepper; sessions, queries,
-  runs, events, memory reflections, work leases, quotas, audit records, and public
+  runs, events, episodic reflections, reviewed semantic facts, immutable procedure
+  versions and active pointers, work leases, quotas, audit records, and public
   answers; operational availability and correlation integrity.
 - Remote actors: unauthenticated callers, callers holding a scoped tenant key, and
   a caller with a revoked or expired key. A key never grants another tenant's
@@ -88,7 +89,7 @@ client -> bounded ASGI body -> API-key authentication and scope -> quota admissi
 | ASI03 Identity and Privilege Abuse | Tenant and key identity originate at auth; executor results must match the stored run identity. |
 | ASI04 Agentic Supply Chain Vulnerabilities | Partial until Task 3/release SBOM, image signing, dependency, and provenance gates are complete. |
 | ASI05 Unexpected Code Execution | No code, shell, template, plugin-install, or file-upload tool is exposed by Task 2. |
-| ASI06 Memory and Context Poisoning | Reflections are tenant/session/run scoped, validated on read/write, and deletable; retrieval quality remains an evaluation concern. |
+| ASI06 Memory and Context Poisoning | Reflections, facts, and procedures are strictly tenant-scoped and validated on read/write. Facts require source provenance, expiry, conflict checks, and explicit review; procedures require immutable versions, review, and separate activation. The default-off read seam places only approved/active bounded views in untrusted synthesis data after tool use. Session/tenant deletion propagates through all memory tables; model proposal and automatic promotion remain unavailable. |
 | ASI07 Insecure Inter-Agent Communication | Not applicable to Task 2: one worker calls one typed executor port; there is no peer-agent protocol. |
 | ASI08 Cascading Failures | Bounded retries/timeouts, durable queue state, leases, cancellation, safe failures, and telemetry isolate dependency faults. |
 | ASI09 Human-Agent Trust Exploitation | Mitigated by evidence/citations and bounded public states; UI disclosure and human approval policy are outside this API package. |
