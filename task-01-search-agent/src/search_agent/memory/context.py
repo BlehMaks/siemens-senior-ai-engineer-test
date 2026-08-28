@@ -22,9 +22,11 @@ from pydantic import (
 
 from ..contracts import OpaqueId, StrictModel
 from .procedural import (
+    InMemoryProcedureRepository,
     ProcedureRepository,
     ProcedureReviewState,
     ProcedureVersion,
+    SQLiteProcedureRepository,
 )
 from .semantic import (
     FactReviewState,
@@ -65,14 +67,18 @@ class ActiveProcedure(StrictModel):
         return checked
 
     @classmethod
-    def _from_repository(cls, procedure: ProcedureVersion) -> ActiveProcedure:
+    def _from_repository(
+        cls, procedure: ProcedureVersion, activation_revision: int
+    ) -> ActiveProcedure:
         selection = cls(active_version=procedure.version, procedure=procedure)
-        selection._attestation = _active_selection_attestation(procedure)
+        selection._attestation = _active_selection_attestation(
+            procedure, activation_revision
+        )
         return selection
 
-    def _validated_procedure(self) -> ProcedureVersion:
+    def _validated_procedure(self, activation_revision: int) -> ProcedureVersion:
         checked = self._validate_fields()
-        expected = _active_selection_attestation(checked)
+        expected = _active_selection_attestation(checked, activation_revision)
         if not hmac.compare_digest(self._attestation, expected):
             raise ValueError("active procedure selection is not repository-attested")
         return checked
@@ -87,6 +93,7 @@ class ReviewedMemoryContext(StrictModel):
     procedures: tuple[ActiveProcedure, ...] = Field(
         max_length=MAX_CONTEXT_PROCEDURES
     )
+    _activation_revision: int | None = PrivateAttr(default=None)
 
     @field_validator("procedures", mode="before")
     @classmethod
@@ -105,6 +112,11 @@ class ReviewedMemoryContext(StrictModel):
     def _validate_records(self) -> None:
         if type(self.facts) is not tuple or type(self.procedures) is not tuple:
             raise ValueError("reviewed memory containers are invalid")
+        if (
+            len(self.facts) > MAX_CONTEXT_FACTS
+            or len(self.procedures) > MAX_CONTEXT_PROCEDURES
+        ):
+            raise ValueError("reviewed memory context exceeds its record limits")
         if (
             self.observed_at.tzinfo is None
             or self.observed_at.utcoffset() != timedelta(0)
@@ -126,8 +138,18 @@ class ReviewedMemoryContext(StrictModel):
         except (AttributeError, TypeError, ValidationError, ValueError):
             raise ValueError("reviewed memory records are invalid") from None
         try:
+            activation_revision = self._activation_revision
+            if self.procedures and (
+                type(activation_revision) is not int
+                or activation_revision < 0
+            ):
+                raise ValueError
+            checked_revision = (
+                activation_revision if type(activation_revision) is int else 0
+            )
             checked_procedures = tuple(
-                procedure._validated_procedure() for procedure in self.procedures
+                procedure._validated_procedure(checked_revision)
+                for procedure in self.procedures
             )
         except (AttributeError, TypeError, ValidationError, ValueError):
             raise ValueError("active procedure selection is invalid") from None
@@ -227,14 +249,6 @@ class ReviewedMemoryReadPort(Protocol):
         self, *, tenant_id: OpaqueId, at: datetime
     ) -> ReviewedMemoryContext: ...
 
-    async def revalidate_active(
-        self,
-        context: ReviewedMemoryContext,
-        *,
-        tenant_id: OpaqueId,
-        at: datetime,
-    ) -> ReviewedMemoryContext: ...
-
 
 @dataclass(frozen=True, slots=True)
 class RepositoryReviewedMemoryReader:
@@ -302,15 +316,15 @@ class RepositoryReviewedMemoryReader:
                 at=at,
                 limit=MAX_CONTEXT_FACTS,
             )
-            procedures = self.procedures.list_active(
-                tenant_id=tenant_id,
-                limit=MAX_CONTEXT_PROCEDURES,
+            procedures, activation_revision = _active_procedure_snapshot(
+                self.procedures, tenant_id=tenant_id
             )
         return _attested_context(
             tenant_id=tenant_id,
             observed_at=at,
             facts=facts,
             procedures=procedures,
+            activation_revision=activation_revision,
         )
 
     def _revalidate_active(
@@ -326,14 +340,58 @@ class RepositoryReviewedMemoryReader:
             latest = refreshed.model_dump(mode="python", warnings="error")
         except (AttributeError, TypeError, ValueError):
             raise ValueError("active procedure context is invalid") from None
-        if current != latest:
+        if (
+            current != latest
+            or context._activation_revision != refreshed._activation_revision
+        ):
             raise ValueError("active procedure selection changed")
         return refreshed
 
 
-def _active_selection_attestation(procedure: ProcedureVersion) -> bytes:
-    payload = procedure.model_dump_json().encode("utf-8")
+def _active_selection_attestation(
+    procedure: ProcedureVersion, activation_revision: int
+) -> bytes:
+    if type(activation_revision) is not int or activation_revision < 0:
+        raise ValueError("procedure activation revision is invalid")
+    payload = (
+        f"{activation_revision}:".encode("ascii")
+        + procedure.model_dump_json().encode("utf-8")
+    )
     return hmac.digest(_ACTIVE_SELECTION_KEY, payload, "sha256")
+
+
+def _active_procedure_snapshot(
+    repository: ProcedureRepository,
+    *,
+    tenant_id: OpaqueId,
+) -> tuple[tuple[ProcedureVersion, ...], int]:
+    if (
+        type(repository) is InMemoryProcedureRepository
+        or type(repository) is SQLiteProcedureRepository
+    ):
+        snapshot = repository._list_active_snapshot(
+            tenant_id=tenant_id,
+            limit=MAX_CONTEXT_PROCEDURES,
+        )
+    else:
+        snapshot = None
+    if snapshot is not None:
+        if (
+            type(snapshot) is not tuple
+            or len(snapshot) != 2
+            or type(snapshot[0]) is not tuple
+            or type(snapshot[1]) is not int
+            or snapshot[1] < 0
+        ):
+            raise ValueError("procedure activation snapshot is invalid")
+        return snapshot
+    procedures = repository.list_active(
+        tenant_id=tenant_id,
+        limit=MAX_CONTEXT_PROCEDURES,
+    )
+    if procedures:
+        raise ValueError("active procedure repository lacks revision snapshots")
+    return (), 0
 
 
 def _attested_context(
@@ -342,16 +400,20 @@ def _attested_context(
     observed_at: datetime,
     facts: tuple[SemanticFact, ...],
     procedures: tuple[ProcedureVersion, ...],
+    activation_revision: int,
 ) -> ReviewedMemoryContext:
-    return ReviewedMemoryContext(
+    context = ReviewedMemoryContext.model_construct(
         tenant_id=tenant_id,
         observed_at=observed_at,
         facts=facts,
         procedures=tuple(
-            ActiveProcedure._from_repository(procedure)
+            ActiveProcedure._from_repository(procedure, activation_revision)
             for procedure in procedures
         ),
     )
+    context._activation_revision = activation_revision
+    context._validate_records()
+    return context
 
 
 __all__ = [

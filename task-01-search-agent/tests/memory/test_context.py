@@ -257,6 +257,60 @@ async def test_active_selection_seal_cannot_be_replayed_after_pointer_change() -
         replayed.revalidated_copy()
 
 
+@pytest.mark.asyncio
+async def test_reader_rejects_active_pointer_aba() -> None:
+    procedures = InMemoryProcedureRepository()
+    first = procedure(state=ProcedureReviewState.PROPOSED)
+    second = procedure(version=2, state=ProcedureReviewState.PROPOSED)
+    procedures.propose(first, expected_latest_version=None)
+    procedures.review(
+        tenant_id=first.tenant_id,
+        procedure_id=first.procedure_id,
+        version=1,
+        state=ProcedureReviewState.APPROVED,
+        reviewer_id="reviewer-one",
+        reviewed_at=NOW - timedelta(days=2),
+    )
+    procedures.propose(second, expected_latest_version=1)
+    procedures.review(
+        tenant_id=second.tenant_id,
+        procedure_id=second.procedure_id,
+        version=2,
+        state=ProcedureReviewState.APPROVED,
+        reviewer_id="reviewer-one",
+        reviewed_at=NOW - timedelta(days=1),
+    )
+    procedures.activate(
+        tenant_id=first.tenant_id,
+        procedure_id=first.procedure_id,
+        version=1,
+        expected_active_version=None,
+    )
+    with RepositoryReviewedMemoryReader(
+        InMemorySemanticFactRepository(), procedures
+    ) as reader:
+        stale = await reader.read_active(tenant_id="tenant-one", at=NOW)
+        procedures.activate(
+            tenant_id=second.tenant_id,
+            procedure_id=second.procedure_id,
+            version=2,
+            expected_active_version=1,
+        )
+        procedures.activate(
+            tenant_id=first.tenant_id,
+            procedure_id=first.procedure_id,
+            version=1,
+            expected_active_version=2,
+        )
+
+        with pytest.raises(ValueError, match="active"):
+            await reader.revalidate_active(
+                stale,
+                tenant_id="tenant-one",
+                at=NOW,
+            )
+
+
 def test_context_requires_a_zero_offset_observation_timestamp() -> None:
     non_utc = NOW.astimezone(timezone(timedelta(hours=2)))
     with pytest.raises(ValidationError, match="UTC"):
@@ -509,3 +563,57 @@ async def test_repository_reader_supports_sqlite_repositories(
     assert tuple(item.procedure for item in context.procedures) == (
         expected_procedure,
     )
+
+
+@pytest.mark.asyncio
+async def test_sqlite_reader_rejects_active_pointer_aba(tmp_path: Path) -> None:
+    with SQLiteProcedureRepository(tmp_path / "procedures.sqlite3") as procedures:
+        first = procedure(state=ProcedureReviewState.PROPOSED)
+        second = procedure(version=2, state=ProcedureReviewState.PROPOSED)
+        procedures.propose(first, expected_latest_version=None)
+        procedures.review(
+            tenant_id=first.tenant_id,
+            procedure_id=first.procedure_id,
+            version=1,
+            state=ProcedureReviewState.APPROVED,
+            reviewer_id="reviewer-one",
+            reviewed_at=NOW - timedelta(days=2),
+        )
+        procedures.propose(second, expected_latest_version=1)
+        procedures.review(
+            tenant_id=second.tenant_id,
+            procedure_id=second.procedure_id,
+            version=2,
+            state=ProcedureReviewState.APPROVED,
+            reviewer_id="reviewer-one",
+            reviewed_at=NOW - timedelta(days=1),
+        )
+        procedures.activate(
+            tenant_id=first.tenant_id,
+            procedure_id=first.procedure_id,
+            version=1,
+            expected_active_version=None,
+        )
+        with RepositoryReviewedMemoryReader(
+            InMemorySemanticFactRepository(), procedures
+        ) as reader:
+            stale = await reader.read_active(tenant_id="tenant-one", at=NOW)
+            procedures.activate(
+                tenant_id=second.tenant_id,
+                procedure_id=second.procedure_id,
+                version=2,
+                expected_active_version=1,
+            )
+            procedures.activate(
+                tenant_id=first.tenant_id,
+                procedure_id=first.procedure_id,
+                version=1,
+                expected_active_version=2,
+            )
+
+            with pytest.raises(ValueError, match="active"):
+                await reader.revalidate_active(
+                    stale,
+                    tenant_id="tenant-one",
+                    at=NOW,
+                )

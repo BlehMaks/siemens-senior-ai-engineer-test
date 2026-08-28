@@ -169,6 +169,7 @@ class InMemoryProcedureRepository:
         self._latest: dict[tuple[str, str], int] = {}
         self._generations: dict[tuple[str, str, int], int] = {}
         self._next_generation = 0
+        self._activation_revision = 0
         self._lock = RLock()
 
     def propose(
@@ -259,6 +260,7 @@ class InMemoryProcedureRepository:
                     "procedure version changed during activation"
                 )
             self._active[scope] = selected.version
+            self._activation_revision += 1
         return _copy(selected)
 
     def get_version(
@@ -314,6 +316,24 @@ class InMemoryProcedureRepository:
         values.sort(key=lambda item: item.procedure_id)
         return tuple(values[: _active_limit(limit)])
 
+    def _list_active_snapshot(
+        self, *, tenant_id: OpaqueId, limit: int = 20
+    ) -> tuple[tuple[ProcedureVersion, ...], int]:
+        """Return active procedures and the pointer revision under one lock."""
+
+        checked_tenant = _scope_id(tenant_id)
+        with self._lock:
+            values: list[ProcedureVersion] = []
+            for scope, version in self._active.items():
+                if scope[0] != checked_tenant:
+                    continue
+                if type(version) is not int:
+                    raise ReflectionStorageError("active procedure pointer is invalid")
+                values.append(self._version_for_activation((*scope, version)))
+            revision = self._activation_revision
+        values.sort(key=lambda item: item.procedure_id)
+        return tuple(values[: _active_limit(limit)]), revision
+
     def delete_session(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> int:
         checked_tenant = _scope_id(tenant_id)
         checked_session = _scope_id(session_id)
@@ -337,6 +357,7 @@ class InMemoryProcedureRepository:
             for scope, version in tuple(self._active.items()):
                 if (*scope, version) in selected:
                     del self._active[scope]
+                    self._activation_revision += 1
         return len(keys)
 
     def delete_procedure(self, *, tenant_id: OpaqueId, procedure_id: OpaqueId) -> int:
@@ -352,7 +373,8 @@ class InMemoryProcedureRepository:
             for key in keys:
                 del self._versions[key]
                 self._generations.pop(key, None)
-            self._active.pop(scope, None)
+            if self._active.pop(scope, None) is not None:
+                self._activation_revision += 1
         return len(keys)
 
     def delete_tenant(self, *, tenant_id: OpaqueId) -> int:
@@ -371,6 +393,7 @@ class InMemoryProcedureRepository:
             scopes = [scope for scope in self._active if scope[0] == checked_tenant]
             for scope in scopes:
                 del self._active[scope]
+                self._activation_revision += 1
             latest_scopes = [
                 scope for scope in self._latest if scope[0] == checked_tenant
             ]
@@ -508,6 +531,12 @@ class SQLiteProcedureRepository:
             PRIMARY KEY (tenant_id, procedure_id)
         ) WITHOUT ROWID
     """
+    _CREATE_ACTIVATION_REVISION = """
+        CREATE TABLE IF NOT EXISTS procedure_activation_revision (
+            singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+            revision INTEGER NOT NULL CHECK(revision >= 0)
+        )
+    """
     _EXPECTED_VERSIONS = (
         ("tenant_id", "TEXT", 1, 1),
         ("procedure_id", "TEXT", 1, 2),
@@ -527,6 +556,10 @@ class SQLiteProcedureRepository:
         ("procedure_id", "TEXT", 1, 2),
         ("latest_version", "INTEGER", 1, 0),
     )
+    _EXPECTED_ACTIVATION_REVISION = (
+        ("singleton", "INTEGER", 0, 1),
+        ("revision", "INTEGER", 1, 0),
+    )
 
     def __init__(self, path: Path) -> None:
         if not isinstance(path, Path):
@@ -543,6 +576,11 @@ class SQLiteProcedureRepository:
             self._connection.execute(self._CREATE_VERSIONS)
             self._connection.execute(self._CREATE_ACTIVE)
             self._connection.execute(self._CREATE_HEADS)
+            self._connection.execute(self._CREATE_ACTIVATION_REVISION)
+            self._connection.execute(
+                "INSERT OR IGNORE INTO procedure_activation_revision "
+                "(singleton, revision) VALUES (1, 0)"
+            )
             self._connection.execute(
                 "INSERT INTO procedure_version_heads "
                 "(tenant_id, procedure_id, latest_version) "
@@ -719,6 +757,7 @@ class SQLiteProcedureRepository:
                 "DO UPDATE SET version = excluded.version",
                 key,
             )
+            self._bump_activation_revision()
             self._connection.commit()
         except (ProcedureVersionConflictError, ReflectionInputError):
             self._rollback()
@@ -847,6 +886,52 @@ class SQLiteProcedureRepository:
                 raise ReflectionStorageError("active procedure is not approved")
         return values
 
+    def _list_active_snapshot(
+        self, *, tenant_id: OpaqueId, limit: int = 20
+    ) -> tuple[tuple[ProcedureVersion, ...], int]:
+        """Return active procedures and the pointer revision on one snapshot."""
+
+        self._require_open()
+        checked_tenant = _scope_id(tenant_id)
+        with self._read_snapshot():
+            self._validate_all_metadata()
+            self._validate_scope_metadata(checked_tenant, None)
+            try:
+                pointers = self._connection.execute(
+                    "SELECT tenant_id, procedure_id, version FROM active_procedures "
+                    "WHERE tenant_id = ? ORDER BY procedure_id LIMIT ?",
+                    (checked_tenant, _active_limit(limit)),
+                ).fetchall()
+            except sqlite3.Error as exc:
+                raise ReflectionStorageError(
+                    "SQLite active procedure list failed"
+                ) from exc
+            values_list: list[ProcedureVersion] = []
+            for pointer in pointers:
+                if (
+                    type(pointer) is not tuple
+                    or len(pointer) != 3
+                    or any(type(value) is not str for value in pointer[:2])
+                    or type(pointer[2]) is not int
+                ):
+                    raise ReflectionStorageError(
+                        "active procedure pointer is invalid"
+                    )
+                self._latest_version((pointer[0], pointer[1]))
+                row = self._fetch_row(pointer)
+                if row is None:
+                    raise ReflectionStorageError(
+                        "active procedure pointer is dangling"
+                    )
+                values_list.append(_decode_row(row))
+            values = tuple(values_list)
+            if any(
+                item.state is not ProcedureReviewState.APPROVED for item in values
+            ):
+                raise ReflectionStorageError("active procedure is not approved")
+            revision = self._read_activation_revision()
+        return values, revision
+
     def delete_session(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> int:
         self._require_open()
         scope = (_scope_id(tenant_id), _scope_id(session_id))
@@ -899,6 +984,7 @@ class SQLiteProcedureRepository:
                         "AND procedure_id = ?",
                         pointer[:2],
                     )
+            removed_active = any(pointer in selected for pointer in pointers)
             cursor = self._connection.execute(
                 f"DELETE FROM procedure_versions WHERE {predicate}", parameters
             )
@@ -919,6 +1005,8 @@ class SQLiteProcedureRepository:
                     f"DELETE FROM procedure_version_heads WHERE {predicate}",
                     parameters,
                 )
+            if removed_active:
+                self._bump_activation_revision()
             self._connection.commit()
             return cursor.rowcount
         except sqlite3.Error as exc:
@@ -956,16 +1044,56 @@ class SQLiteProcedureRepository:
         head_rows = self._connection.execute(
             'PRAGMA table_info("procedure_version_heads")'
         ).fetchall()
+        activation_rows = self._connection.execute(
+            'PRAGMA table_info("procedure_activation_revision")'
+        ).fetchall()
         versions = tuple((row[1], row[2], row[3], row[5]) for row in version_rows)
         active = tuple((row[1], row[2], row[3], row[5]) for row in active_rows)
         heads = tuple((row[1], row[2], row[3], row[5]) for row in head_rows)
+        activation_revision = tuple(
+            (row[1], row[2], row[3], row[5]) for row in activation_rows
+        )
         if (
             versions != self._EXPECTED_VERSIONS
             or active != self._EXPECTED_ACTIVE
             or heads != self._EXPECTED_HEADS
+            or activation_revision != self._EXPECTED_ACTIVATION_REVISION
         ):
             self.close()
             raise ReflectionStorageError("SQLite procedure schema is incompatible")
+
+        self._read_activation_revision()
+
+    def _read_activation_revision(self) -> int:
+        try:
+            row = self._connection.execute(
+                "SELECT singleton, revision FROM procedure_activation_revision"
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise ReflectionStorageError(
+                "SQLite procedure activation revision read failed"
+            ) from exc
+        if (
+            type(row) is not tuple
+            or len(row) != 2
+            or row[0] != 1
+            or type(row[1]) is not int
+            or row[1] < 0
+        ):
+            raise ReflectionStorageError(
+                "procedure activation revision is invalid"
+            )
+        return row[1]
+
+    def _bump_activation_revision(self) -> None:
+        cursor = self._connection.execute(
+            "UPDATE procedure_activation_revision SET revision = revision + 1 "
+            "WHERE singleton = 1"
+        )
+        if cursor.rowcount != 1:
+            raise ReflectionStorageError(
+                "procedure activation revision is invalid"
+            )
 
     def _validate_scope_metadata(
         self, tenant_id: str, procedure_id: str | None
