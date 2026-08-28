@@ -28,7 +28,8 @@ _HOST_ADMIN_TOKEN_PATTERN = re.compile(r"(?i)sk-admin-[a-z0-9_-]{20,}")
 _CONTROL_INSTRUCTION_PATTERN = re.compile(
     r"(?i)\b(?:forget|ignore|disregard|override)\s+"
     r"(?:(?:any|all|every|the)\s+)?"
-    r"(?:previous|prior|system|developer)\s+(?:instructions?|rules?|prompts?)\b|"
+    r"(?:(?:previous|prior)\s+)?(?:(?:system|developer)\s+)?"
+    r"(?:instructions?|rules?|prompts?)\b|"
     r"\b(?:grant|enable|allow)\s+(?:me\s+|yourself\s+|itself\s+|"
     r"themselves\s+|the\s+agent\s+|it\s+)?"
     r"(?:admin|browser|code|network|system|tool)\s+"

@@ -316,9 +316,13 @@ class InMemoryProcedureRepository:
         checked_tenant = _scope_id(tenant_id)
         checked_session = _scope_id(session_id)
         with self._lock:
+            versions = tuple(
+                (key, _validate_stored(key, item))
+                for key, item in self._versions.items()
+            )
             keys = [
                 key
-                for key, item in self._versions.items()
+                for key, item in versions
                 if item.tenant_id == checked_tenant
                 and item.origin_session_id == checked_session
             ]
@@ -334,7 +338,11 @@ class InMemoryProcedureRepository:
     def delete_procedure(self, *, tenant_id: OpaqueId, procedure_id: OpaqueId) -> int:
         scope = _scope(tenant_id, procedure_id)
         with self._lock:
-            keys = [key for key in self._versions if key[:2] == scope]
+            versions = tuple(
+                (key, _validate_stored(key, item))
+                for key, item in self._versions.items()
+            )
+            keys = [key for key, _item in versions if key[:2] == scope]
             for key in keys:
                 del self._versions[key]
                 self._generations.pop(key, None)
@@ -344,7 +352,11 @@ class InMemoryProcedureRepository:
     def delete_tenant(self, *, tenant_id: OpaqueId) -> int:
         checked_tenant = _scope_id(tenant_id)
         with self._lock:
-            keys = [key for key in self._versions if key[0] == checked_tenant]
+            versions = tuple(
+                (key, _validate_stored(key, item))
+                for key, item in self._versions.items()
+            )
+            keys = [key for key, _item in versions if key[0] == checked_tenant]
             for key in keys:
                 del self._versions[key]
                 self._generations.pop(key, None)
@@ -774,6 +786,9 @@ class SQLiteProcedureRepository:
     ) -> int:
         try:
             self._connection.execute("BEGIN IMMEDIATE")
+            self._validate_scope_metadata(
+                parameters[0], parameters[1] if "procedure_id" in predicate else None
+            )
             selected_rows = self._connection.execute(
                 "SELECT tenant_id, procedure_id, version, origin_session_id, "
                 "origin_run_id, state, payload FROM procedure_versions "
@@ -876,7 +891,7 @@ class SQLiteProcedureRepository:
         parameters: list[str] = [tenant_id, tenant_id]
         if procedure_id is not None:
             predicate += (
-                " AND (procedure_id = ? OR (json_valid(payload) AND "
+                " OR (procedure_id = ? OR (json_valid(payload) AND "
                 "json_extract(payload, '$.procedure_id') = ?))"
             )
             parameters.extend((procedure_id, procedure_id))
@@ -960,7 +975,11 @@ def _scope(tenant_id: object, procedure_id: object) -> tuple[str, str]:
     return (_scope_id(tenant_id), _scope_id(procedure_id))
 
 
-def _require_expected(current: int | None, expected: object) -> None:
+def _require_expected(current: object, expected: object) -> None:
+    if current is not None and (
+        type(current) is not int or not 1 <= current <= 10_000
+    ):
+        raise ReflectionStorageError("stored procedure version is invalid")
     if expected is not None:
         expected = _version(expected)
     if current != expected:
