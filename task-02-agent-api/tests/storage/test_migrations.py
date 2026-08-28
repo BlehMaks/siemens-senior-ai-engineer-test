@@ -10,6 +10,7 @@ from agent_api.storage import MigrationError, migrate, schema
 from search_agent.memory import (
     FactAuthor,
     ProcedureAuthor,
+    ProcedureReview,
     ProcedureReviewState,
     ProcedureVersion,
     SemanticFact,
@@ -17,6 +18,65 @@ from search_agent.memory import (
     SQLiteReflectionRepository,
     SQLiteSemanticFactRepository,
 )
+
+
+def seed_current_active_procedure(path: Path) -> None:
+    procedure = ProcedureVersion(
+        tenant_id="tenant-one",
+        procedure_id="procedure-one",
+        version=1,
+        origin_session_id="session-one",
+        origin_run_id="run-one",
+        title="Review official evidence",
+        steps=("Prefer the issuer's official report.",),
+        proposed_at=datetime(2026, 8, 28, 10, tzinfo=UTC),
+        author=ProcedureAuthor.HUMAN,
+        state=ProcedureReviewState.APPROVED,
+        review=ProcedureReview(
+            state=ProcedureReviewState.APPROVED,
+            reviewer_id="reviewer-one",
+            reviewed_at=datetime(2026, 8, 28, 11, tzinfo=UTC),
+        ),
+    )
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO tenants (tenant_id, created_at) VALUES (?, ?)",
+            ("tenant-one", "2026-08-28T10:00:00.000000+00:00"),
+        )
+        connection.execute(
+            "INSERT INTO sessions "
+            "(tenant_id, session_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (
+                "tenant-one",
+                "session-one",
+                "2026-08-28T10:00:00.000000+00:00",
+                "2026-08-28T10:00:00.000000+00:00",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO procedure_versions "
+            "(tenant_id, procedure_id, version, origin_session_id, "
+            "origin_run_id, state, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                procedure.tenant_id,
+                procedure.procedure_id,
+                procedure.version,
+                procedure.origin_session_id,
+                procedure.origin_run_id,
+                procedure.state,
+                procedure.model_dump_json(),
+            ),
+        )
+        connection.execute(
+            "INSERT INTO procedure_version_heads "
+            "(tenant_id, procedure_id, latest_version) VALUES (?, ?, ?)",
+            (procedure.tenant_id, procedure.procedure_id, procedure.version),
+        )
+        connection.execute(
+            "INSERT INTO active_procedures "
+            "(tenant_id, procedure_id, version) VALUES (?, ?, ?)",
+            (procedure.tenant_id, procedure.procedure_id, procedure.version),
+        )
 
 
 def install_api_schema_through_v6(path: Path) -> None:
@@ -395,6 +455,57 @@ async def test_current_schema_rejects_active_pointer_constraint_drift(
         )
 
     with pytest.raises(MigrationError, match="active procedure schema is incompatible"):
+        await migrate(path)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload_mutation",
+    (
+        "json_set(payload, '$.version', json('true'))",
+        "json_remove(payload, '$.review')",
+        "replace(payload, '\"state\":\"approved\"', "
+        "'\"state\":\"approved\",\"state\":\"proposed\"')",
+    ),
+    ids=("boolean-version", "missing-review", "duplicate-state"),
+)
+async def test_current_schema_rejects_noncanonical_active_payload(
+    tmp_path: Path, payload_mutation: str
+) -> None:
+    path = tmp_path / "noncanonical-active-payload.sqlite3"
+    await migrate(path)
+    seed_current_active_procedure(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            f"UPDATE procedure_versions SET payload = {payload_mutation} "
+            "WHERE tenant_id = 'tenant-one' AND procedure_id = 'procedure-one'"
+        )
+
+    with pytest.raises(MigrationError, match="active procedure schema is incompatible"):
+        await migrate(path)
+
+
+@pytest.mark.asyncio
+async def test_current_schema_requires_procedure_head_range_constraint(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "head-without-range-check.sqlite3"
+    await migrate(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("DROP TABLE procedure_version_heads")
+        connection.execute(
+            "CREATE TABLE procedure_version_heads ("
+            "tenant_id TEXT NOT NULL, procedure_id TEXT NOT NULL, "
+            "latest_version INTEGER NOT NULL, "
+            "PRIMARY KEY (tenant_id, procedure_id), "
+            "FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) "
+            "ON DELETE CASCADE) WITHOUT ROWID"
+        )
+
+    with pytest.raises(
+        MigrationError, match="procedure version head schema is incompatible"
+    ):
         await migrate(path)
 
 

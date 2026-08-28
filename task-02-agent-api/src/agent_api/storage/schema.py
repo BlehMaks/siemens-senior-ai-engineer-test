@@ -11,6 +11,9 @@ from importlib.resources import files
 from pathlib import Path
 
 import aiosqlite
+from pydantic import ValidationError
+
+from search_agent.memory import ProcedureReviewState, ProcedureVersion
 
 
 class MigrationError(RuntimeError):
@@ -190,6 +193,14 @@ _LEGACY_PROCEDURE_HEAD_SQL = (
     "procedure_id TEXT NOT NULL, latest_version INTEGER NOT NULL CHECK( "
     "latest_version BETWEEN 1 AND 10000 ), "
     "PRIMARY KEY (tenant_id, procedure_id) ) WITHOUT ROWID"
+)
+_CURRENT_PROCEDURE_HEAD_SQL = (
+    'CREATE TABLE "procedure_version_heads" ( tenant_id TEXT NOT NULL, '
+    "procedure_id TEXT NOT NULL, latest_version INTEGER NOT NULL CHECK( "
+    "latest_version BETWEEN 1 AND 10000 ), "
+    "PRIMARY KEY (tenant_id, procedure_id), "
+    "FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE "
+    ") WITHOUT ROWID"
 )
 
 
@@ -530,24 +541,16 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
     ).fetchall()
     if active_violations:
         raise MigrationError("database active procedure schema is incompatible")
-    inactive_pointer = await (
+    active_rows = await (
         await connection.execute(
-            "SELECT 1 FROM active_procedures AS active "
+            "SELECT versions.tenant_id, versions.procedure_id, versions.version, "
+            "versions.origin_session_id, versions.origin_run_id, versions.state, "
+            "versions.payload FROM active_procedures AS active "
             "JOIN procedure_versions AS versions USING "
-            "(tenant_id, procedure_id, version) WHERE CASE "
-            "WHEN json_valid(versions.payload) THEN "
-            "versions.state IS NOT 'approved' OR "
-            "json_extract(versions.payload, '$.tenant_id') "
-            "IS NOT versions.tenant_id OR "
-            "json_extract(versions.payload, '$.procedure_id') "
-            "IS NOT versions.procedure_id OR "
-            "json_extract(versions.payload, '$.version') "
-            "IS NOT versions.version OR "
-            "json_extract(versions.payload, '$.state') IS NOT 'approved' "
-            "ELSE 1 END LIMIT 1"
+            "(tenant_id, procedure_id, version)"
         )
-    ).fetchone()
-    if inactive_pointer is not None:
+    ).fetchall()
+    if any(not _is_canonical_active_procedure(row) for row in active_rows):
         raise MigrationError("database active procedure schema is incompatible")
     for table in ("procedure_versions", "procedure_version_heads"):
         rows = await (
@@ -583,6 +586,19 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
         )
     ).fetchone()
     if invalid_head is not None:
+        raise MigrationError("database procedure version head schema is incompatible")
+    head_definition = await (
+        await connection.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'procedure_version_heads' COLLATE NOCASE"
+        )
+    ).fetchone()
+    if (
+        head_definition is None
+        or head_definition[0] != "procedure_version_heads"
+        or type(head_definition[1]) is not str
+        or " ".join(head_definition[1].split()) != _CURRENT_PROCEDURE_HEAD_SQL
+    ):
         raise MigrationError("database procedure version head schema is incompatible")
     head_behind_history = await (
         await connection.execute(
@@ -659,6 +675,31 @@ def _is_exact_composite_cascade(
     return tuple((source, target) for _, source, target in group) == columns and tuple(
         sequence for sequence, _, _ in group
     ) == tuple(range(len(columns)))
+
+
+def _is_canonical_active_procedure(row: Sequence[object]) -> bool:
+    if (
+        len(row) != 7
+        or any(type(value) is not str for value in (*row[:2], *row[3:6]))
+        or type(row[2]) is not int
+        or type(row[6]) is not str
+    ):
+        return False
+    try:
+        procedure = ProcedureVersion.model_validate_json(row[6], strict=True)
+    except (TypeError, ValidationError, ValueError):
+        return False
+    return (
+        procedure.tenant_id == row[0]
+        and procedure.procedure_id == row[1]
+        and procedure.version == row[2]
+        and procedure.origin_session_id == row[3]
+        and procedure.origin_run_id == row[4]
+        and row[5] == ProcedureReviewState.APPROVED
+        and procedure.state is ProcedureReviewState.APPROVED
+        and procedure.review is not None
+        and procedure.model_dump_json() == row[6]
+    )
 
 
 def _table_layout(rows: Iterable[Sequence[object]]) -> tuple[tuple[object, ...], ...]:
