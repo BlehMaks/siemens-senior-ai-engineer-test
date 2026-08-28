@@ -440,7 +440,7 @@ class SQLiteSemanticFactRepository:
             if self._connection.in_transaction:
                 self._connection.rollback()
             raise ReflectionStorageError("SQLite semantic fact review failed") from exc
-        except Exception:
+        except BaseException:
             if self._connection.in_transaction:
                 self._connection.rollback()
             raise
@@ -586,28 +586,17 @@ class SQLiteSemanticFactRepository:
     def _validate_tenant_metadata(self, tenant_id: str) -> None:
         self._require_open()
         try:
-            row = self._connection.execute(
+            rows = self._connection.execute(
                 "SELECT tenant_id, fact_id, origin_session_id, origin_run_id, "
-                "source_id, conflict_key, state, expires_at, payload "
-                "FROM semantic_facts WHERE tenant_id = ? AND CASE "
-                "WHEN json_valid(payload) THEN "
-                "tenant_id IS NOT json_extract(payload, '$.tenant_id') OR "
-                "fact_id IS NOT json_extract(payload, '$.fact_id') OR "
-                "origin_session_id IS NOT "
-                "json_extract(payload, '$.origin_session_id') OR "
-                "origin_run_id IS NOT json_extract(payload, '$.origin_run_id') OR "
-                "source_id IS NOT json_extract(payload, '$.source_id') OR "
-                "conflict_key IS NOT json_extract(payload, '$.conflict_key') OR "
-                "state IS NOT json_extract(payload, '$.state') OR "
-                "expires_at IS NOT json_extract(payload, '$.expires_at') "
-                "ELSE 1 END LIMIT 1",
+                "source_id, conflict_key, state, expires_at, payload FROM "
+                "semantic_facts WHERE tenant_id = ? ORDER BY fact_id",
                 (tenant_id,),
-            ).fetchone()
+            ).fetchall()
         except sqlite3.Error as exc:
             raise ReflectionStorageError(
                 "SQLite semantic fact metadata validation failed"
             ) from exc
-        if row is not None:
+        for row in rows:
             _decode_row(row)
 
     def _require_open(self) -> None:

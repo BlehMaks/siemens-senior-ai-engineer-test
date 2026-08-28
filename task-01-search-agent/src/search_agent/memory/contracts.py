@@ -26,7 +26,7 @@ _DEFAULT_IGNORABLE_PATTERN = re.compile(
 # inside one label. Search the entire hostname without broadening public path topics.
 _HOST_ADMIN_TOKEN_PATTERN = re.compile(r"(?i)sk-admin-[a-z0-9_-]{20,}")
 _CONTROL_INSTRUCTION_PATTERN = re.compile(
-    r"(?i)\b(?:ignore|disregard|override)\s+(?:(?:any|all|the)\s+)?"
+    r"(?i)\b(?:ignore|disregard|override)\s+(?:(?:any|all|every|the)\s+)?"
     r"(?:previous|prior|system|developer)\s+(?:instructions?|rules?|prompts?)\b|"
     r"\b(?:grant|enable|allow)\s+(?:me\s+|yourself\s+|itself\s+|"
     r"themselves\s+|the\s+agent\s+|it\s+)?"
