@@ -69,6 +69,52 @@ uv run python -m material_similarity.evaluation \
   task-05-material-similarity/evals/relevance.yaml
 ```
 
+## Opt-in hybrid prototype
+
+Structured reranking is available only when requested; the reviewed lexical result
+and its JSON contract remain the default:
+
+```bash
+uv run material-similarity "input/IT DA AI Tasks/Fuse.csv" \
+  --mode hybrid --part-id <PART_ID>
+uv run python -m material_similarity.evaluation \
+  "input/IT DA AI Tasks/Fuse.csv" \
+  task-05-material-similarity/evals/relevance.yaml --mode hybrid
+```
+
+The prototype parses only current, AC/DC voltage, two- or three-axis dimensions,
+acting characteristic, material, mounting, and mounting feature. Its alternatives
+label `mode` as `hybrid` or `text_only` and expose the original text evidence,
+structured score and coverage, component values, penalties, unsupported fields, and
+conflicts. Hard conflicts are returned under `excluded` rather than hidden. An
+abbreviated synthetic result looks like:
+
+```json
+{
+  "part_id": "Q",
+  "status": "insufficient_candidates",
+  "alternatives": [{
+    "part_id": "A",
+    "mode": "hybrid",
+    "structured_score": 1.0,
+    "structured_coverage": 0.83871,
+    "final_score": 1.0,
+    "components": [{"field": "current", "similarity": 1.0, "weight": 3.0}]
+  }],
+  "excluded": [{
+    "part_id": "B",
+    "conflicts": [{"field": "acting", "code": "categorical_mismatch", "hard": true}]
+  }]
+}
+```
+
+The exact eight-query reviewed comparison did **not** promote hybrid mode. It removed
+all reviewed returned hard negatives (`0.142857` to `0.0`) but left fewer than five
+candidates for every text-backed query, reducing coverage from `0.875` to `0.0` and
+expected-status agreement from `1.0` to `0.125`. Text nDCG@5 remains `0.846792`;
+hybrid nDCG@5 is `0.0` under the honest insufficient-candidate contract. Full
+evidence and limitations are in `reports/hybrid-evaluation.md`.
+
 ## Output contract
 
 The CLI emits one object for `--part-id`, or an array containing one object per
