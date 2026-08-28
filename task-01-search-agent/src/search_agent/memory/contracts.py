@@ -25,6 +25,14 @@ _DEFAULT_IGNORABLE_PATTERN = re.compile(
 # DNS canonicalization removes token case, and an attacker can prefix a credential
 # inside one label. Search the entire hostname without broadening public path topics.
 _HOST_ADMIN_TOKEN_PATTERN = re.compile(r"(?i)sk-admin-[a-z0-9_-]{20,}")
+_CONTROL_INSTRUCTION_PATTERN = re.compile(
+    r"(?i)\b(?:ignore|disregard|override)\s+(?:(?:any|all|the)\s+)?"
+    r"(?:previous|prior|system|developer)\s+(?:instructions?|rules?|prompts?)\b|"
+    r"\b(?:grant|enable|allow)\s+(?:me\s+|yourself\s+|itself\s+|"
+    r"themselves\s+|the\s+agent\s+|it\s+)?"
+    r"(?:admin|browser|code|network|system|tool)\s+"
+    r"(?:access|capabilit(?:y|ies)|permissions?)\b"
+)
 _REDACTIONS = (
     re.compile(r"(?i)\bbearer\b[^.!?]*"),
     re.compile(
@@ -213,6 +221,12 @@ def contains_sensitive_memory_text(value: str) -> bool:
     return bool(_DEFAULT_IGNORABLE_PATTERN.search(value)) or any(
         pattern.search(value) for pattern in _REDACTIONS
     )
+
+
+def contains_memory_control_text(value: str) -> bool:
+    """Detect imperative prompt or capability changes that memory must never carry."""
+
+    return type(value) is not str or bool(_CONTROL_INSTRUCTION_PATTERN.search(value))
 
 
 def contains_sensitive_memory_hostname(value: str) -> bool:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import sqlite3
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -23,6 +22,7 @@ from .contracts import (
     ReflectionInputError,
     ReflectionStorageError,
     RepositoryClosedError,
+    contains_memory_control_text,
     contains_sensitive_memory_text,
 )
 from .episodic import _limit, _safe_public_url, _scope_id
@@ -32,13 +32,6 @@ FactClaim = Annotated[
 ]
 
 _MAX_SERIALIZED_BYTES = 16 * 1024
-_CONTROL_INSTRUCTION_PATTERN = re.compile(
-    r"(?i)\b(?:ignore|disregard|override)\s+(?:all\s+)?"
-    r"(?:previous|prior|system|developer)\s+(?:instructions?|rules?|prompts?)\b|"
-    r"\b(?:grant|enable|allow)\s+(?:me\s+|the\s+agent\s+|it\s+)?"
-    r"(?:admin|browser|code|network|system|tool)\s+"
-    r"(?:access|capabilit(?:y|ies)|permissions?)\b"
-)
 
 
 class FactAuthor(StrEnum):
@@ -86,7 +79,7 @@ class SemanticFact(StrictModel):
         if (
             type(value) is not str
             or contains_sensitive_memory_text(value)
-            or _CONTROL_INSTRUCTION_PATTERN.search(value)
+            or contains_memory_control_text(value)
         ):
             raise ValueError("fact claim contains sensitive material")
         return " ".join(value.split()).casefold()
@@ -447,6 +440,10 @@ class SQLiteSemanticFactRepository:
             if self._connection.in_transaction:
                 self._connection.rollback()
             raise ReflectionStorageError("SQLite semantic fact review failed") from exc
+        except Exception:
+            if self._connection.in_transaction:
+                self._connection.rollback()
+            raise
         return _copy(updated)
 
     def reopen(self, *, tenant_id: OpaqueId, fact_id: OpaqueId) -> SemanticFact:
@@ -594,13 +591,15 @@ class SQLiteSemanticFactRepository:
                 "source_id, conflict_key, state, expires_at, payload "
                 "FROM semantic_facts WHERE tenant_id = ? AND CASE "
                 "WHEN json_valid(payload) THEN "
-                "tenant_id != json_extract(payload, '$.tenant_id') OR "
-                "fact_id != json_extract(payload, '$.fact_id') OR "
-                "origin_session_id != json_extract(payload, '$.origin_session_id') OR "
-                "origin_run_id != json_extract(payload, '$.origin_run_id') OR "
-                "source_id != json_extract(payload, '$.source_id') OR "
-                "conflict_key != json_extract(payload, '$.conflict_key') OR "
-                "state != json_extract(payload, '$.state') "
+                "tenant_id IS NOT json_extract(payload, '$.tenant_id') OR "
+                "fact_id IS NOT json_extract(payload, '$.fact_id') OR "
+                "origin_session_id IS NOT "
+                "json_extract(payload, '$.origin_session_id') OR "
+                "origin_run_id IS NOT json_extract(payload, '$.origin_run_id') OR "
+                "source_id IS NOT json_extract(payload, '$.source_id') OR "
+                "conflict_key IS NOT json_extract(payload, '$.conflict_key') OR "
+                "state IS NOT json_extract(payload, '$.state') OR "
+                "expires_at IS NOT json_extract(payload, '$.expires_at') "
                 "ELSE 1 END LIMIT 1",
                 (tenant_id,),
             ).fetchone()
