@@ -462,6 +462,16 @@ def test_in_memory_delete_rejects_malformed_active_pointer() -> None:
     )
 
 
+def test_in_memory_delete_rejects_malformed_version_head() -> None:
+    repository = InMemoryProcedureRepository()
+    repository.propose(procedure(), expected_latest_version=None)
+    repository._latest[("tenant-one", "playbook-one")] = "corrupt"  # type: ignore[assignment]
+
+    with pytest.raises(ReflectionStorageError, match="head"):
+        repository.delete_session(tenant_id="tenant-one", session_id="session-one")
+    assert ("tenant-one", "playbook-one", 1) in repository._versions
+
+
 def test_in_memory_review_detects_delete_and_recreate_aba(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -790,3 +800,53 @@ def test_sqlite_original_scope_rejects_fully_moved_corruption(
                 repository.delete_procedure(
                     tenant_id="tenant-one", procedure_id="playbook-one"
                 )
+
+
+def test_sqlite_reads_reject_fully_moved_row_and_head(tmp_path: Path) -> None:
+    path = tmp_path / "fully-moved-row-and-head.sqlite3"
+    with SQLiteProcedureRepository(path) as repository:
+        repository.propose(procedure(), expected_latest_version=None)
+        with sqlite3.connect(path) as connection:
+            connection.execute(
+                "UPDATE procedure_versions SET tenant_id = 'tenant-two', "
+                "procedure_id = 'playbook-two', "
+                "payload = json_set(json_set(payload, '$.tenant_id', NULL), "
+                "'$.procedure_id', NULL) WHERE tenant_id = 'tenant-one' "
+                "AND procedure_id = 'playbook-one'"
+            )
+            connection.execute(
+                "UPDATE procedure_version_heads SET tenant_id = 'tenant-two', "
+                "procedure_id = 'playbook-two' WHERE tenant_id = 'tenant-one' "
+                "AND procedure_id = 'playbook-one'"
+            )
+
+        with pytest.raises(ReflectionStorageError, match="stored procedure"):
+            repository.get_version(
+                tenant_id="tenant-one", procedure_id="playbook-one", version=1
+            )
+        with pytest.raises(ReflectionStorageError, match="stored procedure"):
+            repository.list_versions(
+                tenant_id="tenant-one", procedure_id="playbook-one"
+            )
+
+
+def test_sqlite_delete_rejects_invalid_head_only_row(tmp_path: Path) -> None:
+    path = tmp_path / "invalid-orphan-head.sqlite3"
+    with SQLiteProcedureRepository(path) as repository:
+        repository.propose(procedure(), expected_latest_version=None)
+        with sqlite3.connect(path) as connection:
+            connection.execute(
+                "INSERT INTO procedure_version_heads "
+                "(tenant_id, procedure_id, latest_version) VALUES ('', ?, 1)",
+                ("orphan-playbook",),
+            )
+
+        with pytest.raises(ReflectionStorageError, match="head"):
+            repository.delete_session(
+                tenant_id="tenant-one", session_id="session-one"
+            )
+        assert repository._connection.execute(
+            "SELECT COUNT(*) FROM procedure_versions WHERE tenant_id = ? "
+            "AND procedure_id = ?",
+            ("tenant-one", "playbook-one"),
+        ).fetchone() == (1,)
