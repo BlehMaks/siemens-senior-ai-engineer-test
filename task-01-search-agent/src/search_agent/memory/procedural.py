@@ -316,6 +316,7 @@ class InMemoryProcedureRepository:
         checked_tenant = _scope_id(tenant_id)
         checked_session = _scope_id(session_id)
         with self._lock:
+            self._validate_active_pointers()
             versions = tuple(
                 (key, _validate_stored(key, item))
                 for key, item in self._versions.items()
@@ -338,6 +339,7 @@ class InMemoryProcedureRepository:
     def delete_procedure(self, *, tenant_id: OpaqueId, procedure_id: OpaqueId) -> int:
         scope = _scope(tenant_id, procedure_id)
         with self._lock:
+            self._validate_active_pointers()
             versions = tuple(
                 (key, _validate_stored(key, item))
                 for key, item in self._versions.items()
@@ -352,6 +354,7 @@ class InMemoryProcedureRepository:
     def delete_tenant(self, *, tenant_id: OpaqueId) -> int:
         checked_tenant = _scope_id(tenant_id)
         with self._lock:
+            self._validate_active_pointers()
             versions = tuple(
                 (key, _validate_stored(key, item))
                 for key, item in self._versions.items()
@@ -413,6 +416,28 @@ class InMemoryProcedureRepository:
         if checked.state is not ProcedureReviewState.APPROVED:
             raise ReflectionInputError("only approved procedure versions can be active")
         return checked
+
+    def _validate_active_pointers(self) -> None:
+        for scope, version in self._active.items():
+            try:
+                if (
+                    type(scope) is not tuple
+                    or len(scope) != 2
+                    or _scope(*scope) != scope
+                    or type(version) is not int
+                    or not 1 <= version <= 10_000
+                ):
+                    raise ValueError
+            except (ReflectionInputError, TypeError, ValueError):
+                raise ReflectionStorageError(
+                    "active procedure pointer is invalid"
+                ) from None
+            key = (*scope, version)
+            stored = self._versions.get(key)
+            if stored is None:
+                raise ReflectionStorageError("active procedure pointer is dangling")
+            if _validate_stored(key, stored).state is not ProcedureReviewState.APPROVED:
+                raise ReflectionStorageError("active procedure is not approved")
 
 
 class SQLiteProcedureRepository:
@@ -672,9 +697,11 @@ class SQLiteProcedureRepository:
         self._require_open()
         scope = _scope(tenant_id, procedure_id)
         self._validate_scope_metadata(*scope)
-        self._latest_version(scope)
+        latest = self._latest_version(scope)
         key = (*scope, _version(version))
         row = self._fetch_row(key)
+        if row is None and latest is not None:
+            self._validate_all_metadata()
         return None if row is None else _decode_row(row)
 
     def get_active(
@@ -789,6 +816,8 @@ class SQLiteProcedureRepository:
             self._validate_scope_metadata(
                 parameters[0], parameters[1] if "procedure_id" in predicate else None
             )
+            self._validate_all_metadata()
+            pointers = self._validated_active_pointers()
             selected_rows = self._connection.execute(
                 "SELECT tenant_id, procedure_id, version, origin_session_id, "
                 "origin_run_id, state, payload FROM procedure_versions "
@@ -803,11 +832,8 @@ class SQLiteProcedureRepository:
                 (item.tenant_id, item.procedure_id, item.version)
                 for item in selected_versions
             }
-            pointers = self._connection.execute(
-                "SELECT tenant_id, procedure_id, version FROM active_procedures"
-            ).fetchall()
             for pointer in pointers:
-                if tuple(pointer) in selected:
+                if pointer in selected:
                     self._connection.execute(
                         "DELETE FROM active_procedures WHERE tenant_id = ? "
                         "AND procedure_id = ?",
@@ -908,6 +934,53 @@ class SQLiteProcedureRepository:
             ) from exc
         for row in rows:
             _decode_row(row)
+
+    def _validate_all_metadata(self) -> None:
+        try:
+            rows = self._connection.execute(
+                "SELECT tenant_id, procedure_id, version, origin_session_id, "
+                "origin_run_id, state, payload FROM procedure_versions "
+                "ORDER BY tenant_id, procedure_id, version LIMIT -1"
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise ReflectionStorageError(
+                "SQLite procedure metadata validation failed"
+            ) from exc
+        scopes: set[tuple[str, str]] = set()
+        for row in rows:
+            procedure = _decode_row(row)
+            scopes.add((procedure.tenant_id, procedure.procedure_id))
+        for scope in scopes:
+            self._latest_version(scope)
+
+    def _validated_active_pointers(self) -> tuple[tuple[str, str, int], ...]:
+        try:
+            rows = self._connection.execute(
+                "SELECT tenant_id, procedure_id, version FROM active_procedures "
+                "ORDER BY tenant_id, procedure_id LIMIT -1"
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise ReflectionStorageError(
+                "SQLite active procedure read failed"
+            ) from exc
+        pointers: list[tuple[str, str, int]] = []
+        for row in rows:
+            if (
+                type(row) is not tuple
+                or len(row) != 3
+                or any(type(value) is not str for value in row[:2])
+                or type(row[2]) is not int
+                or not 1 <= row[2] <= 10_000
+            ):
+                raise ReflectionStorageError("active procedure pointer is invalid")
+            pointer = (row[0], row[1], row[2])
+            stored = self._fetch_row(pointer)
+            if stored is None:
+                raise ReflectionStorageError("active procedure pointer is dangling")
+            if _decode_row(stored).state is not ProcedureReviewState.APPROVED:
+                raise ReflectionStorageError("active procedure is not approved")
+            pointers.append(pointer)
+        return tuple(pointers)
 
     def _latest_version(self, scope: tuple[str, str]) -> int | None:
         row = self._connection.execute(

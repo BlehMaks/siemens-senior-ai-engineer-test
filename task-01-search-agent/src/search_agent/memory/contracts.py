@@ -27,7 +27,7 @@ _DEFAULT_IGNORABLE_PATTERN = re.compile(
 _HOST_ADMIN_TOKEN_PATTERN = re.compile(r"(?i)sk-admin-[a-z0-9_-]{20,}")
 _CONTROL_INSTRUCTION_PATTERN = re.compile(
     r"(?i)\b(?:forget|ignore|disregard|override)\s+"
-    r"(?:(?:any|all|every|the)\s+)?"
+    r"(?:(?:any|all|every)(?:\s+of)?\s+(?:the\s+)?|the\s+)?"
     r"(?:(?:previous|prior)\s+)?(?:(?:system|developer)\s+)?"
     r"(?:instructions?|rules?|prompts?)\b|"
     r"\b(?:grant|enable|allow)\s+(?:me\s+|yourself\s+|itself\s+|"
