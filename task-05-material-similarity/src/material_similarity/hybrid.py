@@ -22,7 +22,9 @@ _RANGE = re.compile(
     re.IGNORECASE,
 )
 _SCALAR = re.compile(rf"^\s*({_NUMBER})\s*([^\d\s].*)?$", re.IGNORECASE)
-_ANNOTATION = re.compile(r"@?\([^)]{1,24}\)")
+_ANNOTATION = re.compile(
+    r"(?i)(?:@\([^)]{1,24}\)|\((?:typ(?:ical)?|min(?:imum)?|max(?:imum)?)\))"
+)
 _SPACE = re.compile(r"\s+")
 
 AttributeState = Literal["parsed", "missing", "unsupported", "conflict"]
@@ -200,13 +202,17 @@ def parse_quantity(
     cleaned = _SPACE.sub(" ", cleaned).strip()
     match = _RANGE.fullmatch(cleaned)
     if match:
+        opening = match.group(1)
+        closing = match.group(4)
+        if (opening is None) != (closing is None):
+            raise ValueError("quantity range has unsupported delimiters")
         lower = float(match.group(2))
         upper = float(match.group(3))
         if lower > upper:
             raise ValueError("quantity range is descending")
         unit_text = (match.group(5) or default_unit or "").strip()
-        lower_inclusive = match.group(1) != "("
-        upper_inclusive = match.group(4) != ")"
+        lower_inclusive = opening != "("
+        upper_inclusive = closing != ")"
     else:
         scalar = _SCALAR.fullmatch(cleaned)
         if not scalar:
@@ -520,7 +526,7 @@ def _compare(
             spec.name, "unit_or_mode_mismatch", True, left, right
         )
     similarity = _interval_similarity(left, right)
-    if spec.hard_ratio is not None:
+    if spec.hard_ratio is not None and not _intervals_overlap(left, right):
         left_mid = (left.lower + left.upper) / 2.0
         right_mid = (right.lower + right.upper) / 2.0
         if min(left_mid, right_mid) == 0.0:
@@ -537,9 +543,18 @@ def _compare(
 
 
 def _interval_similarity(left: Quantity, right: Quantity) -> float:
+    overlaps = _intervals_overlap(left, right)
+    endpoint = (
+        _positive_similarity(left.lower, right.lower)
+        + _positive_similarity(left.upper, right.upper)
+    ) / 2.0
+    return min(1.0, 0.5 + 0.5 * endpoint) if overlaps else endpoint
+
+
+def _intervals_overlap(left: Quantity, right: Quantity) -> bool:
     overlap_lower = max(left.lower, right.lower)
     overlap_upper = min(left.upper, right.upper)
-    overlaps = overlap_lower < overlap_upper or (
+    return overlap_lower < overlap_upper or (
         overlap_lower == overlap_upper
         and (
             left.lower_inclusive
@@ -552,11 +567,6 @@ def _interval_similarity(left: Quantity, right: Quantity) -> float:
             else right.upper_inclusive
         )
     )
-    endpoint = (
-        _positive_similarity(left.lower, right.lower)
-        + _positive_similarity(left.upper, right.upper)
-    ) / 2.0
-    return min(1.0, 0.5 + 0.5 * endpoint) if overlaps else endpoint
 
 
 def _positive_similarity(left: float, right: float) -> float:
@@ -577,6 +587,7 @@ def _equivalent(left: StructuredValue, right: StructuredValue) -> bool:
             left.lower_inclusive,
             left.upper_inclusive,
             left.unit,
+            left.qualifier,
             left.mode,
         ) == (
             right.lower,
@@ -584,6 +595,7 @@ def _equivalent(left: StructuredValue, right: StructuredValue) -> bool:
             right.lower_inclusive,
             right.upper_inclusive,
             right.unit,
+            right.qualifier,
             right.mode,
         )
     if isinstance(left, Dimensions) and isinstance(right, Dimensions):
@@ -596,7 +608,10 @@ def _equivalent(left: StructuredValue, right: StructuredValue) -> bool:
 def _unit(
     kind: Literal["current", "voltage", "length"], raw_unit: str
 ) -> tuple[float, str, Mode]:
-    unit = re.sub(r"\s+", "", raw_unit).casefold()
+    source_unit = re.sub(r"\s+", "", raw_unit)
+    if kind in {"current", "voltage"} and source_unit.startswith("M"):
+        raise ValueError(f"unsupported {kind} unit")
+    unit = source_unit.casefold()
     tables: dict[str, dict[str, tuple[float, str, Mode]]] = {
         "current": {
             "a": (1.0, "A", "unspecified"),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from typing import Literal
 
 import pytest
 
@@ -99,6 +100,28 @@ def test_quantity_parser_rejects_malformed_or_unsupported_values(raw: str) -> No
         parse_quantity(raw, kind="current")
 
 
+@pytest.mark.parametrize(
+    ("raw", "kind"),
+    (("1 MA", "current"), ("1 MV", "voltage")),
+)
+def test_quantity_parser_rejects_unreviewed_uppercase_si_prefixes(
+    raw: str, kind: Literal["current", "voltage", "length"]
+) -> None:
+    with pytest.raises(ValueError, match="unsupported"):
+        parse_quantity(raw, kind=kind)
+
+
+def test_range_parser_requires_paired_delimiters_and_preserves_exclusivity() -> None:
+    parsed = parse_quantity("(1-2) A", kind="current")
+
+    assert (parsed.lower, parsed.upper) == (1.0, 2.0)
+    assert parsed.lower_inclusive is False
+    assert parsed.upper_inclusive is False
+    for malformed in ("[1-2 A", "1-2] A"):
+        with pytest.raises(ValueError, match="unsupported"):
+            parse_quantity(malformed, kind="current")
+
+
 def test_category_parser_uses_only_reviewed_aliases_and_boolean_values() -> None:
     aliases = {"yes": "true", "no": "false", "surface mount": "surface"}
 
@@ -119,6 +142,15 @@ def test_multiple_source_fields_expose_conflict_instead_of_column_precedence() -
         "Current Rating",
         "Rated Current (A)",
     )
+
+    qualifier_conflict = _rated_material(
+        "R",
+        **{"Rated Current (A)": "maximum 2A"},
+    )
+    qualifier_attributes = {
+        item.name: item for item in parse_material_attributes(qualifier_conflict)
+    }
+    assert qualifier_attributes["current"].state == "conflict"
 
 
 def test_hybrid_ranking_filters_only_hard_conflicts_and_explains_every_score() -> None:
@@ -185,6 +217,23 @@ def test_ac_dc_and_dimension_conflicts_are_hard_and_visible() -> None:
         "dimension_mismatch",
     }
     assert all(conflict.hard for conflict in excluded.conflicts)
+
+
+def test_overlapping_numeric_ranges_are_not_proven_hard_conflicts() -> None:
+    materials = (
+        _material("Q", **{"Current Rating": "1-100A"}),
+        _material("A", **{"Current Rating": "1A"}),
+        *(_material(part_id, **{"Current Rating": "1-100A"}) for part_id in "BCDEF"),
+    )
+
+    query = next(
+        result
+        for result in rank_hybrid_alternatives(materials)
+        if result.part_id == "Q"
+    )
+
+    assert "A" not in {item.part_id for item in query.excluded}
+    assert "A" in {item.part_id for item in query.alternatives}
 
 
 def test_hybrid_results_are_deterministic_bounded_and_json_serializable() -> None:
