@@ -605,6 +605,12 @@ async def test_session_deletion_cascades_runs_events_and_memory(
         )
     finally:
         reopened_procedures.close()
+    with sqlite3.connect(migrated_path) as connection:
+        assert connection.execute(
+            "SELECT latest_version FROM procedure_version_heads "
+            "WHERE tenant_id = ? AND procedure_id = ?",
+            ("tenant-one", "playbook-one"),
+        ).fetchone() == (1,)
 
 
 @pytest.mark.asyncio
@@ -642,6 +648,46 @@ async def test_memory_delete_counts_reflections_and_derived_facts(
         )
     finally:
         reopened_procedures.close()
+    with sqlite3.connect(migrated_path) as connection:
+        assert connection.execute(
+            "SELECT latest_version FROM procedure_version_heads "
+            "WHERE tenant_id = ? AND procedure_id = ?",
+            ("tenant-one", "playbook-one"),
+        ).fetchone() == (1,)
+
+    next_version = procedure_version().model_copy(
+        update={
+            "version": 2,
+            "origin_session_id": "session-one",
+            "proposed_at": NOW + timedelta(minutes=1),
+        }
+    )
+    procedures = SQLiteProcedureRepository(migrated_path)
+    try:
+        procedures.propose(next_version, expected_latest_version=1)
+    finally:
+        procedures.close()
+
+
+@pytest.mark.asyncio
+async def test_tenant_deletion_cascades_procedure_version_heads(
+    migrated_path: Path,
+) -> None:
+    await seed_session(migrated_path)
+    procedures = SQLiteProcedureRepository(migrated_path)
+    procedures.propose(procedure_version(), expected_latest_version=None)
+    procedures.close()
+
+    assert await SQLiteTenantRepository(migrated_path).delete(tenant_id="tenant-one")
+
+    with sqlite3.connect(migrated_path) as connection:
+        assert (
+            connection.execute(
+                "SELECT 1 FROM procedure_version_heads WHERE tenant_id = ?",
+                ("tenant-one",),
+            ).fetchone()
+            is None
+        )
 
 
 @pytest.mark.asyncio

@@ -83,6 +83,7 @@ async def test_empty_and_repeated_migration_are_stable(tmp_path: Path) -> None:
         "quota_run_admissions",
         "quota_sse_leases",
         "procedure_versions",
+        "procedure_version_heads",
     } < set(first_tables)
 
 
@@ -164,6 +165,10 @@ async def test_migration_adopts_an_existing_task1_memory_database(
         ).fetchall() == [("tenant-one", "playbook-one", 1)]
         assert connection.execute(
             "SELECT tenant_id, procedure_id, version FROM active_procedures"
+        ).fetchall() == [("tenant-one", "playbook-one", 1)]
+        assert connection.execute(
+            "SELECT tenant_id, procedure_id, latest_version "
+            "FROM procedure_version_heads"
         ).fetchall() == [("tenant-one", "playbook-one", 1)]
 
 
@@ -383,7 +388,7 @@ async def test_tampered_and_future_migration_history_is_rejected(
         connection.execute(
             "INSERT INTO schema_migrations "
             "(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
-            (8, "future", "1" * 64, "2026-08-27T10:00:00+00:00"),
+            (9, "future", "1" * 64, "2026-08-27T10:00:00+00:00"),
         )
     with pytest.raises(MigrationError, match="newer"):
         await migrate(future)
@@ -409,7 +414,7 @@ async def test_failed_migration_rolls_back_schema_and_ledger(
     path = tmp_path / "rollback.sqlite3"
     await migrate(path)
     broken = schema._Migration(
-        8,
+        9,
         "broken",
         "CREATE TABLE rollback_probe (value TEXT);\n"
         "INSERT INTO table_that_does_not_exist VALUES (1);\n",
@@ -426,7 +431,7 @@ async def test_failed_migration_rolls_back_schema_and_ledger(
         probe = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'rollback_probe'"
         ).fetchone()
-    assert versions == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
+    assert versions == [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,)]
     assert probe is None
 
 
@@ -464,7 +469,7 @@ async def test_api_key_lifecycle_migration_keeps_old_rows_non_authorizing(
     with sqlite3.connect(path) as connection:
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,)]
         assert connection.execute(
             "SELECT scopes, rotated_from_key_id FROM api_key_hashes "
             "WHERE tenant_id = ? AND key_id = ?",
@@ -492,7 +497,7 @@ async def test_local_work_queue_migration_adds_due_indexes_on_reopen(
             row[1] for row in connection.execute('PRAGMA table_info("work_items")')
         )
 
-    assert versions == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
+    assert versions == [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,)]
     assert "work_items_by_due" in indexes
     assert columns == (
         "work_id",

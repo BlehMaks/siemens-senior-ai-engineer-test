@@ -41,6 +41,7 @@ _MIGRATIONS = (
     _bundled_migration(5, "work-item-generation", "005_work_item_generation.sql"),
     _bundled_migration(6, "semantic-facts", "006_semantic_facts.sql"),
     _bundled_migration(7, "procedure-versions", "007_procedure_versions.sql"),
+    _bundled_migration(8, "procedure-version-heads", "008_procedure_version_heads.sql"),
 )
 _CREATE_LEDGER = """
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -103,6 +104,11 @@ _REQUIRED_COLUMNS = {
         "payload",
     ),
     "active_procedures": ("tenant_id", "procedure_id", "version"),
+    "procedure_version_heads": (
+        "tenant_id",
+        "procedure_id",
+        "latest_version",
+    ),
     "audit_entries": ("tenant_id", "entry_id", "action", "occurred_at"),
     "work_items": (
         "work_id",
@@ -158,6 +164,12 @@ _LEGACY_ACTIVE_PROCEDURE_SQL = (
     "procedure_id TEXT NOT NULL, version INTEGER NOT NULL, "
     "PRIMARY KEY (tenant_id, procedure_id) ) WITHOUT ROWID"
 )
+_LEGACY_PROCEDURE_HEAD_SQL = (
+    "CREATE TABLE procedure_version_heads ( tenant_id TEXT NOT NULL, "
+    "procedure_id TEXT NOT NULL, latest_version INTEGER NOT NULL CHECK( "
+    "latest_version BETWEEN 1 AND 10000 ), "
+    "PRIMARY KEY (tenant_id, procedure_id) ) WITHOUT ROWID"
+)
 
 
 async def migrate(path: Path) -> None:
@@ -186,6 +198,8 @@ async def migrate(path: Path) -> None:
                 for migration in _MIGRATIONS[applied:]:
                     if migration.version == 7:
                         await _validate_legacy_procedure_schema(connection)
+                    elif migration.version == 8:
+                        await _validate_legacy_procedure_head_schema(connection)
                     for statement in _statements(migration.sql):
                         await connection.execute(statement)
                     await connection.execute(
@@ -300,6 +314,7 @@ async def _validate_legacy_memory_schema(
         error="database semantic fact schema is incompatible",
     )
     await _validate_legacy_procedure_schema(connection)
+    await _validate_legacy_procedure_head_schema(connection)
 
 
 async def _validate_legacy_procedure_schema(
@@ -312,6 +327,17 @@ async def _validate_legacy_procedure_schema(
         second_table="active_procedures",
         second_sql=_LEGACY_ACTIVE_PROCEDURE_SQL,
         error="database procedure schema is incompatible",
+    )
+
+
+async def _validate_legacy_procedure_head_schema(
+    connection: aiosqlite.Connection,
+) -> None:
+    await _validate_legacy_table(
+        connection,
+        table="procedure_version_heads",
+        expected_sql=_LEGACY_PROCEDURE_HEAD_SQL,
+        error="database procedure version head schema is incompatible",
     )
 
 
@@ -399,7 +425,11 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
         columns = {row[1] for row in rows}
         if not set(required) <= columns:
             raise MigrationError("database physical schema is incompatible")
-    for table in ("procedure_versions", "active_procedures"):
+    for table in (
+        "procedure_versions",
+        "active_procedures",
+        "procedure_version_heads",
+    ):
         rows = await (
             await connection.execute(f'PRAGMA table_info("{table}")')
         ).fetchall()
@@ -478,6 +508,27 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
     ).fetchone()
     if inactive_pointer is not None:
         raise MigrationError("database active procedure schema is incompatible")
+
+    head_foreign_keys = await (
+        await connection.execute('PRAGMA foreign_key_list("procedure_version_heads")')
+    ).fetchall()
+    if not _is_exact_composite_cascade(
+        head_foreign_keys,
+        referenced_table="tenants",
+        columns=(("tenant_id", "tenant_id"),),
+    ):
+        raise MigrationError("database procedure version head schema is incompatible")
+    head_behind_history = await (
+        await connection.execute(
+            "SELECT 1 FROM procedure_versions AS versions LEFT JOIN "
+            "procedure_version_heads AS heads USING (tenant_id, procedure_id) "
+            "GROUP BY versions.tenant_id, versions.procedure_id "
+            "HAVING heads.latest_version IS NULL OR "
+            "heads.latest_version < MAX(versions.version) LIMIT 1"
+        )
+    ).fetchone()
+    if head_behind_history is not None:
+        raise MigrationError("database procedure version head schema is incompatible")
 
     queue_foreign_keys = await (
         await connection.execute('PRAGMA foreign_key_list("work_items")')
