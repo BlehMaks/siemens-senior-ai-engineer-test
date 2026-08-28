@@ -502,11 +502,16 @@ class SQLiteSessionRepository(_PathRepository):
     async def delete_memory(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> int:
         scope = (_scope_id(tenant_id), _scope_id(session_id))
         async with _connection(self._path, write=True) as connection:
-            cursor = await connection.execute(
+            reflections = await connection.execute(
                 "DELETE FROM run_reflections WHERE tenant_id = ? AND session_id = ?",
                 scope,
             )
-            return cursor.rowcount
+            facts = await connection.execute(
+                "DELETE FROM semantic_facts "
+                "WHERE tenant_id = ? AND origin_session_id = ?",
+                scope,
+            )
+            return reflections.rowcount + facts.rowcount
 
     async def delete(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> bool:
         scope = (_scope_id(tenant_id), _scope_id(session_id))

@@ -18,11 +18,26 @@ from .episodic import (
     SQLiteReflectionRepository,
     reflect_run,
 )
+from .semantic import (
+    FactAuthor,
+    FactConflictError,
+    FactReview,
+    FactReviewState,
+    InMemorySemanticFactRepository,
+    SemanticFact,
+    SemanticFactRepository,
+    SQLiteSemanticFactRepository,
+)
 
 __all__ = [
     "CompletionEvidence",
+    "FactAuthor",
+    "FactConflictError",
+    "FactReview",
+    "FactReviewState",
     "FailureCode",
     "InMemoryReflectionRepository",
+    "InMemorySemanticFactRepository",
     "ObservedFailure",
     "RecoveryStep",
     "ReflectionInputError",
@@ -32,6 +47,9 @@ __all__ = [
     "RepositoryClosedError",
     "RunReflection",
     "SQLiteReflectionRepository",
+    "SQLiteSemanticFactRepository",
+    "SemanticFact",
+    "SemanticFactRepository",
     "UnresolvedItem",
     "reflect_run",
 ]

@@ -39,6 +39,7 @@ _MIGRATIONS = (
     _bundled_migration(3, "local-work-queue", "003_local_work_queue.sql"),
     _bundled_migration(4, "quota-accounting", "004_quota_accounting.sql"),
     _bundled_migration(5, "work-item-generation", "005_work_item_generation.sql"),
+    _bundled_migration(6, "semantic-facts", "006_semantic_facts.sql"),
 )
 _CREATE_LEDGER = """
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -80,6 +81,17 @@ _REQUIRED_COLUMNS = {
     ),
     "run_events": ("tenant_id", "run_id", "sequence", "occurred_at", "payload"),
     "run_reflections": ("tenant_id", "session_id", "run_id", "payload"),
+    "semantic_facts": (
+        "tenant_id",
+        "fact_id",
+        "origin_session_id",
+        "origin_run_id",
+        "source_id",
+        "conflict_key",
+        "state",
+        "expires_at",
+        "payload",
+    ),
     "audit_entries": ("tenant_id", "entry_id", "action", "occurred_at"),
     "work_items": (
         "work_id",
@@ -114,6 +126,15 @@ _LEGACY_REFLECTION_SQL = (
     "payload TEXT NOT NULL CHECK(length(payload) <= 65536), "
     "PRIMARY KEY (tenant_id, session_id, run_id) ) WITHOUT ROWID"
 )
+_LEGACY_SEMANTIC_SQL = (
+    "CREATE TABLE semantic_facts ( tenant_id TEXT NOT NULL, "
+    "fact_id TEXT NOT NULL, origin_session_id TEXT NOT NULL, "
+    "origin_run_id TEXT NOT NULL, source_id TEXT NOT NULL, "
+    "conflict_key TEXT NOT NULL, "
+    "state TEXT NOT NULL, expires_at TEXT NOT NULL, "
+    "payload TEXT NOT NULL CHECK(length(payload) <= 16384), "
+    "PRIMARY KEY (tenant_id, fact_id) ) WITHOUT ROWID"
+)
 
 
 async def migrate(path: Path) -> None:
@@ -137,7 +158,7 @@ async def migrate(path: Path) -> None:
                 )
                 _validate_ledger(rows)
                 if not rows:
-                    await _validate_legacy_reflection_schema(connection)
+                    await _validate_legacy_memory_schema(connection)
                 applied = len(rows)
                 for migration in _MIGRATIONS[applied:]:
                     for statement in _statements(migration.sql):
@@ -243,6 +264,48 @@ async def _validate_legacy_reflection_schema(
         raise MigrationError("database reflection schema is incompatible")
 
 
+async def _validate_legacy_memory_schema(
+    connection: aiosqlite.Connection,
+) -> None:
+    await _validate_legacy_reflection_schema(connection)
+    await _validate_legacy_table(
+        connection,
+        table="semantic_facts",
+        expected_sql=_LEGACY_SEMANTIC_SQL,
+        error="database semantic fact schema is incompatible",
+    )
+
+
+async def _validate_legacy_table(
+    connection: aiosqlite.Connection,
+    *,
+    table: str,
+    expected_sql: str,
+    error: str,
+) -> None:
+    existing = await (
+        await connection.execute(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type = 'table' AND name = ? COLLATE NOCASE",
+            (table,),
+        )
+    ).fetchone()
+    if existing is None:
+        return
+    name, sql = existing
+    if name != table or type(sql) is not str or " ".join(sql.split()) != expected_sql:
+        raise MigrationError(error)
+    extra_objects = await (
+        await connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE tbl_name = ? COLLATE NOCASE "
+            "AND type IN ('index', 'trigger') AND sql IS NOT NULL",
+            (table,),
+        )
+    ).fetchall()
+    if extra_objects:
+        raise MigrationError(error)
+
+
 async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
     """Ensure the checksum ledger still describes the database it guards."""
 
@@ -275,6 +338,20 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
         for row in reflection_foreign_keys
     ):
         raise MigrationError("database reflection schema is incompatible")
+
+    semantic_foreign_keys = await (
+        await connection.execute('PRAGMA foreign_key_list("semantic_facts")')
+    ).fetchall()
+    semantic_session_reference = {
+        (row[3], row[4])
+        for row in semantic_foreign_keys
+        if row[2] == "sessions" and row[6].upper() == "CASCADE"
+    }
+    if semantic_session_reference != {
+        ("tenant_id", "tenant_id"),
+        ("origin_session_id", "session_id"),
+    }:
+        raise MigrationError("database semantic fact schema is incompatible")
 
     queue_foreign_keys = await (
         await connection.execute('PRAGMA foreign_key_list("work_items")')

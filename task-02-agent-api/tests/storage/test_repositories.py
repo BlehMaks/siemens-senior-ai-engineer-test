@@ -36,13 +36,36 @@ from agent_api.storage import (
 from search_agent.contracts import Citation, EventType, ScopedAnswer, TerminalState
 from search_agent.memory import (
     CompletionEvidence,
+    FactAuthor,
     ReflectionStorageError,
     ReflectionUsage,
     RunReflection,
+    SemanticFact,
+    SQLiteReflectionRepository,
+    SQLiteSemanticFactRepository,
     UnresolvedItem,
 )
 
 NOW = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
+
+
+def semantic_fact(
+    *, tenant_id: str = "tenant-one", fact_id: str = "fact-one"
+) -> SemanticFact:
+    return SemanticFact(
+        tenant_id=tenant_id,
+        fact_id=fact_id,
+        origin_session_id="session-one",
+        origin_run_id="run-one",
+        claim="Siemens reports scope three emissions.",
+        conflict_key="siemens-scope-three",
+        source_id="source-one",
+        evidence_id="ev-report",
+        source_url="https://www.siemens.com/reports/sustainability-2025",
+        proposed_at=NOW,
+        expires_at=NOW + timedelta(days=30),
+        author=FactAuthor.HUMAN,
+    )
 
 
 def submission(
@@ -528,6 +551,9 @@ async def test_session_deletion_cascades_runs_events_and_memory(
     memory = reflection_repository(migrated_path)
     memory.put(reflection(tenant_id="tenant-one", run_id="run-one"))
     memory.close()
+    facts = SQLiteSemanticFactRepository(migrated_path)
+    facts.propose(semantic_fact())
+    facts.close()
 
     assert await SQLiteSessionRepository(migrated_path).delete(
         tenant_id="tenant-one", session_id="session-one"
@@ -542,6 +568,35 @@ async def test_session_deletion_cascades_runs_events_and_memory(
         )
     finally:
         reopened.close()
+    reopened_facts = SQLiteSemanticFactRepository(migrated_path)
+    try:
+        assert reopened_facts.get(tenant_id="tenant-one", fact_id="fact-one") is None
+    finally:
+        reopened_facts.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_delete_counts_reflections_and_derived_facts(
+    migrated_path: Path,
+) -> None:
+    await seed_session(migrated_path)
+    reflections = SQLiteReflectionRepository(migrated_path)
+    reflections.put(reflection(tenant_id="tenant-one", run_id="run-one"))
+    reflections.close()
+    facts = SQLiteSemanticFactRepository(migrated_path)
+    facts.propose(semantic_fact())
+    facts.close()
+
+    deleted = await SQLiteSessionRepository(migrated_path).delete_memory(
+        tenant_id="tenant-one", session_id="session-one"
+    )
+
+    assert deleted == 2
+    reopened_facts = SQLiteSemanticFactRepository(migrated_path)
+    try:
+        assert reopened_facts.get(tenant_id="tenant-one", fact_id="fact-one") is None
+    finally:
+        reopened_facts.close()
 
 
 @pytest.mark.asyncio
