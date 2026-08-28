@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -734,11 +736,12 @@ class SQLiteProcedureRepository:
     ) -> ProcedureVersion | None:
         self._require_open()
         scope = _scope(tenant_id, procedure_id)
-        self._validate_all_metadata()
-        self._validate_scope_metadata(*scope)
-        self._latest_version(scope)
         key = (*scope, _version(version))
-        row = self._fetch_row(key)
+        with self._read_snapshot():
+            self._validate_all_metadata()
+            self._validate_scope_metadata(*scope)
+            self._latest_version(scope)
+            row = self._fetch_row(key)
         return None if row is None else _decode_row(row)
 
     def get_active(
@@ -746,31 +749,37 @@ class SQLiteProcedureRepository:
     ) -> ProcedureVersion | None:
         self._require_open()
         scope = _scope(tenant_id, procedure_id)
-        self._validate_all_metadata()
-        self._validate_scope_metadata(*scope)
-        self._latest_version(scope)
-        try:
-            pointer = self._connection.execute(
-                "SELECT version FROM active_procedures "
-                "WHERE tenant_id = ? AND procedure_id = ?",
-                scope,
-            ).fetchone()
-        except sqlite3.Error as exc:
-            raise ReflectionStorageError("SQLite active procedure read failed") from exc
-        if pointer is None:
-            return None
-        if (
-            type(pointer) is not tuple
-            or len(pointer) != 1
-            or type(pointer[0]) is not int
-        ):
-            raise ReflectionStorageError("active procedure pointer is invalid")
-        row = self._fetch_row((*scope, pointer[0]))
-        if row is None:
-            raise ReflectionStorageError("active procedure pointer is dangling")
-        selected = _decode_row(row)
-        if selected.state is not ProcedureReviewState.APPROVED:
-            raise ReflectionStorageError("active procedure is not approved")
+        with self._read_snapshot():
+            self._validate_all_metadata()
+            self._validate_scope_metadata(*scope)
+            self._latest_version(scope)
+            try:
+                pointer = self._connection.execute(
+                    "SELECT version FROM active_procedures "
+                    "WHERE tenant_id = ? AND procedure_id = ?",
+                    scope,
+                ).fetchone()
+            except sqlite3.Error as exc:
+                raise ReflectionStorageError(
+                    "SQLite active procedure read failed"
+                ) from exc
+            if pointer is None:
+                selected = None
+            else:
+                if (
+                    type(pointer) is not tuple
+                    or len(pointer) != 1
+                    or type(pointer[0]) is not int
+                ):
+                    raise ReflectionStorageError("active procedure pointer is invalid")
+                row = self._fetch_row((*scope, pointer[0]))
+                if row is None:
+                    raise ReflectionStorageError(
+                        "active procedure pointer is dangling"
+                    )
+                selected = _decode_row(row)
+                if selected.state is not ProcedureReviewState.APPROVED:
+                    raise ReflectionStorageError("active procedure is not approved")
         return selected
 
     def list_versions(
@@ -778,53 +787,64 @@ class SQLiteProcedureRepository:
     ) -> tuple[ProcedureVersion, ...]:
         self._require_open()
         scope = _scope(tenant_id, procedure_id)
-        self._validate_all_metadata()
-        self._validate_scope_metadata(*scope)
-        self._latest_version(scope)
-        try:
-            rows = self._connection.execute(
-                "SELECT tenant_id, procedure_id, version, origin_session_id, "
-                "origin_run_id, state, payload FROM procedure_versions "
-                "WHERE tenant_id = ? AND procedure_id = ? "
-                "ORDER BY version DESC LIMIT ?",
-                (*scope, _limit(limit)),
-            ).fetchall()
-        except sqlite3.Error as exc:
-            raise ReflectionStorageError("SQLite procedure list failed") from exc
-        return tuple(_decode_row(row) for row in rows)
+        with self._read_snapshot():
+            self._validate_all_metadata()
+            self._validate_scope_metadata(*scope)
+            self._latest_version(scope)
+            try:
+                rows = self._connection.execute(
+                    "SELECT tenant_id, procedure_id, version, origin_session_id, "
+                    "origin_run_id, state, payload FROM procedure_versions "
+                    "WHERE tenant_id = ? AND procedure_id = ? "
+                    "ORDER BY version DESC LIMIT ?",
+                    (*scope, _limit(limit)),
+                ).fetchall()
+            except sqlite3.Error as exc:
+                raise ReflectionStorageError("SQLite procedure list failed") from exc
+            values = tuple(_decode_row(row) for row in rows)
+        return values
 
     def list_active(
         self, *, tenant_id: OpaqueId, limit: int = 20
     ) -> tuple[ProcedureVersion, ...]:
         self._require_open()
         checked_tenant = _scope_id(tenant_id)
-        self._validate_all_metadata()
-        self._validate_scope_metadata(checked_tenant, None)
-        try:
-            pointers = self._connection.execute(
-                "SELECT tenant_id, procedure_id, version FROM active_procedures "
-                "WHERE tenant_id = ? ORDER BY procedure_id LIMIT ?",
-                (checked_tenant, _active_limit(limit)),
-            ).fetchall()
-        except sqlite3.Error as exc:
-            raise ReflectionStorageError("SQLite active procedure list failed") from exc
-        values_list: list[ProcedureVersion] = []
-        for pointer in pointers:
-            if (
-                type(pointer) is not tuple
-                or len(pointer) != 3
-                or any(type(value) is not str for value in pointer[:2])
-                or type(pointer[2]) is not int
+        with self._read_snapshot():
+            self._validate_all_metadata()
+            self._validate_scope_metadata(checked_tenant, None)
+            try:
+                pointers = self._connection.execute(
+                    "SELECT tenant_id, procedure_id, version FROM active_procedures "
+                    "WHERE tenant_id = ? ORDER BY procedure_id LIMIT ?",
+                    (checked_tenant, _active_limit(limit)),
+                ).fetchall()
+            except sqlite3.Error as exc:
+                raise ReflectionStorageError(
+                    "SQLite active procedure list failed"
+                ) from exc
+            values_list: list[ProcedureVersion] = []
+            for pointer in pointers:
+                if (
+                    type(pointer) is not tuple
+                    or len(pointer) != 3
+                    or any(type(value) is not str for value in pointer[:2])
+                    or type(pointer[2]) is not int
+                ):
+                    raise ReflectionStorageError(
+                        "active procedure pointer is invalid"
+                    )
+                self._latest_version((pointer[0], pointer[1]))
+                row = self._fetch_row(pointer)
+                if row is None:
+                    raise ReflectionStorageError(
+                        "active procedure pointer is dangling"
+                    )
+                values_list.append(_decode_row(row))
+            values = tuple(values_list)
+            if any(
+                item.state is not ProcedureReviewState.APPROVED for item in values
             ):
-                raise ReflectionStorageError("active procedure pointer is invalid")
-            self._latest_version((pointer[0], pointer[1]))
-            row = self._fetch_row(pointer)
-            if row is None:
-                raise ReflectionStorageError("active procedure pointer is dangling")
-            values_list.append(_decode_row(row))
-        values = tuple(values_list)
-        if any(item.state is not ProcedureReviewState.APPROVED for item in values):
-            raise ReflectionStorageError("active procedure is not approved")
+                raise ReflectionStorageError("active procedure is not approved")
         return values
 
     def delete_session(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> int:
@@ -1079,6 +1099,21 @@ class SQLiteProcedureRepository:
     def _rollback(self) -> None:
         if self._connection.in_transaction:
             self._connection.rollback()
+
+    @contextmanager
+    def _read_snapshot(self) -> Iterator[None]:
+        """Keep validation and result selection on one SQLite snapshot."""
+
+        try:
+            self._connection.execute("BEGIN")
+            yield
+            self._connection.commit()
+        except sqlite3.Error as exc:
+            self._rollback()
+            raise ReflectionStorageError("SQLite procedure read failed") from exc
+        except BaseException:
+            self._rollback()
+            raise
 
     def _require_open(self) -> None:
         if self._closed:

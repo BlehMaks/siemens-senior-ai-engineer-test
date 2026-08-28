@@ -688,6 +688,88 @@ def test_sqlite_reads_reject_hidden_identity_corruption(tmp_path: Path) -> None:
         repository.list_versions(tenant_id="tenant-one", procedure_id="playbook-one")
 
 
+@pytest.mark.parametrize(
+    "operation",
+    ("get_version", "list_versions", "get_active", "list_active"),
+)
+def test_sqlite_reads_keep_validation_and_selection_on_one_snapshot(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    path = tmp_path / f"snapshot-{operation}.sqlite3"
+    with SQLiteProcedureRepository(path) as repository:
+        approved = approve(repository, procedure())
+        repository.activate(
+            tenant_id="tenant-one",
+            procedure_id="playbook-one",
+            version=1,
+            expected_active_version=None,
+        )
+        assert repository._connection.execute(
+            "PRAGMA journal_mode = WAL"
+        ).fetchone() == ("wal",)
+        moved = False
+        trigger = (
+            "FROM active_procedures WHERE"
+            if operation in {"get_active", "list_active"}
+            else "FROM procedure_versions WHERE"
+        )
+
+        def move_after_validation(statement: str) -> None:
+            nonlocal moved
+            if moved or trigger not in " ".join(statement.split()):
+                return
+            moved = True
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    "UPDATE procedure_versions SET tenant_id = 'tenant-two', "
+                    "procedure_id = 'playbook-two', "
+                    "payload = json_set(json_set(payload, '$.tenant_id', NULL), "
+                    "'$.procedure_id', NULL) WHERE tenant_id = 'tenant-one' "
+                    "AND procedure_id = 'playbook-one'"
+                )
+                connection.execute(
+                    "UPDATE procedure_version_heads SET tenant_id = 'tenant-two', "
+                    "procedure_id = 'playbook-two' WHERE tenant_id = 'tenant-one' "
+                    "AND procedure_id = 'playbook-one'"
+                )
+                connection.execute(
+                    "UPDATE active_procedures SET tenant_id = 'tenant-two', "
+                    "procedure_id = 'playbook-two' WHERE tenant_id = 'tenant-one' "
+                    "AND procedure_id = 'playbook-one'"
+                )
+
+        repository._connection.set_trace_callback(move_after_validation)
+        try:
+            if operation == "get_version":
+                actual: object = repository.get_version(
+                    tenant_id="tenant-one",
+                    procedure_id="playbook-one",
+                    version=1,
+                )
+                expected: object = approved
+            elif operation == "list_versions":
+                actual = repository.list_versions(
+                    tenant_id="tenant-one",
+                    procedure_id="playbook-one",
+                )
+                expected = (approved,)
+            elif operation == "get_active":
+                actual = repository.get_active(
+                    tenant_id="tenant-one",
+                    procedure_id="playbook-one",
+                )
+                expected = approved
+            else:
+                actual = repository.list_active(tenant_id="tenant-one")
+                expected = (approved,)
+        finally:
+            repository._connection.set_trace_callback(None)
+
+        assert moved
+        assert actual == expected
+
+
 def test_sqlite_get_rejects_hidden_null_scope_corruption(tmp_path: Path) -> None:
     path = tmp_path / "hidden-null-scope.sqlite3"
     with SQLiteProcedureRepository(path) as repository:
