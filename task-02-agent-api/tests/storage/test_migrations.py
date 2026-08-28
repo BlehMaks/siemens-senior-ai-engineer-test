@@ -276,6 +276,73 @@ async def test_current_schema_rejects_split_active_pointer_foreign_keys(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("drift", ("missing_primary_key", "update_cascade"))
+async def test_current_schema_rejects_active_pointer_constraint_drift(
+    tmp_path: Path, drift: str
+) -> None:
+    path = tmp_path / f"active-pointer-{drift}.sqlite3"
+    await migrate(path)
+    primary_key = (
+        ""
+        if drift == "missing_primary_key"
+        else ", PRIMARY KEY (tenant_id, procedure_id)"
+    )
+    update_action = " ON UPDATE CASCADE" if drift == "update_cascade" else ""
+    table_suffix = "" if drift == "missing_primary_key" else " WITHOUT ROWID"
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("DROP TABLE active_procedures")
+        connection.execute(
+            "CREATE TABLE active_procedures ("
+            "tenant_id TEXT NOT NULL, procedure_id TEXT NOT NULL, "
+            "version INTEGER NOT NULL"
+            f"{primary_key}, FOREIGN KEY (tenant_id, procedure_id, version) "
+            "REFERENCES procedure_versions(tenant_id, procedure_id, version)"
+            f"{update_action} ON DELETE CASCADE){table_suffix}"
+        )
+
+    with pytest.raises(MigrationError, match="active procedure schema is incompatible"):
+        await migrate(path)
+
+
+@pytest.mark.asyncio
+async def test_migration_rejects_active_pointer_to_unreviewed_payload(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "active-proposed-payload.sqlite3"
+    repository = SQLiteProcedureRepository(path)
+    repository.propose(
+        ProcedureVersion(
+            tenant_id="tenant-one",
+            procedure_id="playbook-one",
+            version=1,
+            origin_session_id="session-one",
+            origin_run_id="run-one",
+            title="Review official evidence",
+            steps=("Prefer the issuer's official report.",),
+            proposed_at=datetime(2026, 8, 28, tzinfo=UTC),
+            author=ProcedureAuthor.HUMAN,
+        ),
+        expected_latest_version=None,
+    )
+    repository.close()
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE procedure_versions SET state = 'approved' "
+            "WHERE tenant_id = ? AND procedure_id = ?",
+            ("tenant-one", "playbook-one"),
+        )
+        connection.execute(
+            "INSERT INTO active_procedures "
+            "(tenant_id, procedure_id, version) VALUES (?, ?, ?)",
+            ("tenant-one", "playbook-one", 1),
+        )
+
+    with pytest.raises(MigrationError, match="active procedure schema is incompatible"):
+        await migrate(path)
+
+
+@pytest.mark.asyncio
 async def test_migration_rejects_an_incompatible_legacy_reflection_table(
     tmp_path: Path,
 ) -> None:

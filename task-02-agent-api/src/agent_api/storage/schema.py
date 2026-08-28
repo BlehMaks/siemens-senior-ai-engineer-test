@@ -137,6 +137,27 @@ _REQUIRED_COLUMNS = {
     ),
     "quota_sse_leases": ("tenant_id", "key_id", "permit_id", "expires_at"),
 }
+_PROCEDURE_LAYOUTS = {
+    "procedure_versions": (
+        ("tenant_id", "TEXT", 1, 1),
+        ("procedure_id", "TEXT", 1, 2),
+        ("version", "INTEGER", 1, 3),
+        ("origin_session_id", "TEXT", 1, 0),
+        ("origin_run_id", "TEXT", 1, 0),
+        ("state", "TEXT", 1, 0),
+        ("payload", "TEXT", 1, 0),
+    ),
+    "active_procedures": (
+        ("tenant_id", "TEXT", 1, 1),
+        ("procedure_id", "TEXT", 1, 2),
+        ("version", "INTEGER", 1, 0),
+    ),
+    "procedure_version_heads": (
+        ("tenant_id", "TEXT", 1, 1),
+        ("procedure_id", "TEXT", 1, 2),
+        ("latest_version", "INTEGER", 1, 0),
+    ),
+}
 _LEGACY_REFLECTION_SQL = (
     "CREATE TABLE run_reflections ( tenant_id TEXT NOT NULL, "
     "session_id TEXT NOT NULL, run_id TEXT NOT NULL, "
@@ -435,6 +456,11 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
         ).fetchall()
         if tuple(row[1] for row in rows) != _REQUIRED_COLUMNS[table]:
             raise MigrationError("database procedure schema is incompatible")
+        if (
+            table == "active_procedures"
+            and _table_layout(rows) != (_PROCEDURE_LAYOUTS[table])
+        ):
+            raise MigrationError("database active procedure schema is incompatible")
 
     reflection_foreign_keys = await (
         await connection.execute('PRAGMA foreign_key_list("run_reflections")')
@@ -502,12 +528,32 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
         await connection.execute(
             "SELECT 1 FROM active_procedures AS active "
             "JOIN procedure_versions AS versions USING "
-            "(tenant_id, procedure_id, version) WHERE versions.state <> 'approved' "
-            "LIMIT 1"
+            "(tenant_id, procedure_id, version) WHERE CASE "
+            "WHEN json_valid(versions.payload) THEN "
+            "versions.state IS NOT 'approved' OR "
+            "json_extract(versions.payload, '$.tenant_id') "
+            "IS NOT versions.tenant_id OR "
+            "json_extract(versions.payload, '$.procedure_id') "
+            "IS NOT versions.procedure_id OR "
+            "json_extract(versions.payload, '$.version') "
+            "IS NOT versions.version OR "
+            "json_extract(versions.payload, '$.state') IS NOT 'approved' "
+            "ELSE 1 END LIMIT 1"
         )
     ).fetchone()
     if inactive_pointer is not None:
         raise MigrationError("database active procedure schema is incompatible")
+    for table in ("procedure_versions", "procedure_version_heads"):
+        rows = await (
+            await connection.execute(f'PRAGMA table_info("{table}")')
+        ).fetchall()
+        if _table_layout(rows) != _PROCEDURE_LAYOUTS[table]:
+            detail = (
+                "procedure"
+                if table == "procedure_versions"
+                else "procedure version head"
+            )
+            raise MigrationError(f"database {detail} schema is incompatible")
 
     head_foreign_keys = await (
         await connection.execute('PRAGMA foreign_key_list("procedure_version_heads")')
@@ -580,6 +626,8 @@ def _is_exact_composite_cascade(
             or type(row[3]) is not str
             or type(row[4]) is not str
             or type(row[6]) is not str
+            or type(row[5]) is not str
+            or row[5].upper() != "NO ACTION"
             or row[6].upper() != "CASCADE"
         ):
             return False
@@ -591,6 +639,10 @@ def _is_exact_composite_cascade(
     return tuple((source, target) for _, source, target in group) == columns and tuple(
         sequence for sequence, _, _ in group
     ) == tuple(range(len(columns)))
+
+
+def _table_layout(rows: Iterable[Sequence[object]]) -> tuple[tuple[object, ...], ...]:
+    return tuple((row[1], row[2], row[3], row[5]) for row in rows)
 
 
 __all__ = ["MigrationError", "migrate", "validate_current_schema"]
