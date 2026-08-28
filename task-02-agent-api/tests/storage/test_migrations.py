@@ -9,7 +9,11 @@ import pytest
 from agent_api.storage import MigrationError, migrate, schema
 from search_agent.memory import (
     FactAuthor,
+    ProcedureAuthor,
+    ProcedureReviewState,
+    ProcedureVersion,
     SemanticFact,
+    SQLiteProcedureRepository,
     SQLiteReflectionRepository,
     SQLiteSemanticFactRepository,
 )
@@ -47,6 +51,7 @@ async def test_empty_and_repeated_migration_are_stable(tmp_path: Path) -> None:
     assert first_ledger == second_ledger
     assert {
         "api_key_hashes",
+        "active_procedures",
         "audit_entries",
         "idempotency_records",
         "run_events",
@@ -60,6 +65,7 @@ async def test_empty_and_repeated_migration_are_stable(tmp_path: Path) -> None:
         "quota_rate_buckets",
         "quota_run_admissions",
         "quota_sse_leases",
+        "procedure_versions",
     } < set(first_tables)
 
 
@@ -87,6 +93,36 @@ async def test_migration_adopts_an_existing_task1_memory_database(
         )
     )
     semantic.close()
+    procedures = SQLiteProcedureRepository(path)
+    procedures.propose(
+        ProcedureVersion(
+            tenant_id="tenant-one",
+            procedure_id="playbook-one",
+            version=1,
+            origin_session_id="session-one",
+            origin_run_id="run-one",
+            title="Review sustainability evidence",
+            steps=("Prefer the official issuer report.",),
+            proposed_at=datetime(2026, 8, 28, tzinfo=UTC),
+            author=ProcedureAuthor.HUMAN,
+        ),
+        expected_latest_version=None,
+    )
+    procedures.review(
+        tenant_id="tenant-one",
+        procedure_id="playbook-one",
+        version=1,
+        state=ProcedureReviewState.APPROVED,
+        reviewer_id="reviewer-one",
+        reviewed_at=datetime(2026, 8, 28, 1, tzinfo=UTC),
+    )
+    procedures.activate(
+        tenant_id="tenant-one",
+        procedure_id="playbook-one",
+        version=1,
+        expected_active_version=None,
+    )
+    procedures.close()
     with sqlite3.connect(path) as connection:
         connection.execute(
             "INSERT INTO run_reflections "
@@ -106,6 +142,31 @@ async def test_migration_adopts_an_existing_task1_memory_database(
         assert connection.execute(
             "SELECT tenant_id, fact_id FROM semantic_facts"
         ).fetchall() == [("tenant-one", "fact-one")]
+        assert connection.execute(
+            "SELECT tenant_id, procedure_id, version FROM procedure_versions"
+        ).fetchall() == [("tenant-one", "playbook-one", 1)]
+        assert connection.execute(
+            "SELECT tenant_id, procedure_id, version FROM active_procedures"
+        ).fetchall() == [("tenant-one", "playbook-one", 1)]
+
+
+@pytest.mark.asyncio
+async def test_migration_rejects_an_incomplete_legacy_procedure_schema(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "incomplete-procedures.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE procedure_versions ("
+            "tenant_id TEXT NOT NULL, procedure_id TEXT NOT NULL, "
+            "version INTEGER NOT NULL, origin_session_id TEXT NOT NULL, "
+            "origin_run_id TEXT NOT NULL, state TEXT NOT NULL, "
+            "payload TEXT NOT NULL CHECK(length(payload) <= 16384), "
+            "PRIMARY KEY (tenant_id, procedure_id, version)) WITHOUT ROWID"
+        )
+
+    with pytest.raises(MigrationError, match="procedure schema is incompatible"):
+        await migrate(path)
 
 
 @pytest.mark.asyncio
@@ -221,7 +282,7 @@ async def test_tampered_and_future_migration_history_is_rejected(
         connection.execute(
             "INSERT INTO schema_migrations "
             "(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
-            (7, "future", "1" * 64, "2026-08-27T10:00:00+00:00"),
+            (8, "future", "1" * 64, "2026-08-27T10:00:00+00:00"),
         )
     with pytest.raises(MigrationError, match="newer"):
         await migrate(future)
@@ -247,7 +308,7 @@ async def test_failed_migration_rolls_back_schema_and_ledger(
     path = tmp_path / "rollback.sqlite3"
     await migrate(path)
     broken = schema._Migration(
-        7,
+        8,
         "broken",
         "CREATE TABLE rollback_probe (value TEXT);\n"
         "INSERT INTO table_that_does_not_exist VALUES (1);\n",
@@ -264,7 +325,7 @@ async def test_failed_migration_rolls_back_schema_and_ledger(
         probe = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'rollback_probe'"
         ).fetchone()
-    assert versions == [(1,), (2,), (3,), (4,), (5,), (6,)]
+    assert versions == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
     assert probe is None
 
 
@@ -302,7 +363,7 @@ async def test_api_key_lifecycle_migration_keeps_old_rows_non_authorizing(
     with sqlite3.connect(path) as connection:
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
         assert connection.execute(
             "SELECT scopes, rotated_from_key_id FROM api_key_hashes "
             "WHERE tenant_id = ? AND key_id = ?",
@@ -330,7 +391,7 @@ async def test_local_work_queue_migration_adds_due_indexes_on_reopen(
             row[1] for row in connection.execute('PRAGMA table_info("work_items")')
         )
 
-    assert versions == [(1,), (2,), (3,), (4,), (5,), (6,)]
+    assert versions == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
     assert "work_items_by_due" in indexes
     assert columns == (
         "work_id",

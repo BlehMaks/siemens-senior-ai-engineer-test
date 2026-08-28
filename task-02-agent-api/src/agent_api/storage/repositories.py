@@ -511,7 +511,12 @@ class SQLiteSessionRepository(_PathRepository):
                 "WHERE tenant_id = ? AND origin_session_id = ?",
                 scope,
             )
-            return reflections.rowcount + facts.rowcount
+            procedures = await connection.execute(
+                "DELETE FROM procedure_versions "
+                "WHERE tenant_id = ? AND origin_session_id = ?",
+                scope,
+            )
+            return reflections.rowcount + facts.rowcount + procedures.rowcount
 
     async def delete(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> bool:
         scope = (_scope_id(tenant_id), _scope_id(session_id))

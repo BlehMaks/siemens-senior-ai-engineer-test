@@ -40,6 +40,7 @@ _MIGRATIONS = (
     _bundled_migration(4, "quota-accounting", "004_quota_accounting.sql"),
     _bundled_migration(5, "work-item-generation", "005_work_item_generation.sql"),
     _bundled_migration(6, "semantic-facts", "006_semantic_facts.sql"),
+    _bundled_migration(7, "procedure-versions", "007_procedure_versions.sql"),
 )
 _CREATE_LEDGER = """
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -92,6 +93,16 @@ _REQUIRED_COLUMNS = {
         "expires_at",
         "payload",
     ),
+    "procedure_versions": (
+        "tenant_id",
+        "procedure_id",
+        "version",
+        "origin_session_id",
+        "origin_run_id",
+        "state",
+        "payload",
+    ),
+    "active_procedures": ("tenant_id", "procedure_id", "version"),
     "audit_entries": ("tenant_id", "entry_id", "action", "occurred_at"),
     "work_items": (
         "work_id",
@@ -134,6 +145,18 @@ _LEGACY_SEMANTIC_SQL = (
     "state TEXT NOT NULL, expires_at TEXT NOT NULL, "
     "payload TEXT NOT NULL CHECK(length(payload) <= 16384), "
     "PRIMARY KEY (tenant_id, fact_id) ) WITHOUT ROWID"
+)
+_LEGACY_PROCEDURE_SQL = (
+    "CREATE TABLE procedure_versions ( tenant_id TEXT NOT NULL, "
+    "procedure_id TEXT NOT NULL, version INTEGER NOT NULL, "
+    "origin_session_id TEXT NOT NULL, origin_run_id TEXT NOT NULL, "
+    "state TEXT NOT NULL, payload TEXT NOT NULL CHECK(length(payload) <= 16384), "
+    "PRIMARY KEY (tenant_id, procedure_id, version) ) WITHOUT ROWID"
+)
+_LEGACY_ACTIVE_PROCEDURE_SQL = (
+    "CREATE TABLE active_procedures ( tenant_id TEXT NOT NULL, "
+    "procedure_id TEXT NOT NULL, version INTEGER NOT NULL, "
+    "PRIMARY KEY (tenant_id, procedure_id) ) WITHOUT ROWID"
 )
 
 
@@ -274,6 +297,48 @@ async def _validate_legacy_memory_schema(
         expected_sql=_LEGACY_SEMANTIC_SQL,
         error="database semantic fact schema is incompatible",
     )
+    await _validate_legacy_table_pair(
+        connection,
+        first_table="procedure_versions",
+        first_sql=_LEGACY_PROCEDURE_SQL,
+        second_table="active_procedures",
+        second_sql=_LEGACY_ACTIVE_PROCEDURE_SQL,
+        error="database procedure schema is incompatible",
+    )
+
+
+async def _validate_legacy_table_pair(
+    connection: aiosqlite.Connection,
+    *,
+    first_table: str,
+    first_sql: str,
+    second_table: str,
+    second_sql: str,
+    error: str,
+) -> None:
+    rows = await (
+        await connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name COLLATE NOCASE IN (?, ?)",
+            (first_table, second_table),
+        )
+    ).fetchall()
+    if not rows:
+        return
+    if {row[0] for row in rows} != {first_table, second_table}:
+        raise MigrationError(error)
+    await _validate_legacy_table(
+        connection,
+        table=first_table,
+        expected_sql=first_sql,
+        error=error,
+    )
+    await _validate_legacy_table(
+        connection,
+        table=second_table,
+        expected_sql=second_sql,
+        error=error,
+    )
 
 
 async def _validate_legacy_table(
@@ -352,6 +417,35 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
         ("origin_session_id", "session_id"),
     }:
         raise MigrationError("database semantic fact schema is incompatible")
+
+    procedure_foreign_keys = await (
+        await connection.execute('PRAGMA foreign_key_list("procedure_versions")')
+    ).fetchall()
+    procedure_session_reference = {
+        (row[3], row[4])
+        for row in procedure_foreign_keys
+        if row[2] == "sessions" and row[6].upper() == "CASCADE"
+    }
+    if procedure_session_reference != {
+        ("tenant_id", "tenant_id"),
+        ("origin_session_id", "session_id"),
+    }:
+        raise MigrationError("database procedure schema is incompatible")
+
+    active_foreign_keys = await (
+        await connection.execute('PRAGMA foreign_key_list("active_procedures")')
+    ).fetchall()
+    active_version_reference = {
+        (row[3], row[4])
+        for row in active_foreign_keys
+        if row[2] == "procedure_versions" and row[6].upper() == "CASCADE"
+    }
+    if active_version_reference != {
+        ("tenant_id", "tenant_id"),
+        ("procedure_id", "procedure_id"),
+        ("version", "version"),
+    }:
+        raise MigrationError("database active procedure schema is incompatible")
 
     queue_foreign_keys = await (
         await connection.execute('PRAGMA foreign_key_list("work_items")')

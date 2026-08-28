@@ -37,10 +37,13 @@ from search_agent.contracts import Citation, EventType, ScopedAnswer, TerminalSt
 from search_agent.memory import (
     CompletionEvidence,
     FactAuthor,
+    ProcedureAuthor,
+    ProcedureVersion,
     ReflectionStorageError,
     ReflectionUsage,
     RunReflection,
     SemanticFact,
+    SQLiteProcedureRepository,
     SQLiteReflectionRepository,
     SQLiteSemanticFactRepository,
     UnresolvedItem,
@@ -65,6 +68,22 @@ def semantic_fact(
         proposed_at=NOW,
         expires_at=NOW + timedelta(days=30),
         author=FactAuthor.HUMAN,
+    )
+
+
+def procedure_version(
+    *, tenant_id: str = "tenant-one", procedure_id: str = "playbook-one"
+) -> ProcedureVersion:
+    return ProcedureVersion(
+        tenant_id=tenant_id,
+        procedure_id=procedure_id,
+        version=1,
+        origin_session_id="session-one",
+        origin_run_id="run-one",
+        title="Review sustainability evidence",
+        steps=("Prefer the official issuer report.",),
+        proposed_at=NOW,
+        author=ProcedureAuthor.HUMAN,
     )
 
 
@@ -554,6 +573,9 @@ async def test_session_deletion_cascades_runs_events_and_memory(
     facts = SQLiteSemanticFactRepository(migrated_path)
     facts.propose(semantic_fact())
     facts.close()
+    procedures = SQLiteProcedureRepository(migrated_path)
+    procedures.propose(procedure_version(), expected_latest_version=None)
+    procedures.close()
 
     assert await SQLiteSessionRepository(migrated_path).delete(
         tenant_id="tenant-one", session_id="session-one"
@@ -573,6 +595,16 @@ async def test_session_deletion_cascades_runs_events_and_memory(
         assert reopened_facts.get(tenant_id="tenant-one", fact_id="fact-one") is None
     finally:
         reopened_facts.close()
+    reopened_procedures = SQLiteProcedureRepository(migrated_path)
+    try:
+        assert (
+            reopened_procedures.get_version(
+                tenant_id="tenant-one", procedure_id="playbook-one", version=1
+            )
+            is None
+        )
+    finally:
+        reopened_procedures.close()
 
 
 @pytest.mark.asyncio
@@ -586,17 +618,30 @@ async def test_memory_delete_counts_reflections_and_derived_facts(
     facts = SQLiteSemanticFactRepository(migrated_path)
     facts.propose(semantic_fact())
     facts.close()
+    procedures = SQLiteProcedureRepository(migrated_path)
+    procedures.propose(procedure_version(), expected_latest_version=None)
+    procedures.close()
 
     deleted = await SQLiteSessionRepository(migrated_path).delete_memory(
         tenant_id="tenant-one", session_id="session-one"
     )
 
-    assert deleted == 2
+    assert deleted == 3
     reopened_facts = SQLiteSemanticFactRepository(migrated_path)
     try:
         assert reopened_facts.get(tenant_id="tenant-one", fact_id="fact-one") is None
     finally:
         reopened_facts.close()
+    reopened_procedures = SQLiteProcedureRepository(migrated_path)
+    try:
+        assert (
+            reopened_procedures.get_version(
+                tenant_id="tenant-one", procedure_id="playbook-one", version=1
+            )
+            is None
+        )
+    finally:
+        reopened_procedures.close()
 
 
 @pytest.mark.asyncio
