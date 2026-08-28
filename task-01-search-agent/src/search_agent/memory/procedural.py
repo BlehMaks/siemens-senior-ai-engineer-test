@@ -6,6 +6,7 @@ import sqlite3
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from threading import RLock
 from typing import Annotated, Literal, Protocol, cast
 
 from pydantic import (
@@ -163,6 +164,8 @@ class InMemoryProcedureRepository:
     def __init__(self) -> None:
         self._versions: dict[tuple[str, str, int], ProcedureVersion] = {}
         self._active: dict[tuple[str, str], int] = {}
+        self._latest: dict[tuple[str, str], int] = {}
+        self._lock = RLock()
 
     def propose(
         self,
@@ -174,14 +177,18 @@ class InMemoryProcedureRepository:
         if checked.state is not ProcedureReviewState.PROPOSED:
             raise ReflectionInputError("new procedure versions must start proposed")
         scope = _scope(checked.tenant_id, checked.procedure_id)
-        latest = max(
-            (key[2] for key in self._versions if key[:2] == scope),
-            default=None,
-        )
+        with self._lock:
+            latest = self._latest_version(scope)
         _require_expected(latest, expected_latest_version)
         if checked.version != (1 if latest is None else latest + 1):
             raise ProcedureVersionConflictError("procedure version is not sequential")
-        self._versions[(*scope, checked.version)] = checked
+        with self._lock:
+            if self._latest_version(scope) != latest:
+                raise ProcedureVersionConflictError(
+                    "procedure version expectation is stale"
+                )
+            self._versions[(*scope, checked.version)] = checked
+            self._latest[scope] = checked.version
         return _copy(checked)
 
     def review(
@@ -195,14 +202,20 @@ class InMemoryProcedureRepository:
         reviewed_at: datetime,
     ) -> ProcedureVersion:
         key = (*_scope(tenant_id, procedure_id), _version(version))
-        current = self._required(key)
+        with self._lock:
+            current = self._required(key)
         updated = _reviewed(
             current,
             state=state,
             reviewer_id=reviewer_id,
             reviewed_at=reviewed_at,
         )
-        self._versions[key] = updated
+        with self._lock:
+            if self._versions.get(key) != current:
+                raise ProcedureVersionConflictError(
+                    "procedure review raced another update"
+                )
+            self._versions[key] = updated
         return _copy(updated)
 
     def activate(
@@ -214,36 +227,62 @@ class InMemoryProcedureRepository:
         expected_active_version: int | None,
     ) -> ProcedureVersion:
         scope = _scope(tenant_id, procedure_id)
-        current_active = self._active.get(scope)
+        key = (*scope, _version(version))
+        with self._lock:
+            current_active = self._active.get(scope)
+            stored = self._versions.get(key)
         _require_expected(current_active, expected_active_version)
-        selected = self._version_for_activation((*scope, _version(version)))
-        self._active[scope] = selected.version
+        if stored is None:
+            raise ReflectionInputError("procedure version does not exist")
+        selected = _validate_stored(key, stored)
+        if selected.state is not ProcedureReviewState.APPROVED:
+            raise ReflectionInputError("only approved procedure versions can be active")
+        with self._lock:
+            if self._active.get(scope) != current_active:
+                raise ProcedureVersionConflictError(
+                    "procedure version expectation is stale"
+                )
+            if self._versions.get(key) != stored:
+                raise ProcedureVersionConflictError(
+                    "procedure version changed during activation"
+                )
+            self._active[scope] = selected.version
         return _copy(selected)
 
     def get_version(
         self, *, tenant_id: OpaqueId, procedure_id: OpaqueId, version: int
     ) -> ProcedureVersion | None:
         key = (*_scope(tenant_id, procedure_id), _version(version))
-        stored = self._versions.get(key)
+        with self._lock:
+            stored = self._versions.get(key)
         return None if stored is None else _validate_stored(key, stored)
 
     def get_active(
         self, *, tenant_id: OpaqueId, procedure_id: OpaqueId
     ) -> ProcedureVersion | None:
         scope = _scope(tenant_id, procedure_id)
-        version = self._active.get(scope)
+        with self._lock:
+            version = self._active.get(scope)
+            if version is not None and type(version) is not int:
+                raise ReflectionStorageError("active procedure pointer is invalid")
+            stored = None if version is None else self._versions.get((*scope, version))
         if version is None:
             return None
-        return self._version_for_activation((*scope, version))
+        if stored is None:
+            raise ReflectionStorageError("active procedure pointer is dangling")
+        selected = _validate_stored((*scope, version), stored)
+        if selected.state is not ProcedureReviewState.APPROVED:
+            raise ReflectionStorageError("active procedure is not approved")
+        return selected
 
     def list_versions(
         self, *, tenant_id: OpaqueId, procedure_id: OpaqueId, limit: int = 100
     ) -> tuple[ProcedureVersion, ...]:
         scope = _scope(tenant_id, procedure_id)
+        with self._lock:
+            stored = tuple(self._versions.items())
         values = [
-            _validate_stored(key, value)
-            for key, value in self._versions.items()
-            if key[:2] == scope
+            _validate_stored(key, value) for key, value in stored if key[:2] == scope
         ]
         values.sort(key=lambda item: item.version, reverse=True)
         return tuple(values[: _limit(limit)])
@@ -252,51 +291,56 @@ class InMemoryProcedureRepository:
         self, *, tenant_id: OpaqueId, limit: int = 20
     ) -> tuple[ProcedureVersion, ...]:
         checked_tenant = _scope_id(tenant_id)
-        values = [
-            self._version_for_activation((*scope, version))
-            for scope, version in self._active.items()
-            if scope[0] == checked_tenant
-        ]
+        with self._lock:
+            values = [
+                self._version_for_activation((*scope, version))
+                for scope, version in self._active.items()
+                if scope[0] == checked_tenant
+            ]
         values.sort(key=lambda item: item.procedure_id)
         return tuple(values[: _active_limit(limit)])
 
     def delete_session(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> int:
         checked_tenant = _scope_id(tenant_id)
         checked_session = _scope_id(session_id)
-        procedures = {
-            (item.tenant_id, item.procedure_id)
-            for item in self._versions.values()
-            if item.tenant_id == checked_tenant
-            and item.origin_session_id == checked_session
-        }
-        keys = [
-            key
-            for key, item in self._versions.items()
-            if item.tenant_id == checked_tenant
-            and item.origin_session_id == checked_session
-        ]
-        for key in keys:
-            del self._versions[key]
-        for scope in procedures:
-            self._active.pop(scope, None)
+        with self._lock:
+            keys = [
+                key
+                for key, item in self._versions.items()
+                if item.tenant_id == checked_tenant
+                and item.origin_session_id == checked_session
+            ]
+            selected = set(keys)
+            for key in keys:
+                del self._versions[key]
+            for scope, version in tuple(self._active.items()):
+                if (*scope, version) in selected:
+                    del self._active[scope]
         return len(keys)
 
     def delete_procedure(self, *, tenant_id: OpaqueId, procedure_id: OpaqueId) -> int:
         scope = _scope(tenant_id, procedure_id)
-        keys = [key for key in self._versions if key[:2] == scope]
-        for key in keys:
-            del self._versions[key]
-        self._active.pop(scope, None)
+        with self._lock:
+            keys = [key for key in self._versions if key[:2] == scope]
+            for key in keys:
+                del self._versions[key]
+            self._active.pop(scope, None)
         return len(keys)
 
     def delete_tenant(self, *, tenant_id: OpaqueId) -> int:
         checked_tenant = _scope_id(tenant_id)
-        keys = [key for key in self._versions if key[0] == checked_tenant]
-        for key in keys:
-            del self._versions[key]
-        scopes = [scope for scope in self._active if scope[0] == checked_tenant]
-        for scope in scopes:
-            del self._active[scope]
+        with self._lock:
+            keys = [key for key in self._versions if key[0] == checked_tenant]
+            for key in keys:
+                del self._versions[key]
+            scopes = [scope for scope in self._active if scope[0] == checked_tenant]
+            for scope in scopes:
+                del self._active[scope]
+            latest_scopes = [
+                scope for scope in self._latest if scope[0] == checked_tenant
+            ]
+            for scope in latest_scopes:
+                del self._latest[scope]
         return len(keys)
 
     def _required(self, key: tuple[str, str, int]) -> ProcedureVersion:
@@ -309,6 +353,24 @@ class InMemoryProcedureRepository:
                 "procedure version must be proposed before review"
             )
         return checked
+
+    def _latest_version(self, scope: tuple[str, str]) -> int | None:
+        history = [
+            _validate_stored(key, value)
+            for key, value in self._versions.items()
+            if key[:2] == scope
+        ]
+        maximum = max((item.version for item in history), default=None)
+        latest = self._latest.get(scope)
+        if latest is None:
+            if maximum is not None:
+                raise ReflectionStorageError("procedure version head is missing")
+            return None
+        if type(latest) is not int or not 1 <= latest <= 10_000:
+            raise ReflectionStorageError("procedure version head is invalid")
+        if maximum is not None and latest < maximum:
+            raise ReflectionStorageError("procedure version head is invalid")
+        return latest
 
     def _version_for_activation(self, key: tuple[str, str, int]) -> ProcedureVersion:
         value = self._versions.get(key)
@@ -341,6 +403,16 @@ class SQLiteProcedureRepository:
             PRIMARY KEY (tenant_id, procedure_id)
         ) WITHOUT ROWID
     """
+    _CREATE_HEADS = """
+        CREATE TABLE IF NOT EXISTS procedure_version_heads (
+            tenant_id TEXT NOT NULL,
+            procedure_id TEXT NOT NULL,
+            latest_version INTEGER NOT NULL CHECK(
+                latest_version BETWEEN 1 AND 10000
+            ),
+            PRIMARY KEY (tenant_id, procedure_id)
+        ) WITHOUT ROWID
+    """
     _EXPECTED_VERSIONS = (
         ("tenant_id", "TEXT", 1, 1),
         ("procedure_id", "TEXT", 1, 2),
@@ -354,6 +426,11 @@ class SQLiteProcedureRepository:
         ("tenant_id", "TEXT", 1, 1),
         ("procedure_id", "TEXT", 1, 2),
         ("version", "INTEGER", 1, 0),
+    )
+    _EXPECTED_HEADS = (
+        ("tenant_id", "TEXT", 1, 1),
+        ("procedure_id", "TEXT", 1, 2),
+        ("latest_version", "INTEGER", 1, 0),
     )
 
     def __init__(self, path: Path) -> None:
@@ -370,6 +447,15 @@ class SQLiteProcedureRepository:
             self._connection.execute("PRAGMA busy_timeout = 10000")
             self._connection.execute(self._CREATE_VERSIONS)
             self._connection.execute(self._CREATE_ACTIVE)
+            self._connection.execute(self._CREATE_HEADS)
+            self._connection.execute(
+                "INSERT INTO procedure_version_heads "
+                "(tenant_id, procedure_id, latest_version) "
+                "SELECT tenant_id, procedure_id, MAX(version) "
+                "FROM procedure_versions GROUP BY tenant_id, procedure_id "
+                "ON CONFLICT (tenant_id, procedure_id) DO UPDATE SET "
+                "latest_version = MAX(latest_version, excluded.latest_version)"
+            )
             self._connection.commit()
             self._validate_schema()
         except sqlite3.Error as exc:
@@ -405,12 +491,9 @@ class SQLiteProcedureRepository:
             raise ReflectionInputError("new procedure versions must start proposed")
         try:
             self._connection.execute("BEGIN IMMEDIATE")
-            latest_row = self._connection.execute(
-                "SELECT MAX(version) FROM procedure_versions "
-                "WHERE tenant_id = ? AND procedure_id = ?",
-                (checked.tenant_id, checked.procedure_id),
-            ).fetchone()
-            latest = latest_row[0] if latest_row is not None else None
+            scope = (checked.tenant_id, checked.procedure_id)
+            self._validate_scope_metadata(*scope)
+            latest = self._latest_version(scope)
             _require_expected(latest, expected_latest_version)
             if checked.version != (1 if latest is None else latest + 1):
                 raise ProcedureVersionConflictError(
@@ -422,6 +505,23 @@ class SQLiteProcedureRepository:
                 "origin_run_id, state, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 _row_values(checked),
             )
+            if latest is None:
+                self._connection.execute(
+                    "INSERT INTO procedure_version_heads "
+                    "(tenant_id, procedure_id, latest_version) VALUES (?, ?, ?)",
+                    (*scope, checked.version),
+                )
+            else:
+                cursor = self._connection.execute(
+                    "UPDATE procedure_version_heads SET latest_version = ? "
+                    "WHERE tenant_id = ? AND procedure_id = ? "
+                    "AND latest_version = ?",
+                    (checked.version, *scope, latest),
+                )
+                if cursor.rowcount != 1:
+                    raise ProcedureVersionConflictError(
+                        "procedure version expectation is stale"
+                    )
             self._connection.commit()
         except (ProcedureVersionConflictError, ReflectionInputError):
             self._rollback()
@@ -429,6 +529,9 @@ class SQLiteProcedureRepository:
         except sqlite3.Error as exc:
             self._rollback()
             raise ReflectionStorageError("SQLite procedure proposal failed") from exc
+        except BaseException:
+            self._rollback()
+            raise
         return _copy(checked)
 
     def review(
@@ -445,6 +548,7 @@ class SQLiteProcedureRepository:
         key = (*_scope(tenant_id, procedure_id), _version(version))
         try:
             self._connection.execute("BEGIN IMMEDIATE")
+            self._validate_scope_metadata(key[0], key[1])
             current = self._required_row(key)
             if current.state is not ProcedureReviewState.PROPOSED:
                 raise ReflectionInputError(
@@ -478,6 +582,9 @@ class SQLiteProcedureRepository:
         except sqlite3.Error as exc:
             self._rollback()
             raise ReflectionStorageError("SQLite procedure review failed") from exc
+        except BaseException:
+            self._rollback()
+            raise
         return _copy(updated)
 
     def activate(
@@ -493,6 +600,7 @@ class SQLiteProcedureRepository:
         key = (*scope, _version(version))
         try:
             self._connection.execute("BEGIN IMMEDIATE")
+            self._validate_scope_metadata(*scope)
             current_row = self._connection.execute(
                 "SELECT version FROM active_procedures "
                 "WHERE tenant_id = ? AND procedure_id = ?",
@@ -518,6 +626,9 @@ class SQLiteProcedureRepository:
         except sqlite3.Error as exc:
             self._rollback()
             raise ReflectionStorageError("SQLite procedure activation failed") from exc
+        except BaseException:
+            self._rollback()
+            raise
         return _copy(selected)
 
     def get_version(
@@ -625,9 +736,15 @@ class SQLiteProcedureRepository:
 
     def delete_tenant(self, *, tenant_id: OpaqueId) -> int:
         self._require_open()
-        return self._delete("tenant_id = ?", (_scope_id(tenant_id),))
+        return self._delete("tenant_id = ?", (_scope_id(tenant_id),), delete_heads=True)
 
-    def _delete(self, predicate: str, parameters: tuple[str, ...]) -> int:
+    def _delete(
+        self,
+        predicate: str,
+        parameters: tuple[str, ...],
+        *,
+        delete_heads: bool = False,
+    ) -> int:
         try:
             self._connection.execute("BEGIN IMMEDIATE")
             scopes = self._connection.execute(
@@ -668,11 +785,19 @@ class SQLiteProcedureRepository:
                         "AND procedure_id = ?",
                         scope,
                     )
+            if delete_heads:
+                self._connection.execute(
+                    f"DELETE FROM procedure_version_heads WHERE {predicate}",
+                    parameters,
+                )
             self._connection.commit()
             return cursor.rowcount
         except sqlite3.Error as exc:
             self._rollback()
             raise ReflectionStorageError("SQLite procedure deletion failed") from exc
+        except BaseException:
+            self._rollback()
+            raise
 
     def _fetch_row(self, key: tuple[str, str, int]) -> tuple[object, ...] | None:
         try:
@@ -699,9 +824,17 @@ class SQLiteProcedureRepository:
         active_rows = self._connection.execute(
             'PRAGMA table_info("active_procedures")'
         ).fetchall()
+        head_rows = self._connection.execute(
+            'PRAGMA table_info("procedure_version_heads")'
+        ).fetchall()
         versions = tuple((row[1], row[2], row[3], row[5]) for row in version_rows)
         active = tuple((row[1], row[2], row[3], row[5]) for row in active_rows)
-        if versions != self._EXPECTED_VERSIONS or active != self._EXPECTED_ACTIVE:
+        heads = tuple((row[1], row[2], row[3], row[5]) for row in head_rows)
+        if (
+            versions != self._EXPECTED_VERSIONS
+            or active != self._EXPECTED_ACTIVE
+            or heads != self._EXPECTED_HEADS
+        ):
             self.close()
             raise ReflectionStorageError("SQLite procedure schema is incompatible")
 
@@ -720,24 +853,43 @@ class SQLiteProcedureRepository:
             )
             parameters.extend((procedure_id, procedure_id))
         try:
-            row = self._connection.execute(
+            rows = self._connection.execute(
                 "SELECT tenant_id, procedure_id, version, origin_session_id, "
                 "origin_run_id, state, payload FROM procedure_versions WHERE "
-                f"{predicate} AND CASE WHEN json_valid(payload) THEN "
-                "tenant_id != json_extract(payload, '$.tenant_id') OR "
-                "procedure_id != json_extract(payload, '$.procedure_id') OR "
-                "version != json_extract(payload, '$.version') OR "
-                "origin_session_id != json_extract(payload, '$.origin_session_id') OR "
-                "origin_run_id != json_extract(payload, '$.origin_run_id') OR "
-                "state != json_extract(payload, '$.state') ELSE 1 END LIMIT 1",
+                f"{predicate} ORDER BY tenant_id, procedure_id, version LIMIT -1",
                 tuple(parameters),
-            ).fetchone()
+            ).fetchall()
         except sqlite3.Error as exc:
             raise ReflectionStorageError(
                 "SQLite procedure metadata validation failed"
             ) from exc
-        if row is not None:
+        for row in rows:
             _decode_row(row)
+
+    def _latest_version(self, scope: tuple[str, str]) -> int | None:
+        row = self._connection.execute(
+            "SELECT latest_version FROM procedure_version_heads "
+            "WHERE tenant_id = ? AND procedure_id = ?",
+            scope,
+        ).fetchone()
+        maximum_row = self._connection.execute(
+            "SELECT MAX(version) FROM procedure_versions "
+            "WHERE tenant_id = ? AND procedure_id = ?",
+            scope,
+        ).fetchone()
+        maximum = None if maximum_row is None else maximum_row[0]
+        if row is None:
+            if maximum is not None:
+                raise ReflectionStorageError("procedure version head is missing")
+            return None
+        if type(row) is not tuple or len(row) != 1 or type(row[0]) is not int:
+            raise ReflectionStorageError("procedure version head is invalid")
+        latest = row[0]
+        if not 1 <= latest <= 10_000:
+            raise ReflectionStorageError("procedure version head is invalid")
+        if maximum is not None and (type(maximum) is not int or latest < maximum):
+            raise ReflectionStorageError("procedure version head is invalid")
+        return latest
 
     def _rollback(self) -> None:
         if self._connection.in_transaction:

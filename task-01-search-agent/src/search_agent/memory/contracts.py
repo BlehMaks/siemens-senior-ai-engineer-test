@@ -32,6 +32,10 @@ _CONTROL_INSTRUCTION_PATTERN = re.compile(
     r"themselves\s+|the\s+agent\s+|it\s+)?"
     r"(?:admin|browser|code|network|system|tool)\s+"
     r"(?:access|capabilit(?:y|ies)|permissions?)\b"
+    r"|\b(?:replace|rewrite|change)\s+(?:the\s+)?"
+    r"(?:system|developer)\s+(?:instructions?|rules?|prompts?)\b"
+    r"|\b(?:execute|run|evaluate)\s+__import__\s*\("
+    r"|\b__import__\s*\([^\n]{0,120}\)\.system\s*\("
 )
 _REDACTIONS = (
     re.compile(r"(?i)\bbearer\b[^.!?]*"),
