@@ -23,7 +23,7 @@ _RANGE = re.compile(
 )
 _SCALAR = re.compile(rf"^\s*({_NUMBER})\s*([^\d\s].*)?$", re.IGNORECASE)
 _ANNOTATION = re.compile(
-    r"(?i)(?:@\([^)]{1,24}\)|\((?:typ(?:ical)?|min(?:imum)?|max(?:imum)?|ac|dc)\))"
+    r"(?i)(?:@\([^)]{1,24}\)|\(\s*(?:typ(?:ical)?|min(?:imum)?|max(?:imum)?|ac|dc)\s*\))"
 )
 _SPACE = re.compile(r"\s+")
 

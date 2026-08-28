@@ -74,6 +74,8 @@ def test_quantity_parser_normalizes_units_ranges_qualifiers_and_modes() -> None:
     assert dc.lower == 250.0
     assert parse_quantity("250 V (AC)", kind="voltage").mode == "ac"
     assert parse_quantity("250 V (DC)", kind="voltage").mode == "dc"
+    assert parse_quantity("250 V ( AC )", kind="voltage").mode == "ac"
+    assert parse_quantity("250 V ( DC )", kind="voltage").mode == "dc"
 
 
 def test_dimension_parser_preserves_axis_order_and_converts_to_millimetres() -> None:
