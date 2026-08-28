@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.resources import files
@@ -184,6 +184,8 @@ async def migrate(path: Path) -> None:
                     await _validate_legacy_memory_schema(connection)
                 applied = len(rows)
                 for migration in _MIGRATIONS[applied:]:
+                    if migration.version == 7:
+                        await _validate_legacy_procedure_schema(connection)
                     for statement in _statements(migration.sql):
                         await connection.execute(statement)
                     await connection.execute(
@@ -297,6 +299,12 @@ async def _validate_legacy_memory_schema(
         expected_sql=_LEGACY_SEMANTIC_SQL,
         error="database semantic fact schema is incompatible",
     )
+    await _validate_legacy_procedure_schema(connection)
+
+
+async def _validate_legacy_procedure_schema(
+    connection: aiosqlite.Connection,
+) -> None:
     await _validate_legacy_table_pair(
         connection,
         first_table="procedure_versions",
@@ -391,6 +399,12 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
         columns = {row[1] for row in rows}
         if not set(required) <= columns:
             raise MigrationError("database physical schema is incompatible")
+    for table in ("procedure_versions", "active_procedures"):
+        rows = await (
+            await connection.execute(f'PRAGMA table_info("{table}")')
+        ).fetchall()
+        if tuple(row[1] for row in rows) != _REQUIRED_COLUMNS[table]:
+            raise MigrationError("database procedure schema is incompatible")
 
     reflection_foreign_keys = await (
         await connection.execute('PRAGMA foreign_key_list("run_reflections")')
@@ -407,55 +421,72 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
     semantic_foreign_keys = await (
         await connection.execute('PRAGMA foreign_key_list("semantic_facts")')
     ).fetchall()
-    semantic_session_reference = {
-        (row[3], row[4])
-        for row in semantic_foreign_keys
-        if row[2] == "sessions" and row[6].upper() == "CASCADE"
-    }
-    if semantic_session_reference != {
-        ("tenant_id", "tenant_id"),
-        ("origin_session_id", "session_id"),
-    }:
+    if not _is_exact_composite_cascade(
+        semantic_foreign_keys,
+        referenced_table="sessions",
+        columns=(
+            ("tenant_id", "tenant_id"),
+            ("origin_session_id", "session_id"),
+        ),
+    ):
         raise MigrationError("database semantic fact schema is incompatible")
 
     procedure_foreign_keys = await (
         await connection.execute('PRAGMA foreign_key_list("procedure_versions")')
     ).fetchall()
-    procedure_session_reference = {
-        (row[3], row[4])
-        for row in procedure_foreign_keys
-        if row[2] == "sessions" and row[6].upper() == "CASCADE"
-    }
-    if procedure_session_reference != {
-        ("tenant_id", "tenant_id"),
-        ("origin_session_id", "session_id"),
-    }:
+    if not _is_exact_composite_cascade(
+        procedure_foreign_keys,
+        referenced_table="sessions",
+        columns=(
+            ("tenant_id", "tenant_id"),
+            ("origin_session_id", "session_id"),
+        ),
+    ):
         raise MigrationError("database procedure schema is incompatible")
 
     active_foreign_keys = await (
         await connection.execute('PRAGMA foreign_key_list("active_procedures")')
     ).fetchall()
-    active_version_reference = {
-        (row[3], row[4])
-        for row in active_foreign_keys
-        if row[2] == "procedure_versions" and row[6].upper() == "CASCADE"
-    }
-    if active_version_reference != {
-        ("tenant_id", "tenant_id"),
-        ("procedure_id", "procedure_id"),
-        ("version", "version"),
-    }:
+    if not _is_exact_composite_cascade(
+        active_foreign_keys,
+        referenced_table="procedure_versions",
+        columns=(
+            ("tenant_id", "tenant_id"),
+            ("procedure_id", "procedure_id"),
+            ("version", "version"),
+        ),
+    ):
+        raise MigrationError("database active procedure schema is incompatible")
+
+    procedure_violations = await (
+        await connection.execute('PRAGMA foreign_key_check("procedure_versions")')
+    ).fetchall()
+    if procedure_violations:
+        raise MigrationError("database procedure schema is incompatible")
+    active_violations = await (
+        await connection.execute('PRAGMA foreign_key_check("active_procedures")')
+    ).fetchall()
+    if active_violations:
+        raise MigrationError("database active procedure schema is incompatible")
+    inactive_pointer = await (
+        await connection.execute(
+            "SELECT 1 FROM active_procedures AS active "
+            "JOIN procedure_versions AS versions USING "
+            "(tenant_id, procedure_id, version) WHERE versions.state <> 'approved' "
+            "LIMIT 1"
+        )
+    ).fetchone()
+    if inactive_pointer is not None:
         raise MigrationError("database active procedure schema is incompatible")
 
     queue_foreign_keys = await (
         await connection.execute('PRAGMA foreign_key_list("work_items")')
     ).fetchall()
-    run_reference = {
-        (row[3], row[4])
-        for row in queue_foreign_keys
-        if row[2] == "runs" and row[6].upper() == "CASCADE"
-    }
-    if run_reference != {("tenant_id", "tenant_id"), ("run_id", "run_id")}:
+    if not _is_exact_composite_cascade(
+        queue_foreign_keys,
+        referenced_table="runs",
+        columns=(("tenant_id", "tenant_id"), ("run_id", "run_id")),
+    ):
         raise MigrationError("database physical schema is incompatible")
 
     queue_indexes = {
@@ -480,6 +511,35 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
     )
     if work_columns != _REQUIRED_COLUMNS["work_items"]:
         raise MigrationError("database physical schema is incompatible")
+
+
+def _is_exact_composite_cascade(
+    rows: Iterable[Sequence[object]],
+    *,
+    referenced_table: str,
+    columns: tuple[tuple[str, str], ...],
+) -> bool:
+    groups: dict[int, list[tuple[int, str, str]]] = {}
+    for row in rows:
+        if (
+            len(row) < 7
+            or type(row[0]) is not int
+            or type(row[1]) is not int
+            or row[2] != referenced_table
+            or type(row[3]) is not str
+            or type(row[4]) is not str
+            or type(row[6]) is not str
+            or row[6].upper() != "CASCADE"
+        ):
+            return False
+        groups.setdefault(row[0], []).append((row[1], row[3], row[4]))
+    if len(groups) != 1:
+        return False
+    group = next(iter(groups.values()))
+    group.sort(key=lambda item: item[0])
+    return tuple((source, target) for _, source, target in group) == columns and tuple(
+        sequence for sequence, _, _ in group
+    ) == tuple(range(len(columns)))
 
 
 __all__ = ["MigrationError", "migrate", "validate_current_schema"]

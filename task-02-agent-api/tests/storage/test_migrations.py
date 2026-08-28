@@ -19,6 +19,23 @@ from search_agent.memory import (
 )
 
 
+def install_api_schema_through_v6(path: Path) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.execute(schema._CREATE_LEDGER)
+        for migration in schema._MIGRATIONS[:6]:
+            connection.executescript(migration.sql)
+            connection.execute(
+                "INSERT INTO schema_migrations "
+                "(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
+                (
+                    migration.version,
+                    migration.name,
+                    migration.checksum,
+                    "2026-08-28T10:00:00.000000+00:00",
+                ),
+            )
+
+
 @pytest.mark.asyncio
 async def test_empty_and_repeated_migration_are_stable(tmp_path: Path) -> None:
     path = tmp_path / "empty.sqlite3"
@@ -166,6 +183,90 @@ async def test_migration_rejects_an_incomplete_legacy_procedure_schema(
         )
 
     with pytest.raises(MigrationError, match="procedure schema is incompatible"):
+        await migrate(path)
+
+
+@pytest.mark.asyncio
+async def test_v7_preflight_rejects_extended_procedure_tables(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "v6-with-extended-procedures.sqlite3"
+    install_api_schema_through_v6(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE procedure_versions ("
+            "tenant_id TEXT NOT NULL, procedure_id TEXT NOT NULL, "
+            "version INTEGER NOT NULL, origin_session_id TEXT NOT NULL, "
+            "origin_run_id TEXT NOT NULL, state TEXT NOT NULL, "
+            "payload TEXT NOT NULL CHECK(length(payload) <= 16384), "
+            "private_metadata TEXT NOT NULL, "
+            "PRIMARY KEY (tenant_id, procedure_id, version)) WITHOUT ROWID"
+        )
+        connection.execute(
+            "CREATE TABLE active_procedures ("
+            "tenant_id TEXT NOT NULL, procedure_id TEXT NOT NULL, "
+            "version INTEGER NOT NULL, "
+            "PRIMARY KEY (tenant_id, procedure_id)) WITHOUT ROWID"
+        )
+
+    with pytest.raises(MigrationError, match="procedure schema is incompatible"):
+        await migrate(path)
+
+
+@pytest.mark.asyncio
+async def test_current_schema_rejects_extra_procedure_columns(tmp_path: Path) -> None:
+    path = tmp_path / "current-with-extra-procedure-column.sqlite3"
+    await migrate(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "ALTER TABLE procedure_versions ADD COLUMN private_metadata TEXT"
+        )
+
+    with pytest.raises(MigrationError, match="procedure schema is incompatible"):
+        await migrate(path)
+
+
+@pytest.mark.asyncio
+async def test_current_schema_rejects_dangling_active_procedure_pointer(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "current-with-dangling-active.sqlite3"
+    await migrate(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute(
+            "INSERT INTO active_procedures "
+            "(tenant_id, procedure_id, version) VALUES (?, ?, ?)",
+            ("tenant-one", "procedure-one", 1),
+        )
+
+    with pytest.raises(MigrationError, match="active procedure schema is incompatible"):
+        await migrate(path)
+
+
+@pytest.mark.asyncio
+async def test_current_schema_rejects_split_active_pointer_foreign_keys(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "current-with-split-active-foreign-keys.sqlite3"
+    await migrate(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("DROP TABLE active_procedures")
+        connection.execute(
+            "CREATE TABLE active_procedures ("
+            "tenant_id TEXT NOT NULL, procedure_id TEXT NOT NULL, "
+            "version INTEGER NOT NULL, "
+            "PRIMARY KEY (tenant_id, procedure_id), "
+            "FOREIGN KEY (tenant_id) REFERENCES procedure_versions(tenant_id) "
+            "ON DELETE CASCADE, "
+            "FOREIGN KEY (procedure_id) "
+            "REFERENCES procedure_versions(procedure_id) ON DELETE CASCADE, "
+            "FOREIGN KEY (version) REFERENCES procedure_versions(version) "
+            "ON DELETE CASCADE) WITHOUT ROWID"
+        )
+
+    with pytest.raises(MigrationError, match="active procedure schema is incompatible"):
         await migrate(path)
 
 
