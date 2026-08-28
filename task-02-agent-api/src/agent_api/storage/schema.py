@@ -221,6 +221,12 @@ async def migrate(path: Path) -> None:
                         await _validate_legacy_procedure_schema(connection)
                     elif migration.version == 8:
                         await _validate_legacy_procedure_head_schema(connection)
+                        if applied >= 7:
+                            await connection.execute(
+                                "DELETE FROM procedure_version_heads AS heads "
+                                "WHERE NOT EXISTS (SELECT 1 FROM tenants "
+                                "WHERE tenant_id = heads.tenant_id)"
+                            )
                     for statement in _statements(migration.sql):
                         await connection.execute(statement)
                     await connection.execute(
@@ -563,6 +569,20 @@ async def _validate_physical_schema(connection: aiosqlite.Connection) -> None:
         referenced_table="tenants",
         columns=(("tenant_id", "tenant_id"),),
     ):
+        raise MigrationError("database procedure version head schema is incompatible")
+    head_violations = await (
+        await connection.execute('PRAGMA foreign_key_check("procedure_version_heads")')
+    ).fetchall()
+    if head_violations:
+        raise MigrationError("database procedure version head schema is incompatible")
+    invalid_head = await (
+        await connection.execute(
+            "SELECT 1 FROM procedure_version_heads "
+            "WHERE typeof(latest_version) IS NOT 'integer' "
+            "OR latest_version NOT BETWEEN 1 AND 10000 LIMIT 1"
+        )
+    ).fetchone()
+    if invalid_head is not None:
         raise MigrationError("database procedure version head schema is incompatible")
     head_behind_history = await (
         await connection.execute(

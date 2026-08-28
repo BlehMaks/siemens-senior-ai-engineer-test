@@ -36,6 +36,23 @@ def install_api_schema_through_v6(path: Path) -> None:
             )
 
 
+def install_api_schema_through_v7(path: Path) -> None:
+    install_api_schema_through_v6(path)
+    migration = schema._MIGRATIONS[6]
+    with sqlite3.connect(path) as connection:
+        connection.executescript(migration.sql)
+        connection.execute(
+            "INSERT INTO schema_migrations "
+            "(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
+            (
+                migration.version,
+                migration.name,
+                migration.checksum,
+                "2026-08-28T10:00:00.000000+00:00",
+            ),
+        )
+
+
 @pytest.mark.asyncio
 async def test_empty_and_repeated_migration_are_stable(tmp_path: Path) -> None:
     path = tmp_path / "empty.sqlite3"
@@ -170,6 +187,82 @@ async def test_migration_adopts_an_existing_task1_memory_database(
             "SELECT tenant_id, procedure_id, latest_version "
             "FROM procedure_version_heads"
         ).fetchall() == [("tenant-one", "playbook-one", 1)]
+
+
+@pytest.mark.asyncio
+async def test_v8_does_not_restore_a_tenant_deleted_on_v7(tmp_path: Path) -> None:
+    path = tmp_path / "v7-deleted-tenant-with-head.sqlite3"
+    install_api_schema_through_v7(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(
+            "INSERT INTO tenants (tenant_id, created_at) VALUES (?, ?)",
+            ("tenant-one", "2026-08-28T10:00:00.000000+00:00"),
+        )
+        connection.execute(
+            "INSERT INTO sessions "
+            "(tenant_id, session_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (
+                "tenant-one",
+                "session-one",
+                "2026-08-28T10:00:00.000000+00:00",
+                "2026-08-28T10:00:00.000000+00:00",
+            ),
+        )
+        connection.execute(SQLiteProcedureRepository._CREATE_HEADS)
+        connection.execute(
+            "INSERT INTO procedure_version_heads "
+            "(tenant_id, procedure_id, latest_version) VALUES (?, ?, ?)",
+            ("tenant-one", "playbook-one", 1),
+        )
+        connection.execute("DELETE FROM tenants WHERE tenant_id = ?", ("tenant-one",))
+
+    await migrate(path)
+
+    with sqlite3.connect(path) as connection:
+        assert (
+            connection.execute(
+                "SELECT 1 FROM tenants WHERE tenant_id = ?", ("tenant-one",)
+            ).fetchone()
+            is None
+        )
+        assert (
+            connection.execute(
+                "SELECT 1 FROM procedure_version_heads WHERE tenant_id = ?",
+                ("tenant-one",),
+            ).fetchone()
+            is None
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tenant_id", "latest_version"),
+    (("missing-tenant", 1), ("tenant-one", 1.5)),
+)
+async def test_current_schema_rejects_invalid_procedure_version_heads(
+    tmp_path: Path, tenant_id: str, latest_version: int | float
+) -> None:
+    path = tmp_path / f"invalid-head-{tenant_id}.sqlite3"
+    await migrate(path)
+    with sqlite3.connect(path) as connection:
+        if tenant_id == "tenant-one":
+            connection.execute(
+                "INSERT INTO tenants (tenant_id, created_at) VALUES (?, ?)",
+                (tenant_id, "2026-08-28T10:00:00.000000+00:00"),
+            )
+        else:
+            connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute(
+            "INSERT INTO procedure_version_heads "
+            "(tenant_id, procedure_id, latest_version) VALUES (?, ?, ?)",
+            (tenant_id, "playbook-one", latest_version),
+        )
+
+    with pytest.raises(
+        MigrationError, match="procedure version head schema is incompatible"
+    ):
+        await migrate(path)
 
 
 @pytest.mark.asyncio
