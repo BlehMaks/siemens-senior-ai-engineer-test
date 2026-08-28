@@ -23,7 +23,7 @@ _RANGE = re.compile(
 )
 _SCALAR = re.compile(rf"^\s*({_NUMBER})\s*([^\d\s].*)?$", re.IGNORECASE)
 _ANNOTATION = re.compile(
-    r"(?i)(?:@\([^)]{1,24}\)|\((?:typ(?:ical)?|min(?:imum)?|max(?:imum)?)\))"
+    r"(?i)(?:@\([^)]{1,24}\)|\((?:typ(?:ical)?|min(?:imum)?|max(?:imum)?|ac|dc)\))"
 )
 _SPACE = re.compile(r"\s+")
 
@@ -213,6 +213,8 @@ def parse_quantity(
         unit_text = (match.group(5) or default_unit or "").strip()
         lower_inclusive = opening != "("
         upper_inclusive = closing != ")"
+        if lower == upper and not (lower_inclusive and upper_inclusive):
+            raise ValueError("quantity range is empty")
     else:
         scalar = _SCALAR.fullmatch(cleaned)
         if not scalar:

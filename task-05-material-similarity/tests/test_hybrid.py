@@ -72,6 +72,8 @@ def test_quantity_parser_normalizes_units_ranges_qualifiers_and_modes() -> None:
     assert ac.mode == "ac"
     assert dc.mode == "dc"
     assert dc.lower == 250.0
+    assert parse_quantity("250 V (AC)", kind="voltage").mode == "ac"
+    assert parse_quantity("250 V (DC)", kind="voltage").mode == "dc"
 
 
 def test_dimension_parser_preserves_axis_order_and_converts_to_millimetres() -> None:
@@ -120,6 +122,10 @@ def test_range_parser_requires_paired_delimiters_and_preserves_exclusivity() -> 
     for malformed in ("[1-2 A", "1-2] A"):
         with pytest.raises(ValueError, match="unsupported"):
             parse_quantity(malformed, kind="current")
+    for empty in ("[2-2) A", "(2-2] A", "(2-2) A"):
+        with pytest.raises(ValueError, match="empty"):
+            parse_quantity(empty, kind="current")
+    assert parse_quantity("[2-2] A", kind="current").lower == 2.0
 
 
 def test_category_parser_uses_only_reviewed_aliases_and_boolean_values() -> None:
