@@ -9,12 +9,12 @@ output "firestore" {
     deletion_policy         = google_firestore_database.assessment.deletion_policy
     pitr                    = google_firestore_database.assessment.point_in_time_recovery_enablement
     composite_indexes = sort([
-      google_firestore_index.audit_entries.collection,
-      google_firestore_index.quota_execution_leases_active.collection,
-      google_firestore_index.quota_sse_leases_active.collection,
-      google_firestore_index.run_events.collection,
-      google_firestore_index.runs.collection,
-      google_firestore_index.sessions.collection,
+      google_firestore_index.assessment_audit_entries.collection,
+      google_firestore_index.assessment_quota_execution_leases_active.collection,
+      google_firestore_index.assessment_quota_sse_leases_active.collection,
+      google_firestore_index.assessment_run_events.collection,
+      google_firestore_index.assessment_runs.collection,
+      google_firestore_index.assessment_sessions.collection,
     ])
   }
 }

@@ -138,6 +138,9 @@ bucket, no secret payload access, no queue-administration role, no project IAM
 administration, and no service-account key. The named database and conditional
 data/index bindings keep the assessment identities out of any pre-existing
 `(default)` database used by another service in the same project.
+Legacy Terraform addresses for `(default)` indexes are removed from state with
+`destroy = false`; the module then creates separate index resources in `sai-dev`.
+An upgrade therefore leaves the existing database and its indexes in place.
 
 ## GitHub entities
 

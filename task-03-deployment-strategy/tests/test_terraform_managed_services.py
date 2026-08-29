@@ -61,12 +61,34 @@ def test_artifact_access_is_repository_specific() -> None:
     assert assigned_roles == {"roles/artifactregistry.writer"}
     assert 'resource "google_project_iam_member"' not in main
     assert "repository = google_artifact_registry_repository.containers.name" in main
-    assert 'resource "google_firestore_index" "sessions"' in main
-    assert 'resource "google_firestore_index" "runs"' in main
-    assert 'resource "google_firestore_index" "run_events"' in main
+    assert 'resource "google_firestore_index" "assessment_sessions"' in main
+    assert 'resource "google_firestore_index" "assessment_runs"' in main
+    assert 'resource "google_firestore_index" "assessment_run_events"' in main
     assert "allUsers" not in main
     assert "allAuthenticatedUsers" not in main
     assert 'member = "*"' not in main
+
+
+def test_named_database_index_migration_abandons_default_indexes() -> None:
+    main = read(MODULE / "main.tf")
+    legacy_names = (
+        "sessions",
+        "runs",
+        "run_events",
+        "audit_entries",
+        "quota_execution_leases_active",
+        "quota_sse_leases_active",
+    )
+
+    assert main.count("removed {") == len(legacy_names)
+    for name in legacy_names:
+        assert re.search(
+            rf"removed\s*\{{\s*"
+            rf"from\s*=\s*google_firestore_index\.{name}\s*"
+            rf"lifecycle\s*\{{\s*destroy\s*=\s*false\s*\}}\s*\}}",
+            main,
+        )
+        assert f'resource "google_firestore_index" "assessment_{name}"' in main
 
 
 def test_data_lifecycle_and_alerts_fail_safe() -> None:
