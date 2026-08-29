@@ -46,6 +46,7 @@ def test_bootstrap_routes_all_cloud_mutations_through_terraform() -> None:
     assert "verify_secret_versions" in source
     assert "gh workflow run deploy.yml" in source
     assert ".branch_protection.admin_enforcement == true" in source
+    assert ".firestore_database_name == $database" in source
     for direct_mutation in (
         "gcloud run deploy",
         "gcloud run services update",

@@ -51,7 +51,7 @@ with a complete domain; service-account addresses are rejected.
 | Workload Identity pool/provider | `sai-dev-github` / `github-actions` | Accepts only the configured repository ID, `master`, and `gcp-dev` Environment |
 | Secret Manager secrets | `sai-dev-api-key-pepper`, `sai-dev-task-signing-hmac` | Random initial versions are added only when no enabled version exists |
 | Cloud Tasks queue | `sai-dev-run-dispatch` | One dispatch per second, one concurrent delivery, bounded retries |
-| Firestore database | `(default)` in `europe-west3` | Native mode, deletion protection, PITR, and `ABANDON` deletion policy |
+| Firestore database | `sai-dev` in `europe-west3` | Named Native-mode database with deletion protection, PITR, and `ABANDON` deletion policy |
 | Firestore composite indexes | `sessions`, `runs`, `run_events`, `audit_entries`, `quota_execution_leases`, `quota_sse_leases` | Query paths required by the API, shared security state, and quotas |
 | Artifact Registry | `assessment-images` | Immutable Docker tags and digest-pinned deployment |
 | Cloud Run services | `sai-dev-api`, `sai-dev-worker` | Both scale to zero and are capped at one instance in the test cell |
@@ -90,15 +90,16 @@ applied Terraform state.
 
 | Principal | Scope | Role or permissions |
 |---|---|---|
-| API service account | Project | `roles/datastore.user` |
-| Worker service account | Project | `roles/datastore.user` |
+| API service account | `sai-dev` Firestore database condition | `roles/datastore.user` |
+| Worker service account | `sai-dev` Firestore database condition | `roles/datastore.user` |
 | API and worker service accounts | Each of the two secrets | `roles/secretmanager.secretAccessor` |
 | API service account | Dispatch queue | `roles/cloudtasks.enqueuer`, `roles/cloudtasks.taskDeleter`, `roles/cloudtasks.viewer` |
 | Worker service account | Dispatch queue | `roles/cloudtasks.taskDeleter`, `roles/cloudtasks.viewer` |
 | Tasks service account | Worker Cloud Run service | `roles/run.invoker` |
 | Cloud Tasks service agent | Tasks service account | `roles/iam.serviceAccountTokenCreator` |
 | GitHub repository principal | Deployer service account | `roles/iam.workloadIdentityUser` |
-| Deployer service account | Project | `roles/artifactregistry.admin`, `roles/datastore.indexAdmin`, `roles/logging.configWriter`, `roles/monitoring.notificationChannelEditor`, `roles/serviceusage.serviceUsageAdmin`, and the custom role below |
+| Deployer service account | Project | `roles/artifactregistry.admin`, `roles/logging.configWriter`, `roles/monitoring.notificationChannelEditor`, `roles/serviceusage.serviceUsageAdmin`, and the custom role below |
+| Deployer service account | `sai-dev` Firestore database condition | `roles/datastore.indexAdmin` |
 | Deployer service account | API and worker service accounts | `roles/iam.serviceAccountUser` |
 | Deployer service account | Application state bucket | `roles/storage.objectAdmin` |
 | Deployer service account | Artifact Registry repository | `roles/artifactregistry.writer` |
@@ -109,7 +110,6 @@ The deployer custom role contains exactly these permissions:
 
 ```text
 datastore.databases.create
-datastore.databases.delete
 datastore.databases.getMetadata
 datastore.databases.list
 datastore.databases.update
@@ -125,9 +125,11 @@ run.services.get
 run.services.update
 ```
 
-The deployer has no access to the bootstrap state bucket, no secret payload
-access, no queue-administration role, no project IAM administration, and no
-service-account key.
+The deployer has no database-delete permission, no access to the bootstrap state
+bucket, no secret payload access, no queue-administration role, no project IAM
+administration, and no service-account key. The named database and conditional
+data/index bindings keep the assessment identities out of any pre-existing
+`(default)` database used by another service in the same project.
 
 ## GitHub entities
 

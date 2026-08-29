@@ -171,24 +171,27 @@ def test_no_keys_or_wildcard_principals_are_defined() -> None:
 
 def test_project_roles_match_reviewed_allowlist() -> None:
     locals_tf = read(BOOTSTRAP / "locals.tf")
+    main_tf = read(BOOTSTRAP / "main.tf")
     identity_variables = read(IDENTITY / "variables.tf")
 
-    expected_roles = {
+    expected_unconditional_roles = {
         "roles/artifactregistry.admin",
-        "roles/datastore.indexAdmin",
-        "roles/datastore.user",
         "roles/logging.configWriter",
         "roles/monitoring.notificationChannelEditor",
         "roles/serviceusage.serviceUsageAdmin",
     }
 
-    for role in expected_roles:
+    for role in expected_unconditional_roles:
         assert f'"{role}"' in locals_tf
 
     role_lines = set(re.findall(r'"(roles/[A-Za-z0-9_.]+)"', locals_tf))
-    assert role_lines == expected_roles
-    assert locals_tf.count('project_roles = ["roles/datastore.user"]') == 2
+    assert role_lines == expected_unconditional_roles
+    assert locals_tf.count("project_roles = []") == 3
     assert "project_roles = local.deployer_project_roles" in locals_tf
+    assert 'role    = "roles/datastore.user"' in main_tf
+    assert 'role    = "roles/datastore.indexAdmin"' in main_tf
+    assert main_tf.count("resource.name ==") >= 2
+    assert "local.firestore_database_name" in main_tf
     assert '["roles/owner", "roles/editor", "roles/viewer"]' in identity_variables
     assert "role == trimspace(role)" in identity_variables
     assert 'regex("^roles/[A-Za-z0-9_.]+$", role)' in identity_variables
@@ -233,7 +236,6 @@ def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
 
     expected_custom_permissions = {
         "datastore.databases.create",
-        "datastore.databases.delete",
         "datastore.databases.getMetadata",
         "datastore.databases.list",
         "datastore.databases.update",
@@ -258,6 +260,7 @@ def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
     }
     assert permission_lines == expected_custom_permissions
     assert "run.routes.invoke" not in permission_lines
+    assert "datastore.databases.delete" not in permission_lines
     assert "run.services.sshRoot" not in permission_lines
     assert not any(
         permission.endswith(".setIamPolicy") for permission in permission_lines

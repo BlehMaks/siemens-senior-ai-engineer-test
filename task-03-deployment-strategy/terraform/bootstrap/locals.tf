@@ -26,9 +26,10 @@ locals {
     data.github_repository.target[0].repo_id,
   ) : null
 
-  github_owner           = split("/", var.github_repository)[0]
-  github_repository_name = split("/", var.github_repository)[1]
-  worker_service_name    = "${var.system_code}-${var.environment}-worker"
+  github_owner            = split("/", var.github_repository)[0]
+  github_repository_name  = split("/", var.github_repository)[1]
+  firestore_database_name = "${var.system_code}-${var.environment}"
+  worker_service_name     = "${var.system_code}-${var.environment}-worker"
   worker_service_url = format(
     "https://%s-%s.%s.run.app",
     local.worker_service_name,
@@ -53,7 +54,6 @@ locals {
 
   deployer_project_permissions = toset([
     "datastore.databases.create",
-    "datastore.databases.delete",
     "datastore.databases.getMetadata",
     "datastore.databases.list",
     "datastore.databases.update",
@@ -71,7 +71,6 @@ locals {
 
   deployer_project_roles = toset([
     "roles/artifactregistry.admin",
-    "roles/datastore.indexAdmin",
     "roles/logging.configWriter",
     "roles/monitoring.notificationChannelEditor",
     "roles/serviceusage.serviceUsageAdmin",
@@ -82,13 +81,13 @@ locals {
       account_id    = "${var.system_code}-${var.environment}-api"
       display_name  = "Assessment API runtime"
       description   = "Runtime identity for the assignment API service."
-      project_roles = ["roles/datastore.user"]
+      project_roles = []
     }
     worker = {
       account_id    = "${var.system_code}-${var.environment}-worker"
       display_name  = "Assessment worker runtime"
       description   = "Runtime identity for the assignment worker service."
-      project_roles = ["roles/datastore.user"]
+      project_roles = []
     }
     tasks = {
       account_id    = "${var.system_code}-${var.environment}-tasks"

@@ -94,13 +94,18 @@ bootstrap root using the privileged backend
   -> Secret Manager containers and initial random versions
   -> authenticated Cloud Tasks queue
 deploy.yml
-  -> tested image, Artifact Registry, Firestore
+  -> tested image, Artifact Registry, named sai-dev Firestore database
   -> Cloud Run API and worker, monitoring and budget resources
 ```
 
 Secret values are generated during the Terraform apply by a local provisioner.
 They are sent to `gcloud secrets versions add` over stdin, so the payloads do not
 appear in Terraform state, the process arguments, or GitHub variables.
+
+The assessment never adopts the project's `(default)` Firestore database. It
+creates `sai-dev` in `europe-west3`, passes that name to both Cloud Run services,
+and conditions runtime data and deployer index roles on that database. Existing
+project workloads keep their own database and IAM boundary.
 
 ## Plan, apply, verify, and deploy
 

@@ -24,10 +24,12 @@ is committed.
 ## Default posture
 
 - one explicit region: `europe-west3`;
-- Firestore delete protection enabled and Terraform destroy set to `ABANDON`;
+- the named `sai-dev` Firestore database uses delete protection and Terraform
+  destroy set to `ABANDON`, leaving any project `(default)` database untouched;
 - Artifact Registry uses immutable tags;
-- bootstrap grants `roles/datastore.user` and resource-scoped
-  `roles/secretmanager.secretAccessor` only to the API and worker identities;
+- bootstrap grants database-conditioned `roles/datastore.user` and
+  resource-scoped `roles/secretmanager.secretAccessor` only to the API and worker
+  identities;
 - bootstrap also owns the queue and Cloud Run invoker policies after these
   deterministic application services have been created; this stack exposes the
   expected queue and IAM contracts but never edits those resources or policies;

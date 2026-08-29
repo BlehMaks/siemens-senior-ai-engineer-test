@@ -98,6 +98,15 @@ run "github_wif_plans_in_one_pass" {
   }
 
   assert {
+    condition = (
+      output.runtime_policy.firestore_database_name == "sai-dev" &&
+      output.runtime_policy.firestore_runtime_binding_count == 2 &&
+      output.runtime_policy.firestore_index_binding_count == 1
+    )
+    error_message = "Runtime data and deployer index access must be isolated to the named assessment database."
+  }
+
+  assert {
     condition     = !output.runtime_policy.cloud_run_iam_enabled
     error_message = "Cloud Run IAM must remain disabled until both application services exist."
   }

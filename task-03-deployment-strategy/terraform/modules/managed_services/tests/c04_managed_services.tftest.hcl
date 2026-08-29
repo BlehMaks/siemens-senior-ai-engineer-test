@@ -19,6 +19,11 @@ run "default_contract_is_low_cost_and_container_only" {
   command = plan
 
   assert {
+    condition     = output.firestore.name == "sai-dev"
+    error_message = "The assessment must use its own named Firestore database."
+  }
+
+  assert {
     condition     = output.firestore.location == "europe-west3"
     error_message = "Firestore must stay in the configured region."
   }

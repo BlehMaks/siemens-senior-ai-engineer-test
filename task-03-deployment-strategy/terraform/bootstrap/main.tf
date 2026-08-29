@@ -118,6 +118,32 @@ module "deployer_identity" {
   depends_on = [google_project_service.required]
 }
 
+resource "google_project_iam_member" "runtime_firestore_user" {
+  for_each = toset(["api", "worker"])
+
+  project = var.project_id
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${module.identity[each.value].email}"
+
+  condition {
+    title       = "${replace(var.system_code, "-", "_")}_${replace(var.environment, "-", "_")}_firestore_only"
+    description = "Limit assessment runtime data access to its named Firestore database."
+    expression  = "resource.name == \"projects/${var.project_id}/databases/${local.firestore_database_name}\""
+  }
+}
+
+resource "google_project_iam_member" "deployer_firestore_index_admin" {
+  project = var.project_id
+  role    = "roles/datastore.indexAdmin"
+  member  = "serviceAccount:${module.deployer_identity.email}"
+
+  condition {
+    title       = "${replace(var.system_code, "-", "_")}_${replace(var.environment, "-", "_")}_firestore_indexes"
+    description = "Limit Terraform index operations to the assessment database."
+    expression  = "resource.name == \"projects/${var.project_id}/databases/${local.firestore_database_name}\""
+  }
+}
+
 resource "google_secret_manager_secret_iam_member" "api_pepper_reader" {
   for_each = toset(["api", "worker"])
 

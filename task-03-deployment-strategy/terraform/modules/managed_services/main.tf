@@ -16,6 +16,8 @@ locals {
     },
   )
 
+  firestore_database_name = "${var.system_code}-${var.environment}"
+
   budget_enabled = (
     var.billing_account_id != "" &&
     var.project_number != "" &&
@@ -36,7 +38,7 @@ resource "google_firestore_database" "assessment" {
   provider = google-beta
 
   project                           = var.project_id
-  name                              = "(default)"
+  name                              = local.firestore_database_name
   location_id                       = var.region
   type                              = var.firestore_type
   concurrency_mode                  = "OPTIMISTIC"
