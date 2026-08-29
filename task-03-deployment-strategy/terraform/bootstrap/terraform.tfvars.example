@@ -8,12 +8,10 @@ secret_ids = {
   task_signing_hmac = "sai-dev-task-signing-hmac"
 }
 enable_github_wif    = true
-enable_runtime_policy = false
-api_allow_unauthenticated = true
 github_repository    = "example-org/siemens-senior-ai-engineer-test"
-github_repository_id = "123456789"
 github_branch        = "master"
 github_environment   = "gcp-dev"
+github_reviewer      = "example-reviewer"
 
 labels = {
   owner = "platform"

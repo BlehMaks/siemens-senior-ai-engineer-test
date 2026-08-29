@@ -1,14 +1,32 @@
 mock_provider "google" {
   override_data {
-    target = data.google_cloud_run_v2_service.worker
+    target = data.google_project.current
     values = {
-      name = "sai-dev-worker"
-      uri  = "https://sai-dev-worker-example.europe-west3.run.app"
+      number = "123456789012"
     }
   }
 }
 
 mock_provider "google-beta" {}
+
+mock_provider "github" {
+  override_data {
+    target = data.github_repository.target
+    values = {
+      name      = "siemens-senior-ai-engineer-test"
+      full_name = "example-org/siemens-senior-ai-engineer-test"
+      repo_id   = 123456789
+    }
+  }
+
+  override_data {
+    target = data.github_user.reviewer
+    values = {
+      id    = 24680
+      login = "example-reviewer"
+    }
+  }
+}
 
 run "github_wif_plans_in_one_pass" {
   command = plan
@@ -18,13 +36,13 @@ run "github_wif_plans_in_one_pass" {
   }
 
   variables {
-    project_id           = "contract-assignment-dev"
-    state_bucket_name    = "contract-assignment-dev-tf-state"
-    enable_github_wif    = true
-    github_repository    = "example-org/siemens-senior-ai-engineer-test"
-    github_repository_id = "123456789"
-    github_branch        = "main"
-    github_environment   = "dev"
+    project_id         = "contract-assignment-dev"
+    state_bucket_name  = "contract-assignment-dev-tf-state"
+    enable_github_wif  = true
+    github_repository  = "example-org/siemens-senior-ai-engineer-test"
+    github_branch      = "main"
+    github_environment = "dev"
+    github_reviewer    = "example-reviewer"
   }
 
   assert {
@@ -58,6 +76,14 @@ run "github_wif_plans_in_one_pass" {
   }
 
   assert {
+    condition = toset(google_project_iam_custom_role.deployer_cloud_run_iam.permissions) == toset([
+      "run.services.getIamPolicy",
+      "run.services.setIamPolicy",
+    ])
+    error_message = "The conditional Cloud Run IAM role must contain only policy read and write permissions."
+  }
+
+  assert {
     condition     = length(output.secret_accessors.api_key_pepper) == 2
     error_message = "Only the API and worker identities may read the API-key pepper."
   }
@@ -73,12 +99,18 @@ run "github_wif_plans_in_one_pass" {
   }
 
   assert {
-    condition     = !output.runtime_policy.enabled && output.runtime_policy.dispatch_queue_count == 0 && output.runtime_policy.queue_binding_count == 0 && output.runtime_policy.worker_invoker_binding_count == 0
-    error_message = "The queue and runtime policies must wait until the application services exist."
+    condition     = output.runtime_policy.dispatch_queue_count == 1 && output.runtime_policy.queue_binding_count == 5
+    error_message = "The queue and its five runtime bindings must be ready before the first application deployment."
+  }
+
+
+  assert {
+    condition     = output.github_delivery.repository_id == "123456789" && length(output.github_delivery.variables) >= 10
+    error_message = "GitHub delivery settings must derive the immutable repository ID and manage the environment variables."
   }
 }
 
-run "human_bootstrap_owns_runtime_policies" {
+run "human_bootstrap_owns_queue_and_token_policy" {
   command = plan
 
   plan_options {
@@ -86,21 +118,9 @@ run "human_bootstrap_owns_runtime_policies" {
   }
 
   variables {
-    project_id                = "contract-assignment-dev"
-    state_bucket_name         = "contract-assignment-dev-tf-state"
-    enable_github_wif         = false
-    enable_runtime_policy     = true
-    api_allow_unauthenticated = true
-  }
-
-  assert {
-    condition     = output.runtime_policy.api_public_invoker_enabled
-    error_message = "Baseline bootstrap policy must expose only the API invocation boundary."
-  }
-
-  assert {
-    condition     = output.runtime_policy.worker_invoker_binding_count == 1
-    error_message = "Only one bootstrap-owned worker invoker policy is expected."
+    project_id        = "contract-assignment-dev"
+    state_bucket_name = "contract-assignment-dev-tf-state"
+    enable_github_wif = false
   }
 
   assert {
@@ -126,7 +146,6 @@ run "inverted_queue_backoff_fails_closed" {
     project_id                = "contract-assignment-dev"
     state_bucket_name         = "contract-assignment-dev-tf-state"
     enable_github_wif         = false
-    enable_runtime_policy     = true
     queue_min_backoff_seconds = 100
     queue_max_backoff_seconds = 60
   }
@@ -141,7 +160,6 @@ run "unbounded_retry_window_fails_closed" {
     project_id              = "contract-assignment-dev"
     state_bucket_name       = "contract-assignment-dev-tf-state"
     enable_github_wif       = false
-    enable_runtime_policy   = true
     queue_max_retry_seconds = 0
   }
 
@@ -164,7 +182,7 @@ run "invalid_or_colliding_secret_ids_fail_closed" {
   expect_failures = [var.secret_ids]
 }
 
-run "disabled_wif_needs_no_repository_id" {
+run "disabled_wif_needs_no_github_reviewer" {
   command = plan
 
   variables {

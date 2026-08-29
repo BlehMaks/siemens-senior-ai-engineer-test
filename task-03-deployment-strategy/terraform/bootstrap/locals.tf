@@ -23,8 +23,34 @@ locals {
   github_principal = var.enable_github_wif ? format(
     "principalSet://iam.googleapis.com/%s/attribute.repository_id/%s",
     google_iam_workload_identity_pool.github[0].name,
-    var.github_repository_id,
+    data.github_repository.target[0].repo_id,
   ) : null
+
+  github_owner           = split("/", var.github_repository)[0]
+  github_repository_name = split("/", var.github_repository)[1]
+  worker_service_name    = "${var.system_code}-${var.environment}-worker"
+  worker_service_url = format(
+    "https://%s-%s.%s.run.app",
+    local.worker_service_name,
+    data.google_project.current.number,
+    var.region,
+  )
+
+  github_environment_variables = var.enable_github_wif ? {
+    GCP_API_SERVICE_ACCOUNT        = module.identity["api"].email
+    GCP_BILLING_ACCOUNT_ID         = var.billing_account_id
+    GCP_BUDGET_NOTIFICATION_EMAILS = jsonencode(sort(tolist(var.budget_notification_emails)))
+    GCP_CI_SERVICE_ACCOUNT         = module.identity["ci"].email
+    GCP_DEPLOYER_SERVICE_ACCOUNT   = module.deployer_identity.email
+    GCP_PROJECT_ID                 = var.project_id
+    GCP_PROJECT_NUMBER             = tostring(data.google_project.current.number)
+    GCP_REGION                     = var.region
+    GCP_SECRET_IDS                 = jsonencode(var.secret_ids)
+    GCP_TASKS_SERVICE_ACCOUNT      = module.identity["tasks"].email
+    GCP_TERRAFORM_STATE_BUCKET     = var.state_bucket_name
+    GCP_WORKER_SERVICE_ACCOUNT     = module.identity["worker"].email
+    GCP_WORKLOAD_IDENTITY_PROVIDER = google_iam_workload_identity_pool_provider.github[0].name
+  } : {}
 
   deployer_project_permissions = toset([
     "billing.resourcebudgets.read",
@@ -43,8 +69,12 @@ locals {
     "run.services.create",
     "run.services.delete",
     "run.services.get",
-    "run.services.getIamPolicy",
     "run.services.update",
+  ])
+
+  deployer_cloud_run_iam_permissions = toset([
+    "run.services.getIamPolicy",
+    "run.services.setIamPolicy",
   ])
 
   deployer_project_roles = toset([

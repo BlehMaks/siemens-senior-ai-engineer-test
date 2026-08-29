@@ -55,8 +55,18 @@ run "default_contract_is_bounded_and_digest_pinned" {
   }
 
   assert {
-    condition     = output.dispatch_queue.ownership == "human-bootstrap"
-    error_message = "The application stack must declare, but never own, the dispatch queue."
+    condition     = output.dispatch_queue.ownership == "bootstrap"
+    error_message = "The application stack must use the bootstrap-owned dispatch queue."
+  }
+
+  assert {
+    condition     = output.iam_contract.worker_invoker_binding_count == 1
+    error_message = "The application stack must own one authoritative worker invoker binding."
+  }
+
+  assert {
+    condition     = output.iam_contract.api_public_invoker_count == 1
+    error_message = "Baseline mode must grant only the API public invoker binding."
   }
 
   assert {
@@ -113,6 +123,11 @@ run "hardened_api_mode_blocks_url_bypass_and_keeps_lb_usable" {
   assert {
     condition     = !output.api_service.public_invoker_required
     error_message = "Hardened mode must not grant unauthenticated Cloud Run invocation."
+  }
+
+  assert {
+    condition     = output.iam_contract.api_public_invoker_count == 0
+    error_message = "Hardened mode must create no public API IAM member."
   }
 
 }

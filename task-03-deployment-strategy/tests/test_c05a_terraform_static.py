@@ -41,7 +41,14 @@ def test_run_services_keeps_worker_private_and_oidc_bound() -> None:
 
     assert source.count("invoker_iam_disabled = false") == 2
     assert "ingress              = var.worker_ingress" in source
-    assert "google_cloud_run_v2_service_iam_" not in source
+    assert (
+        'resource "google_cloud_run_v2_service_iam_binding" "worker_invoker"' in source
+    )
+    assert 'members  = ["serviceAccount:${var.tasks_service_account_email}"]' in source
+    assert (
+        'resource "google_cloud_run_v2_service_iam_member" "api_public_invoker"'
+        in source
+    )
     assert "google_cloud_tasks_queue_iam_" not in source
     assert "google_service_account_iam_" not in source
     assert 'worker_invoker_role            = "roles/run.invoker"' in outputs
@@ -52,11 +59,8 @@ def test_run_services_keeps_worker_private_and_oidc_bound() -> None:
     )
     assert 'resource "google_cloud_tasks_queue"' not in source
     assert 'service_account_email = module.identity["tasks"].email' in bootstrap
-    assert (
-        "audience              = data.google_cloud_run_v2_service.worker[0].uri"
-        in bootstrap
-    )
-    assert "allUsers" not in source
+    assert "audience              = local.worker_service_url" in bootstrap
+    assert source.count('member   = "allUsers"') == 1
     assert "allAuthenticatedUsers" not in source
 
 
@@ -91,13 +95,14 @@ def test_run_services_is_digest_pinned_and_bounded() -> None:
     assert "var.queue_max_retry_seconds >= 1" in bootstrap_variables
 
 
-def test_human_bootstrap_owns_the_cloud_tasks_queue() -> None:
+def test_bootstrap_owns_the_cloud_tasks_queue_before_application_deploy() -> None:
     source = read(RUN_SERVICES_MAIN)
     bootstrap = read(BOOTSTRAP_MAIN)
 
     assert 'resource "google_cloud_tasks_queue" "dispatch"' not in source
     assert 'resource "google_cloud_tasks_queue" "dispatch"' in bootstrap
-    assert "count = var.enable_runtime_policy ? 1 : 0" in bootstrap
+    assert "enable_runtime_policy" not in bootstrap
+    assert "local.worker_service_url" in bootstrap
     assert "cloudtasks.queues.update" not in read(
         TERRAFORM_ROOT / "bootstrap" / "locals.tf"
     )

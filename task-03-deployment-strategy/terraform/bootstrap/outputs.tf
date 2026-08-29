@@ -1,6 +1,6 @@
 output "state_bucket_name" {
-  description = "GCS bucket that later Terraform stacks can use as their remote backend."
-  value       = google_storage_bucket.terraform_state.name
+  description = "Foundation-owned GCS bucket used by this bootstrap and later Terraform stacks."
+  value       = var.state_bucket_name
 }
 
 output "workload_identity_provider_name" {
@@ -49,21 +49,19 @@ output "secret_accessors" {
 }
 
 output "runtime_policy" {
-  description = "Human-bootstrap queue and IAM applied after the deterministic services exist."
+  description = "Bootstrap-owned queue, identity, and runtime access policy."
   value = {
-    enabled                        = var.enable_runtime_policy
-    api_public_invoker_enabled     = var.enable_runtime_policy && var.api_allow_unauthenticated
-    dispatch_queue_count           = length(google_cloud_tasks_queue.dispatch)
+    dispatch_queue_count           = 1
     queue_binding_count            = length(google_cloud_tasks_queue_iam_member.runtime)
     tasks_service_agent_member     = google_service_account_iam_member.tasks_service_agent_token_creator.member
     tasks_service_agent_token_role = google_service_account_iam_member.tasks_service_agent_token_creator.role
-    worker_invoker_binding_count   = length(google_cloud_run_v2_service_iam_binding.worker_invoker)
+    cloud_run_iam_role             = google_project_iam_custom_role.deployer_cloud_run_iam.name
   }
 }
 
 output "dispatch_queue" {
-  description = "Human-bootstrap-owned authenticated Cloud Tasks queue, or null before runtime policy is enabled."
-  value = var.enable_runtime_policy ? {
+  description = "Bootstrap-owned authenticated Cloud Tasks queue."
+  value = {
     name                      = "${var.system_code}-${var.environment}-run-dispatch"
     location                  = var.region
     max_dispatches_per_second = var.queue_max_dispatches_per_second
@@ -73,16 +71,28 @@ output "dispatch_queue" {
     min_backoff               = "${var.queue_min_backoff_seconds}s"
     max_backoff               = "${var.queue_max_backoff_seconds}s"
     oidc_service_account      = module.identity["tasks"].email
-    oidc_audience             = data.google_cloud_run_v2_service.worker[0].uri
-    target_host               = replace(data.google_cloud_run_v2_service.worker[0].uri, "https://", "")
+    oidc_audience             = local.worker_service_url
+    target_host               = replace(local.worker_service_url, "https://", "")
     target_path               = var.worker_dispatch_path
-  } : null
+  }
 }
 
 output "remote_backend" {
   description = "Backend stanza values for later application stacks."
   value = {
-    bucket = google_storage_bucket.terraform_state.name
+    bucket = var.state_bucket_name
     prefix = "assessment"
   }
+}
+
+output "github_delivery" {
+  description = "Terraform-managed GitHub delivery boundary, or null when GitHub WIF is disabled."
+  value = var.enable_github_wif ? {
+    repository_id = tostring(data.github_repository.target[0].repo_id)
+    repository    = var.github_repository
+    branch        = var.github_branch
+    environment   = github_repository_environment.deployment[0].environment
+    reviewer      = var.github_reviewer
+    variables     = sort(keys(github_actions_environment_variable.delivery))
+  } : null
 }

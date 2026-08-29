@@ -3,7 +3,9 @@ from pathlib import Path
 
 TASK_ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = TASK_ROOT / "terraform" / "bootstrap"
+STATE_BUCKET = TASK_ROOT / "terraform" / "state_bucket"
 IDENTITY = TASK_ROOT / "terraform" / "modules" / "identity"
+RUN_SERVICES = TASK_ROOT / "terraform" / "modules" / "run_services"
 
 
 def read(path: Path) -> str:
@@ -14,28 +16,39 @@ def test_c03_expected_files_exist() -> None:
     expected = {
         BOOTSTRAP / ".terraform.lock.hcl",
         BOOTSTRAP / "README.md",
+        BOOTSTRAP / "github.tf",
         BOOTSTRAP / "locals.tf",
         BOOTSTRAP / "main.tf",
         BOOTSTRAP / "outputs.tf",
         BOOTSTRAP / "terraform.tfvars.example",
+        BOOTSTRAP / "secret_versions.tf",
         BOOTSTRAP / "variables.tf",
         BOOTSTRAP / "versions.tf",
         IDENTITY / "main.tf",
         IDENTITY / "outputs.tf",
         IDENTITY / "variables.tf",
+        STATE_BUCKET / ".terraform.lock.hcl",
+        STATE_BUCKET / "main.tf",
+        STATE_BUCKET / "outputs.tf",
+        STATE_BUCKET / "variables.tf",
+        STATE_BUCKET / "versions.tf",
     }
 
     assert {path for path in expected if path.exists()} == expected
 
 
-def test_versions_are_pinned_and_bootstrap_stays_backend_free() -> None:
+def test_versions_are_pinned_and_bootstrap_uses_migratable_gcs_state() -> None:
     versions = read(BOOTSTRAP / "versions.tf")
 
     assert 'required_version = "~> 1.9.0"' in versions
     assert 'source  = "hashicorp/google"' in versions
     assert 'version = "~> 6.47.0"' in versions
     assert 'source  = "hashicorp/google-beta"' in versions
-    assert 'backend "' not in versions
+    assert 'source  = "integrations/github"' in versions
+    assert 'version = "~> 6.13.0"' in versions
+    assert 'backend "gcs" {}' in versions
+    assert "bucket" not in versions
+    assert "prefix" not in versions
 
 
 def test_provider_selections_are_locked_for_supported_platforms() -> None:
@@ -43,9 +56,12 @@ def test_provider_selections_are_locked_for_supported_platforms() -> None:
 
     assert 'provider "registry.terraform.io/hashicorp/google"' in lock
     assert 'provider "registry.terraform.io/hashicorp/google-beta"' in lock
+    assert 'provider "registry.terraform.io/integrations/github"' in lock
     assert lock.count('version     = "6.47.0"') == 2
     assert lock.count('constraints = "~> 6.47.0"') == 2
-    assert lock.count("h1:") >= 4
+    assert 'version     = "6.13.0"' in lock
+    assert 'constraints = "~> 6.13.0"' in lock
+    assert lock.count("h1:") >= 6
 
 
 def test_bootstrap_enables_only_foundational_and_protected_services() -> None:
@@ -69,12 +85,14 @@ def test_bootstrap_enables_only_foundational_and_protected_services() -> None:
 
 
 def test_state_bucket_is_private_versioned_and_not_force_destroyed() -> None:
-    main_tf = read(BOOTSTRAP / "main.tf")
+    main_tf = read(STATE_BUCKET / "main.tf")
+    bootstrap_main = read(BOOTSTRAP / "main.tf")
 
     assert "uniform_bucket_level_access = true" in main_tf
     assert 'public_access_prevention    = "enforced"' in main_tf
     assert "force_destroy               = false" in main_tf
     assert re.search(r"versioning\s*\{\s*enabled = true\s*\}", main_tf)
+    assert 'resource "google_storage_bucket" "terraform_state"' not in bootstrap_main
 
 
 def test_workload_inventory_and_impersonation_chain_are_explicit() -> None:
@@ -93,14 +111,18 @@ def test_workload_inventory_and_impersonation_chain_are_explicit() -> None:
 def test_provider_condition_uses_immutable_id_repo_and_branch_scope() -> None:
     main_tf = read(BOOTSTRAP / "main.tf")
     variables_tf = read(BOOTSTRAP / "variables.tf")
+    github_tf = read(BOOTSTRAP / "github.tf")
 
     assert '"attribute.repository_id" = "assertion.repository_id"' in main_tf
-    assert 'attribute.repository_id == \\"${var.github_repository_id}\\"' in main_tf
+    assert (
+        'attribute.repository_id == \\"${data.github_repository.target[0].repo_id}\\"'
+        in main_tf
+    )
     assert 'attribute.repository == \\"${var.github_repository}\\"' in main_tf
     assert 'attribute.ref == \\"refs/heads/${var.github_branch}\\"' in main_tf
-    assert 'default     = ""' in variables_tf
-    assert "!var.enable_github_wif" in variables_tf
-    assert 'regex("^[1-9][0-9]*$", var.github_repository_id)' in variables_tf
+    assert 'data "github_repository" "target"' in github_tf
+    assert "github_repository_id" not in variables_tf
+    assert 'variable "github_reviewer"' in variables_tf
     assert "token.actions.githubusercontent.com" in main_tf
 
 
@@ -121,6 +143,7 @@ def test_no_keys_or_wildcard_principals_are_defined() -> None:
             BOOTSTRAP / "locals.tf",
             BOOTSTRAP / "main.tf",
             IDENTITY / "main.tf",
+            RUN_SERVICES / "main.tf",
         ]
     )
     terraform_sources = "\n".join(
@@ -161,6 +184,23 @@ def test_project_roles_match_reviewed_allowlist() -> None:
     assert 'regex("^roles/[A-Za-z0-9_.]+$", role)' in identity_variables
 
 
+def test_cloud_run_iam_mutation_is_conditioned_to_two_services() -> None:
+    locals_tf = read(BOOTSTRAP / "locals.tf")
+    main_tf = read(BOOTSTRAP / "main.tf")
+
+    assert '"run.services.setIamPolicy"' in locals_tf
+    assert '"run.services.getIamPolicy"' in locals_tf
+    assert (
+        'resource "google_project_iam_custom_role" "deployer_cloud_run_iam"' in main_tf
+    )
+    resource = main_tf.split(
+        'resource "google_project_iam_member" "deployer_cloud_run_iam"', maxsplit=1
+    )[1].split('resource "', maxsplit=1)[0]
+    assert "resource.type == 'run.googleapis.com/Service'" in resource
+    assert "services/%s-%s-api" in resource
+    assert "services/%s-%s-worker" in resource
+
+
 def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
     locals_tf = read(BOOTSTRAP / "locals.tf")
     main_tf = read(BOOTSTRAP / "main.tf")
@@ -194,7 +234,6 @@ def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
         "run.services.create",
         "run.services.delete",
         "run.services.get",
-        "run.services.getIamPolicy",
         "run.services.update",
     }
     permission_block = locals_tf.split(
@@ -217,10 +256,14 @@ def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
 def test_secrets_and_runtime_access_stay_in_human_bootstrap() -> None:
     main_tf = read(BOOTSTRAP / "main.tf")
     outputs_tf = read(BOOTSTRAP / "outputs.tf")
+    secret_versions_tf = read(BOOTSTRAP / "secret_versions.tf")
 
     assert 'resource "google_secret_manager_secret" "managed"' in main_tf
     assert 'resource "google_secret_manager_secret_version"' not in main_tf
     assert "secret_data" not in main_tf
+    assert "secret_data" not in secret_versions_tf
+    assert 'resource "terraform_data" "secret_version"' in secret_versions_tf
+    assert "seed_secret_version.sh" in secret_versions_tf
     assert "deletion_protection = true" in main_tf
     assert "user_managed" in main_tf
     assert (
@@ -258,9 +301,11 @@ def test_deployer_can_attach_only_the_two_cloud_run_identities() -> None:
     )
 
 
-def test_runtime_policy_is_owned_by_human_bootstrap() -> None:
+def test_queue_is_bootstrapped_before_cloud_run_and_invoker_iam_is_application_owned() -> (
+    None
+):
     main_tf = read(BOOTSTRAP / "main.tf")
-    variables_tf = read(BOOTSTRAP / "variables.tf")
+    run_services_tf = read(RUN_SERVICES / "main.tf")
 
     assert "deployer_tasks_policy_admin" not in main_tf
     assert "iam.serviceAccounts.setIamPolicy" not in main_tf
@@ -274,16 +319,19 @@ def test_runtime_policy_is_owned_by_human_bootstrap() -> None:
         in main_tf
     )
     assert 'role               = "roles/iam.serviceAccountTokenCreator"' in main_tf
-    assert 'variable "enable_runtime_policy"' in variables_tf
-    assert "count = var.enable_runtime_policy ? 1 : 0" in main_tf
-    assert (
-        "for_each = var.enable_runtime_policy && var.api_allow_unauthenticated"
-        in main_tf
-    )
-    assert "for_each = var.enable_runtime_policy ? {" in main_tf
+    assert "enable_runtime_policy" not in main_tf
     assert main_tf.count('resource "google_cloud_tasks_queue_iam_member"') == 1
     assert 'resource "google_cloud_tasks_queue" "dispatch"' in main_tf
-    assert "name     = google_cloud_tasks_queue.dispatch[0].name" in main_tf
+    assert "name     = google_cloud_tasks_queue.dispatch.name" in main_tf
+    assert "local.worker_service_url" in main_tf
+    assert (
+        'resource "google_cloud_run_v2_service_iam_binding" "worker_invoker"'
+        in run_services_tf
+    )
+    assert (
+        'resource "google_cloud_run_v2_service_iam_member" "api_public_invoker"'
+        in run_services_tf
+    )
 
 
 def test_deployer_state_access_is_bucket_scoped() -> None:
@@ -297,7 +345,7 @@ def test_deployer_state_access_is_bucket_scoped() -> None:
         'resource "google_service_account_iam_member" "deployer_runtime_user"',
         maxsplit=1,
     )[0]
-    assert "bucket = google_storage_bucket.terraform_state.name" in resource
+    assert "bucket = var.state_bucket_name" in resource
     assert 'role   = "roles/storage.objectAdmin"' in resource
     assert 'member = "serviceAccount:${module.deployer_identity.email}"' in resource
 
@@ -307,7 +355,7 @@ def test_example_tfvars_are_secret_free_and_realistic() -> None:
 
     assert "example-assignment-dev" in example
     assert "siemens-senior-ai-engineer-test" in example
-    assert 'github_repository_id = "123456789"' in example
+    assert "github_repository_id" not in example
     assert "token" not in example.lower()
     assert "private_key" not in example.lower()
     assert "client_secret" not in example.lower()
@@ -315,3 +363,31 @@ def test_example_tfvars_are_secret_free_and_realistic() -> None:
     assert 'task_signing_hmac = "sai-dev-task-signing-hmac"' in example
     assert 'github_branch        = "master"' in example
     assert 'github_environment   = "gcp-dev"' in example
+    assert 'github_reviewer      = "example-reviewer"' in example
+
+
+def test_github_environment_and_delivery_variables_are_terraform_managed() -> None:
+    github_tf = read(BOOTSTRAP / "github.tf")
+    locals_tf = read(BOOTSTRAP / "locals.tf")
+
+    assert 'resource "github_repository_environment" "deployment"' in github_tf
+    assert "reviewers {" in github_tf
+    assert "custom_branch_policies = true" in github_tf
+    assert (
+        'resource "github_repository_environment_deployment_policy" "branch"'
+        in github_tf
+    )
+    assert 'resource "github_actions_environment_variable" "delivery"' in github_tf
+    for variable in {
+        "GCP_PROJECT_ID",
+        "GCP_PROJECT_NUMBER",
+        "GCP_TERRAFORM_STATE_BUCKET",
+        "GCP_WORKLOAD_IDENTITY_PROVIDER",
+        "GCP_CI_SERVICE_ACCOUNT",
+        "GCP_DEPLOYER_SERVICE_ACCOUNT",
+        "GCP_API_SERVICE_ACCOUNT",
+        "GCP_WORKER_SERVICE_ACCOUNT",
+        "GCP_TASKS_SERVICE_ACCOUNT",
+        "GCP_SECRET_IDS",
+    }:
+        assert variable in locals_tf

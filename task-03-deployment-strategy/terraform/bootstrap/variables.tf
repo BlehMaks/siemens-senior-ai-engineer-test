@@ -52,7 +52,7 @@ variable "state_bucket_name" {
 }
 
 variable "secret_ids" {
-  description = "Bootstrap-owned Secret Manager container IDs. Payload versions are added out of band."
+  description = "Bootstrap-owned Secret Manager container IDs."
   type = object({
     api_key_pepper    = string
     task_signing_hmac = string
@@ -74,14 +74,8 @@ variable "secret_ids" {
   }
 }
 
-variable "enable_runtime_policy" {
-  description = "Apply runtime service and queue IAM after the application resources exist."
-  type        = bool
-  default     = false
-}
-
-variable "api_allow_unauthenticated" {
-  description = "Grant public API invocation when the post-deployment runtime policy is enabled."
+variable "seed_secret_versions" {
+  description = "Create an initial random version for an empty bootstrap-owned secret."
   type        = bool
   default     = true
 }
@@ -184,6 +178,34 @@ variable "labels" {
   }
 }
 
+variable "billing_account_id" {
+  description = "Optional billing account ID copied into the protected GitHub environment."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.billing_account_id == "" ||
+      can(regex("^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$", var.billing_account_id))
+    )
+    error_message = "billing_account_id must be empty or a canonical Cloud Billing account ID."
+  }
+}
+
+variable "budget_notification_emails" {
+  description = "Optional budget recipients copied into the protected GitHub environment."
+  type        = set(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for address in var.budget_notification_emails :
+      address == trimspace(address) && can(regex("^[^@[:space:]]+@[^@[:space:]]+$", address))
+    ])
+    error_message = "budget_notification_emails must contain trimmed email addresses."
+  }
+}
+
 variable "enable_github_wif" {
   description = "Create the GitHub workload identity pool and provider when true."
   type        = bool
@@ -201,20 +223,6 @@ variable "github_repository" {
   }
 }
 
-variable "github_repository_id" {
-  description = "Immutable numeric GitHub repository ID allowed to federate."
-  type        = string
-  default     = ""
-
-  validation {
-    condition = (
-      (!var.enable_github_wif && var.github_repository_id == "") ||
-      can(regex("^[1-9][0-9]*$", var.github_repository_id))
-    )
-    error_message = "github_repository_id must be empty when WIF is disabled or a positive numeric GitHub repository ID."
-  }
-}
-
 variable "github_branch" {
   description = "Git branch allowed to federate through GitHub OIDC."
   type        = string
@@ -227,14 +235,29 @@ variable "github_branch" {
 }
 
 variable "github_environment" {
-  description = "Optional GitHub Actions environment name that must match the OIDC token."
+  description = "Protected GitHub Actions environment that must match the OIDC token."
+  type        = string
+  default     = "gcp-dev"
+
+  validation {
+    condition = (
+      !var.enable_github_wif ||
+      can(regex("^[A-Za-z0-9_-]+$", var.github_environment))
+    )
+    error_message = "github_environment must be a short GitHub environment name when WIF is enabled."
+  }
+}
+
+variable "github_reviewer" {
+  description = "GitHub login required to approve protected deployment jobs."
   type        = string
   default     = ""
 
   validation {
-    condition = var.github_environment == "" || can(
-      regex("^[A-Za-z0-9_-]+$", var.github_environment)
+    condition = (
+      !var.enable_github_wif ||
+      can(regex("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$", var.github_reviewer))
     )
-    error_message = "github_environment must be empty or a short GitHub environment name."
+    error_message = "github_reviewer must be a valid GitHub login when WIF is enabled."
   }
 }

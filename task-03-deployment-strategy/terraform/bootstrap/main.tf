@@ -6,28 +6,17 @@ resource "google_project_service" "required" {
   disable_on_destroy = false
 }
 
+data "google_project" "current" {
+  project_id = var.project_id
+
+  depends_on = [google_project_service.required]
+}
+
 resource "google_project_service_identity" "cloud_tasks" {
   provider = google-beta
 
   project = var.project_id
   service = "cloudtasks.googleapis.com"
-
-  depends_on = [google_project_service.required]
-}
-
-resource "google_storage_bucket" "terraform_state" {
-  name                        = var.state_bucket_name
-  location                    = var.region
-  project                     = var.project_id
-  storage_class               = "STANDARD"
-  labels                      = local.common_labels
-  uniform_bucket_level_access = true
-  public_access_prevention    = "enforced"
-  force_destroy               = false
-
-  versioning {
-    enabled = true
-  }
 
   depends_on = [google_project_service.required]
 }
@@ -79,10 +68,10 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "attribute.repository_id" = "assertion.repository_id"
   }
   attribute_condition = join(" && ", compact([
-    "attribute.repository_id == \"${var.github_repository_id}\"",
+    "attribute.repository_id == \"${data.github_repository.target[0].repo_id}\"",
     "attribute.repository == \"${var.github_repository}\"",
     "attribute.ref == \"refs/heads/${var.github_branch}\"",
-    var.github_environment == "" ? "" : "attribute.environment == \"${var.github_environment}\"",
+    "attribute.environment == \"${var.github_environment}\"",
   ]))
 
   oidc {
@@ -167,8 +156,41 @@ resource "google_project_iam_member" "deployer_custom_role" {
   member  = "serviceAccount:${module.deployer_identity.email}"
 }
 
+resource "google_project_iam_custom_role" "deployer_cloud_run_iam" {
+  project     = var.project_id
+  role_id     = "${replace(var.system_code, "-", "_")}_${replace(var.environment, "-", "_")}_cloud_run_iam"
+  title       = "Assessment Cloud Run IAM deployer"
+  description = "IAM policy access limited to the two assessment Cloud Run services."
+  permissions = local.deployer_cloud_run_iam_permissions
+  stage       = "GA"
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_project_iam_member" "deployer_cloud_run_iam" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.deployer_cloud_run_iam.name
+  member  = "serviceAccount:${module.deployer_identity.email}"
+
+  condition {
+    title       = "assessment_cloud_run_services_only"
+    description = "Permit IAM changes only on the assessment API and worker services."
+    expression = format(
+      "resource.type == 'run.googleapis.com/Service' && (resource.name == 'projects/%s/locations/%s/services/%s-%s-api' || resource.name == 'projects/%s/locations/%s/services/%s-%s-worker')",
+      var.project_id,
+      var.region,
+      var.system_code,
+      var.environment,
+      var.project_id,
+      var.region,
+      var.system_code,
+      var.environment,
+    )
+  }
+}
+
 resource "google_storage_bucket_iam_member" "deployer_state_objects" {
-  bucket = google_storage_bucket.terraform_state.name
+  bucket = var.state_bucket_name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${module.deployer_identity.email}"
 }
@@ -187,17 +209,7 @@ resource "google_service_account_iam_member" "tasks_service_agent_token_creator"
   member             = "serviceAccount:${google_project_service_identity.cloud_tasks.email}"
 }
 
-data "google_cloud_run_v2_service" "worker" {
-  count = var.enable_runtime_policy ? 1 : 0
-
-  project  = var.project_id
-  location = var.region
-  name     = "${var.system_code}-${var.environment}-worker"
-}
-
 resource "google_cloud_tasks_queue" "dispatch" {
-  count = var.enable_runtime_policy ? 1 : 0
-
   project  = var.project_id
   location = var.region
   name     = "${var.system_code}-${var.environment}-run-dispatch"
@@ -228,7 +240,7 @@ resource "google_cloud_tasks_queue" "dispatch" {
 
     uri_override {
       scheme = "HTTPS"
-      host   = replace(data.google_cloud_run_v2_service.worker[0].uri, "https://", "")
+      host   = replace(local.worker_service_url, "https://", "")
 
       path_override {
         path = var.worker_dispatch_path
@@ -237,7 +249,7 @@ resource "google_cloud_tasks_queue" "dispatch" {
 
     oidc_token {
       service_account_email = module.identity["tasks"].email
-      audience              = data.google_cloud_run_v2_service.worker[0].uri
+      audience              = local.worker_service_url
     }
 
     header_overrides {
@@ -254,28 +266,8 @@ resource "google_cloud_tasks_queue" "dispatch" {
   ]
 }
 
-resource "google_cloud_run_v2_service_iam_binding" "worker_invoker" {
-  count = var.enable_runtime_policy ? 1 : 0
-
-  project  = var.project_id
-  location = var.region
-  name     = data.google_cloud_run_v2_service.worker[0].name
-  role     = "roles/run.invoker"
-  members  = ["serviceAccount:${module.identity["tasks"].email}"]
-}
-
-resource "google_cloud_run_v2_service_iam_member" "api_public_invoker" {
-  for_each = var.enable_runtime_policy && var.api_allow_unauthenticated ? toset(["baseline"]) : toset([])
-
-  project  = var.project_id
-  location = var.region
-  name     = "${var.system_code}-${var.environment}-api"
-  role     = "roles/run.invoker"
-  member   = "allUsers"
-}
-
 resource "google_cloud_tasks_queue_iam_member" "runtime" {
-  for_each = var.enable_runtime_policy ? {
+  for_each = {
     api_enqueuer = {
       role   = "roles/cloudtasks.enqueuer"
       member = module.identity["api"].email
@@ -296,11 +288,11 @@ resource "google_cloud_tasks_queue_iam_member" "runtime" {
       role   = "roles/cloudtasks.viewer"
       member = module.identity["worker"].email
     }
-  } : {}
+  }
 
   project  = var.project_id
   location = var.region
-  name     = google_cloud_tasks_queue.dispatch[0].name
+  name     = google_cloud_tasks_queue.dispatch.name
   role     = each.value.role
   member   = "serviceAccount:${each.value.member}"
 }

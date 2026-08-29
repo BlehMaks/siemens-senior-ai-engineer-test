@@ -38,12 +38,12 @@ output "dispatch_queue" {
     name      = local.dispatch_queue_name
     path      = local.dispatch_queue_path
     location  = var.region
-    ownership = "human-bootstrap"
+    ownership = "bootstrap"
   }
 }
 
 output "iam_contract" {
-  description = "Bootstrap-owned least-privilege invocation and queue policy expected by this module."
+  description = "Least-privilege invocation and queue policy shared by bootstrap and application stacks."
   value = {
     api_queue_enqueuer_role        = "roles/cloudtasks.enqueuer"
     api_queue_enqueuer_member      = "serviceAccount:${var.api_service_account_email}"
@@ -53,6 +53,8 @@ output "iam_contract" {
     task_deleter_role              = "roles/cloudtasks.taskDeleter"
     worker_invoker_members         = ["serviceAccount:${var.tasks_service_account_email}"]
     worker_invoker_role            = "roles/run.invoker"
+    worker_invoker_binding_count   = 1
+    api_public_invoker_count       = length(google_cloud_run_v2_service_iam_member.api_public_invoker)
     tasks_service_agent_token_role = "roles/iam.serviceAccountTokenCreator"
   }
 }

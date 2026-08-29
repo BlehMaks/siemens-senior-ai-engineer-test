@@ -1,6 +1,8 @@
 terraform {
   required_version = "~> 1.9.0"
 
+  backend "gcs" {}
+
   required_providers {
     google = {
       source  = "hashicorp/google"
@@ -9,6 +11,10 @@ terraform {
     google-beta = {
       source  = "hashicorp/google-beta"
       version = "~> 6.47.0"
+    }
+    github = {
+      source  = "integrations/github"
+      version = "~> 6.13.0"
     }
   }
 }
@@ -21,4 +27,8 @@ provider "google" {
 provider "google-beta" {
   project = var.project_id
   region  = var.region
+}
+
+provider "github" {
+  owner = local.github_owner
 }
