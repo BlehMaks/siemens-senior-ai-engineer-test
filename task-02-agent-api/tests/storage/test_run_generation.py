@@ -16,12 +16,17 @@ from storage.test_cloud_adapters import (
 )
 from test_ports_contract import NOW, submission
 
+from agent_api.observability import OperationalTelemetry
 from agent_api.ports import (
     RunParentNotFoundError,
     RunState,
     WorkItem,
 )
-from agent_api.security import FirestoreQuotaLimiter, LimitConfig
+from agent_api.security import (
+    FirestoreAuditRepository,
+    FirestoreQuotaLimiter,
+    LimitConfig,
+)
 from agent_api.storage import (
     CloudTask,
     CloudTasksWorkQueue,
@@ -422,27 +427,66 @@ async def test_worker_acknowledges_a_legacy_delivery_without_claiming() -> None:
 
 
 @pytest.mark.asyncio
-async def test_worker_acknowledges_a_cascade_orphan_before_quota_retry() -> None:
+async def test_late_legacy_delivery_preserves_current_generation_work() -> None:
     store = FakeDocumentStore()
     await _seed_session(store, tenant_id="tenant-one", session_id="session-one")
     runs = FirestoreRunRepository(store)
-    run = (await runs.create(submission())).run
-    work_queue = queue(store, FakeCloudTaskClient())
-    delivered = (await work_queue.enqueue(item(generation_id=run.generation_id))).item
-    assert await runs.delete_run(tenant_id="tenant-one", run_id="run-one")
+    current = (await runs.create(submission())).run
+    client = FakeCloudTaskClient()
+    work_queue = queue(store, client)
+    current_item = item(generation_id=current.generation_id)
+    await work_queue.enqueue(current_item)
+    before = await store.get(collection="work_items", document_id=current_item.work_id)
+    assert before is not None
+    task_name = str(before["task_name"])
     worker = LocalWorker(
         repository=runs,
         queue=work_queue,
         executor=CompletedExecutor(),
         worker_id="worker-one",
         clock=lambda: NOW,
-        limiter=FirestoreQuotaLimiter(store, LimitConfig()),
+    )
+
+    assert await worker.process(current_item.model_copy(update={"generation_id": None}))
+    assert (
+        await store.get(collection="work_items", document_id=current_item.work_id)
+        == before
+    )
+    assert task_name in client._tasks
+
+
+@pytest.mark.asyncio
+async def test_worker_acknowledges_a_cascade_orphan_before_quota_retry() -> None:
+    store = FakeDocumentStore()
+    await _seed_session(store, tenant_id="tenant-one", session_id="session-one")
+    runs = FirestoreRunRepository(store)
+    run = (await runs.create(submission())).run
+    active = (
+        await runs.create(
+            submission(run_id="run-two", idempotency_key="request-key-two")
+        )
+    ).run
+    work_queue = queue(store, FakeCloudTaskClient())
+    delivered = (await work_queue.enqueue(item(generation_id=run.generation_id))).item
+    assert await runs.delete_run(tenant_id="tenant-one", run_id="run-one")
+    limiter = FirestoreQuotaLimiter(store, LimitConfig(max_concurrent_runs=1))
+    assert await limiter.acquire_execution(
+        tenant_id="tenant-one", run_id=active.run_id, at=NOW, lease_seconds=30
+    )
+    worker = LocalWorker(
+        repository=runs,
+        queue=work_queue,
+        executor=CompletedExecutor(),
+        worker_id="worker-one",
+        clock=lambda: NOW,
+        limiter=limiter,
     )
 
     assert await worker.process(delivered)
-    assert not await store.list(
+    leases = await store.list(
         collection="quota_execution_leases", filters={"tenant_id": "tenant-one"}
     )
+    assert len(leases) == 1 and leases[0]["run_id"] == "run-two"
 
 
 @pytest.mark.asyncio
@@ -457,12 +501,22 @@ async def test_worker_acknowledges_stale_delivery_without_claiming_replacement()
     replacement = (await runs.create(submission())).run
     executor = CompletedExecutor()
     work_queue = queue(store, FakeCloudTaskClient())
+    limiter = FirestoreQuotaLimiter(store, LimitConfig(max_concurrent_runs=1))
+    assert await limiter.acquire_execution(
+        tenant_id="tenant-one", run_id=replacement.run_id, at=NOW, lease_seconds=30
+    )
+    telemetry = OperationalTelemetry(
+        pseudonym_key=b"p" * 32,
+        audit=FirestoreAuditRepository(store),
+    )
     worker = LocalWorker(
         repository=runs,
         queue=work_queue,
         executor=executor,
         worker_id="worker-one",
         clock=lambda: NOW,
+        limiter=limiter,
+        telemetry=telemetry,
     )
 
     assert await worker.process(item(generation_id=old_run.generation_id))
@@ -472,3 +526,8 @@ async def test_worker_acknowledges_stale_delivery_without_claiming_replacement()
     assert stored.generation_id == replacement.generation_id
     assert stored.state is RunState.QUEUED
     assert not executor.calls
+    assert any(
+        sample.name == "api_worker_outcomes_total"
+        and sample.labels == (("outcome", "stale"),)
+        for sample in telemetry.snapshot()
+    )

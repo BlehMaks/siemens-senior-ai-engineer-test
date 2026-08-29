@@ -620,6 +620,25 @@ class WorkQueueContract:
         assert await queue.cancel(tenant_id="tenant-one", run_id="run-one") == 0
         assert await queue.cancel(tenant_id="tenant-two", run_id="run-one") == 1
 
+    @pytest.mark.asyncio
+    async def test_discard_removes_only_the_exact_generation(
+        self, queue: WorkQueue
+    ) -> None:
+        item = WorkItem(
+            work_id="work-exact",
+            tenant_id="tenant-one",
+            run_id="run-one",
+            enqueued_at=NOW,
+            not_before=NOW,
+        )
+        stored = (await queue.enqueue(item)).item
+
+        assert not await queue.discard(
+            stored.model_copy(update={"generation_id": "generation-stale"})
+        )
+        assert await queue.discard(stored)
+        assert not await queue.discard(stored)
+
 
 class TestFakeWorkQueue(WorkQueueContract):
     queue_factory = FakeWorkQueue

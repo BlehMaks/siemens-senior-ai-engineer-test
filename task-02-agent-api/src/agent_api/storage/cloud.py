@@ -1242,6 +1242,37 @@ class CloudTasksWorkQueue:
             raise RunParentNotFoundError("work item run does not exist")
         return EnqueueResult(item=stored, created=created)
 
+    async def discard(self, item: WorkItem) -> bool:
+        checked = _checked_item(item)
+        document_id = _document_id(checked.work_id)
+        row = await self._store.get(collection=_WORK_ITEMS, document_id=document_id)
+        if row is None:
+            return False
+        stored = _decode_work_document(row)
+        task_name = _require_text(row, "task_name")
+        index_token = _optional_text(row, "index_token")
+        if (
+            stored != checked
+            or _require_text(row, "document_id") != document_id
+            or _require_text(row, "work_id") != checked.work_id
+            or _require_text(row, "tenant_id") != checked.tenant_id
+            or _require_text(row, "run_id") != checked.run_id
+        ):
+            return False
+        if task_name == self._task_name(checked.work_id, checked.generation_id):
+            deleted = await self._tasks.delete(name=task_name)
+            if not deleted and await self._tasks.get(name=task_name) is not None:
+                return False
+        return await self._store.transaction(
+            partial(
+                _delete_matching_work,
+                document_id=document_id,
+                expected=checked,
+                task_name=task_name,
+                index_token=index_token,
+            )
+        )
+
     async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int:
         checked_tenant = _scope_id(tenant_id)
         checked_run = _scope_id(run_id)

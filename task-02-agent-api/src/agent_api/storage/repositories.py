@@ -1023,6 +1023,23 @@ class SQLiteWorkQueue(_PathRepository):
             )
             return EnqueueResult(item=bound, created=True)
 
+    async def discard(self, item: WorkItem) -> bool:
+        checked = _checked(WorkItem, item)
+        async with _connection(self._path, write=True) as connection:
+            cursor = await connection.execute(
+                "DELETE FROM work_items WHERE work_id = ? AND tenant_id = ? "
+                "AND run_id = ? AND ((generation_id IS NULL AND ? IS NULL) "
+                "OR generation_id = ?)",
+                (
+                    checked.work_id,
+                    checked.tenant_id,
+                    checked.run_id,
+                    checked.generation_id,
+                    checked.generation_id,
+                ),
+            )
+            return cursor.rowcount == 1
+
     async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int:
         scope = (_scope_id(tenant_id), _scope_id(run_id))
         async with _connection(self._path, write=True) as connection:

@@ -40,6 +40,8 @@ class QueueReceiver(Protocol):
         self, *, now: datetime, visibility_seconds: int
     ) -> WorkItem | None: ...
 
+    async def discard(self, item: WorkItem) -> bool: ...
+
     async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int: ...
 
 
@@ -138,8 +140,18 @@ class LocalWorker:
     async def process(self, item: WorkItem) -> bool:
         if item.generation_id is None:
             self._observe_work(item, "stale")
-            await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
+            await self._queue.discard(item)
             return True
+        current = await self._repository.get(
+            tenant_id=item.tenant_id, run_id=item.run_id
+        )
+        if (
+            current is None
+            or current.generation_id != item.generation_id
+            or current.state in TERMINAL_RUN_STATES
+            or current.cancellation_requested_at is not None
+        ):
+            return await self._process_admitted(item, permit=None)
         permit: ExecutionPermit | None = None
         if self._limiter is not None:
             permit = await self._limiter.acquire_execution(

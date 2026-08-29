@@ -386,6 +386,14 @@ class FakeWorkQueue:
                 del self._items[work_id]
             return len(keys)
 
+    async def discard(self, item: WorkItem) -> bool:
+        checked = _checked(WorkItem, item)
+        async with self._lock:
+            if self._items.get(checked.work_id) != checked:
+                return False
+            del self._items[checked.work_id]
+            return True
+
     async def ordered_items(self) -> tuple[WorkItem, ...]:
         """Test-only view; providers are not required to dispatch in this order."""
 

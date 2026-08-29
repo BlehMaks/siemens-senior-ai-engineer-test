@@ -124,6 +124,13 @@ class FakeQueue:
             self.cancel_calls.append((tenant_id, run_id))
             return len(keys)
 
+    async def discard(self, item: WorkItem) -> bool:
+        async with self._lock:
+            if self._items.get(item.work_id) != item:
+                return False
+            del self._items[item.work_id]
+            return True
+
 
 class FakeRunRepository:
     def __init__(self, *runs: RunRecord) -> None:
