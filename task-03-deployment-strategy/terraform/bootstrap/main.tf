@@ -98,7 +98,11 @@ module "identity" {
     : {}
   )
   service_account_user_members = {}
-  token_creator_members        = {}
+  token_creator_members = (
+    each.key == "ci" && local.github_principal != null
+    ? { github = local.github_principal }
+    : {}
+  )
 
   depends_on = [google_project_service.required]
 }
@@ -156,41 +160,8 @@ resource "google_project_iam_member" "deployer_custom_role" {
   member  = "serviceAccount:${module.deployer_identity.email}"
 }
 
-resource "google_project_iam_custom_role" "deployer_cloud_run_iam" {
-  project     = var.project_id
-  role_id     = "${replace(var.system_code, "-", "_")}_${replace(var.environment, "-", "_")}_cloud_run_iam"
-  title       = "Assessment Cloud Run IAM deployer"
-  description = "IAM policy access limited to the two assessment Cloud Run services."
-  permissions = local.deployer_cloud_run_iam_permissions
-  stage       = "GA"
-
-  depends_on = [google_project_service.required]
-}
-
-resource "google_project_iam_member" "deployer_cloud_run_iam" {
-  project = var.project_id
-  role    = google_project_iam_custom_role.deployer_cloud_run_iam.name
-  member  = "serviceAccount:${module.deployer_identity.email}"
-
-  condition {
-    title       = "assessment_cloud_run_services_only"
-    description = "Permit IAM changes only on the assessment API and worker services."
-    expression = format(
-      "resource.type == 'run.googleapis.com/Service' && (resource.name == 'projects/%s/locations/%s/services/%s-%s-api' || resource.name == 'projects/%s/locations/%s/services/%s-%s-worker')",
-      var.project_id,
-      var.region,
-      var.system_code,
-      var.environment,
-      var.project_id,
-      var.region,
-      var.system_code,
-      var.environment,
-    )
-  }
-}
-
 resource "google_storage_bucket_iam_member" "deployer_state_objects" {
-  bucket = var.state_bucket_name
+  bucket = var.application_state_bucket_name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${module.deployer_identity.email}"
 }
@@ -295,4 +266,24 @@ resource "google_cloud_tasks_queue_iam_member" "runtime" {
   name     = google_cloud_tasks_queue.dispatch.name
   role     = each.value.role
   member   = "serviceAccount:${each.value.member}"
+}
+
+resource "google_cloud_run_v2_service_iam_binding" "worker_invoker" {
+  count = var.enable_runtime_policy ? 1 : 0
+
+  project  = var.project_id
+  location = var.region
+  name     = "${var.system_code}-${var.environment}-worker"
+  role     = "roles/run.invoker"
+  members  = ["serviceAccount:${module.identity["tasks"].email}"]
+}
+
+resource "google_cloud_run_v2_service_iam_member" "api_public_invoker" {
+  count = var.enable_runtime_policy && var.api_allow_unauthenticated ? 1 : 0
+
+  project  = var.project_id
+  location = var.region
+  name     = "${var.system_code}-${var.environment}-api"
+  role     = "roles/run.invoker"
+  member   = "allUsers"
 }

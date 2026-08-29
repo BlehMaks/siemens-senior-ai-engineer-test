@@ -1,6 +1,9 @@
-output "state_bucket_name" {
-  description = "Foundation-owned GCS bucket used by this bootstrap and later Terraform stacks."
-  value       = var.state_bucket_name
+output "state_bucket_names" {
+  description = "Foundation-owned state buckets with isolated bootstrap and application access."
+  value = {
+    application = var.application_state_bucket_name
+    bootstrap   = var.bootstrap_state_bucket_name
+  }
 }
 
 output "workload_identity_provider_name" {
@@ -55,7 +58,9 @@ output "runtime_policy" {
     queue_binding_count            = length(google_cloud_tasks_queue_iam_member.runtime)
     tasks_service_agent_member     = google_service_account_iam_member.tasks_service_agent_token_creator.member
     tasks_service_agent_token_role = google_service_account_iam_member.tasks_service_agent_token_creator.role
-    cloud_run_iam_role             = google_project_iam_custom_role.deployer_cloud_run_iam.name
+    cloud_run_iam_enabled          = var.enable_runtime_policy
+    worker_invoker_binding_count   = length(google_cloud_run_v2_service_iam_binding.worker_invoker)
+    api_public_invoker_count       = length(google_cloud_run_v2_service_iam_member.api_public_invoker)
   }
 }
 
@@ -80,7 +85,7 @@ output "dispatch_queue" {
 output "remote_backend" {
   description = "Backend stanza values for later application stacks."
   value = {
-    bucket = var.state_bucket_name
+    bucket = var.application_state_bucket_name
     prefix = "assessment"
   }
 }

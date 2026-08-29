@@ -32,31 +32,54 @@ cleanup() {
 }
 
 bucket_exists() {
-  gcloud storage buckets describe "gs://$TF_VAR_state_bucket_name" \
-    --project "$TF_VAR_project_id" >/dev/null 2>&1
+  local bucket_name=$1 error_output
+  if error_output=$(gcloud storage buckets describe "gs://$bucket_name" \
+    --project "$TF_VAR_project_id" 2>&1); then
+    return 0
+  fi
+  if [[ -z $error_output ]] || grep -Eiq 'not[ -]?found|does not exist|404' <<<"$error_output"; then
+    return 1
+  fi
+  printf '%s\n' "$error_output" >&2
+  fail "could not inspect state bucket $bucket_name"
 }
 
-initialize_bootstrap() {
-  "$TERRAFORM_BIN" -chdir="$terraform_root" init \
+discover_existing_state_buckets() {
+  local existing='{}' scope bucket_name
+  for scope in bootstrap application; do
+    if [[ $scope == bootstrap ]]; then
+      bucket_name=$TF_VAR_bootstrap_state_bucket_name
+    else
+      bucket_name=$TF_VAR_application_state_bucket_name
+    fi
+    if bucket_exists "$bucket_name"; then
+      existing=$(jq -cn \
+        --argjson current "$existing" \
+        --arg scope "$scope" \
+        --arg bucket "$bucket_name" \
+        '$current + {($scope): $bucket}')
+    fi
+  done
+  export TF_VAR_existing_state_buckets=$existing
+}
+
+all_state_buckets_exist() {
+  bucket_exists "$TF_VAR_bootstrap_state_bucket_name" &&
+    bucket_exists "$TF_VAR_application_state_bucket_name"
+}
+
+initialize_state_buckets() {
+  local state_directory="$repository_root/.local/terraform"
+  mkdir -p "$state_directory"
+  "$TERRAFORM_BIN" -chdir="$state_bucket_root" init \
     -input=false \
     -reconfigure \
-    -backend-config="bucket=$TF_VAR_state_bucket_name" \
-    -backend-config="prefix=assessment/bootstrap"
+    -backend-config="path=$state_directory/${TF_VAR_project_id}-state-buckets.tfstate"
+  discover_existing_state_buckets
 }
 
-plan_bootstrap() {
+plan_state_buckets() {
   local plan_file=$1
-  initialize_bootstrap
-  "$TERRAFORM_BIN" -chdir="$terraform_root" plan \
-    -input=false \
-    -lock-timeout=60s \
-    -out="$plan_file"
-  "$TERRAFORM_BIN" -chdir="$terraform_root" show -no-color "$plan_file"
-}
-
-plan_state_bucket() {
-  local plan_file=$1
-  "$TERRAFORM_BIN" -chdir="$state_bucket_root" init -input=false
   "$TERRAFORM_BIN" -chdir="$state_bucket_root" plan \
     -input=false \
     -lock-timeout=60s \
@@ -64,9 +87,105 @@ plan_state_bucket() {
   "$TERRAFORM_BIN" -chdir="$state_bucket_root" show -no-color "$plan_file"
 }
 
+verify_state_buckets() {
+  all_state_buckets_exist || fail "both isolated Terraform state buckets must exist"
+  "$TERRAFORM_BIN" -chdir="$state_bucket_root" plan \
+    -input=false \
+    -lock-timeout=60s \
+    -detailed-exitcode
+}
+
+initialize_bootstrap() {
+  "$TERRAFORM_BIN" -chdir="$terraform_root" init \
+    -input=false \
+    -reconfigure \
+    -backend-config="bucket=$TF_VAR_bootstrap_state_bucket_name" \
+    -backend-config="prefix=assessment/bootstrap"
+}
+
+cloud_run_service_exists() {
+  local service_name=$1
+  gcloud run services describe "$service_name" \
+    --project "$TF_VAR_project_id" \
+    --region "$TF_VAR_region" >/dev/null 2>&1
+}
+
+select_runtime_policy_mode() {
+  if "$TERRAFORM_BIN" -chdir="$terraform_root" state list 2>/dev/null |
+    grep -q '^google_cloud_run_v2_service_iam_'; then
+    export TF_VAR_enable_runtime_policy=true
+    return
+  fi
+
+  local api_exists=false worker_exists=false
+  if cloud_run_service_exists "${TF_VAR_system_code}-${TF_VAR_environment}-api"; then
+    api_exists=true
+  fi
+  if cloud_run_service_exists "${TF_VAR_system_code}-${TF_VAR_environment}-worker"; then
+    worker_exists=true
+  fi
+  [[ $api_exists == "$worker_exists" ]] ||
+    fail "only one expected Cloud Run service exists; repair the application deployment first"
+  export TF_VAR_enable_runtime_policy=$api_exists
+}
+
+plan_bootstrap() {
+  local plan_file=$1
+  "$TERRAFORM_BIN" -chdir="$terraform_root" plan \
+    -input=false \
+    -lock-timeout=60s \
+    -out="$plan_file"
+  "$TERRAFORM_BIN" -chdir="$terraform_root" show -no-color "$plan_file"
+}
+
+enabled_secret_version_exists() {
+  local secret_id=$1 version
+  version=$(gcloud secrets versions list "$secret_id" \
+    --project "$TF_VAR_project_id" \
+    --filter='state=ENABLED' \
+    --limit=1 \
+    --format='value(name)')
+  [[ -n $version ]]
+}
+
+repair_secret_versions() {
+  local key secret_id repair_plan
+  local -a replace_args=()
+  for key in api_key_pepper task_signing_hmac; do
+    secret_id=$(jq -er --arg key "$key" '.[$key]' <<<"$TF_VAR_secret_ids")
+    if ! enabled_secret_version_exists "$secret_id"; then
+      replace_args+=("-replace=terraform_data.secret_version[\"$key\"]")
+    fi
+  done
+  [[ ${#replace_args[@]} -gt 0 ]] || return
+
+  repair_plan="$BOOTSTRAP_TEMP_DIR/secret-repair.tfplan"
+  "$TERRAFORM_BIN" -chdir="$terraform_root" plan \
+    -input=false \
+    -lock-timeout=60s \
+    "${replace_args[@]}" \
+    -out="$repair_plan"
+  "$TERRAFORM_BIN" -chdir="$terraform_root" show -no-color "$repair_plan"
+  "$TERRAFORM_BIN" -chdir="$terraform_root" apply \
+    -input=false \
+    -lock-timeout=60s \
+    "$repair_plan"
+}
+
+verify_secret_versions() {
+  local key secret_id
+  for key in api_key_pepper task_signing_hmac; do
+    secret_id=$(jq -er --arg key "$key" '.[$key]' <<<"$TF_VAR_secret_ids")
+    enabled_secret_version_exists "$secret_id" ||
+      fail "secret $secret_id has no enabled version; rerun bootstrap.sh apply"
+  done
+}
+
 verify_bootstrap() {
-  bucket_exists || fail "Terraform state bucket does not exist"
+  initialize_state_buckets
+  verify_state_buckets
   initialize_bootstrap
+  select_runtime_policy_mode
   "$TERRAFORM_BIN" -chdir="$terraform_root" plan \
     -input=false \
     -lock-timeout=60s \
@@ -74,11 +193,45 @@ verify_bootstrap() {
   "$TERRAFORM_BIN" -chdir="$terraform_root" output -json github_delivery |
     jq -e --arg repository "$TF_VAR_github_repository" \
       '.repository == $repository and (.variables | length) >= 10' >/dev/null
+  verify_secret_versions
   gcloud tasks queues describe "${TF_VAR_system_code}-${TF_VAR_environment}-run-dispatch" \
     --project "$TF_VAR_project_id" \
     --location "$TF_VAR_region" >/dev/null
   printf 'bootstrap verified for %s and %s\n' \
     "$TF_VAR_project_id" "$TF_VAR_github_repository"
+}
+
+apply_bootstrap_plan() {
+  local plan_file=$1
+  "$TERRAFORM_BIN" -chdir="$terraform_root" apply \
+    -input=false \
+    -lock-timeout=60s \
+    "$plan_file"
+  repair_secret_versions
+}
+
+wait_for_deploy_workflow() {
+  local repository=$1 revision=$2 dispatch_time run_id deadline
+  dispatch_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  gh workflow run deploy.yml --repo "$repository" --ref master
+  deadline=$((SECONDS + 300))
+  while ((SECONDS < deadline)); do
+    run_id=$(gh run list \
+      --repo "$repository" \
+      --workflow deploy.yml \
+      --branch master \
+      --event workflow_dispatch \
+      --limit 20 \
+      --json databaseId,createdAt,headSha \
+      --jq "map(select(.headSha == \"$revision\" and .createdAt >= \"$dispatch_time\")) | sort_by(.createdAt) | last | .databaseId // empty")
+    if [[ -n $run_id ]]; then
+      gh run watch "$run_id" --repo "$repository" --exit-status
+      printf 'deployment workflow %s completed for %s\n' "$run_id" "$revision"
+      return
+    fi
+    sleep 5
+  done
+  fail "GitHub did not register the deployment workflow within five minutes"
 }
 
 main() {
@@ -123,47 +276,51 @@ main() {
   export TF_VAR_region=$region
   export TF_VAR_environment=dev
   export TF_VAR_system_code=sai
-  export TF_VAR_state_bucket_name="${project_id}-sai-tf-state"
+  export TF_VAR_bootstrap_state_bucket_name="${project_id}-sai-bootstrap-tf-state"
+  export TF_VAR_application_state_bucket_name="${project_id}-sai-app-tf-state"
   export TF_VAR_enable_github_wif=true
   export TF_VAR_github_repository=$repository
   export TF_VAR_github_branch=master
   export TF_VAR_github_environment=gcp-dev
   export TF_VAR_github_reviewer=$reviewer
   export TF_VAR_seed_secret_versions=true
+  export TF_VAR_enable_runtime_policy=false
+  export TF_VAR_api_allow_unauthenticated=true
+  export TF_VAR_secret_ids='{"api_key_pepper":"sai-dev-api-key-pepper","task_signing_hmac":"sai-dev-task-signing-hmac"}'
   export TF_VAR_billing_account_id=${GCP_BILLING_ACCOUNT_ID:-}
   export TF_VAR_budget_notification_emails=${GCP_BUDGET_NOTIFICATION_EMAILS:-[]}
+
+  BOOTSTRAP_TEMP_DIR=$(mktemp -d -t sai-bootstrap.XXXXXX)
+  trap cleanup EXIT
 
   if [[ $command_name == verify ]]; then
     verify_bootstrap
     exit 0
   fi
 
-  BOOTSTRAP_TEMP_DIR=$(mktemp -d -t sai-bootstrap.XXXXXX)
-  trap cleanup EXIT
-
-  if ! bucket_exists; then
-    state_plan="$BOOTSTRAP_TEMP_DIR/state-bucket.tfplan"
-    plan_state_bucket "$state_plan"
-    if [[ $command_name == plan ]]; then
-      printf '%s\n' \
-        "bootstrap plan is available after Terraform creates the state bucket"
-      exit 0
-    fi
+  initialize_state_buckets
+  state_plan="$BOOTSTRAP_TEMP_DIR/state-buckets.tfplan"
+  plan_state_buckets "$state_plan"
+  if [[ $command_name == plan ]] && ! all_state_buckets_exist; then
+    printf '%s\n' \
+      "bootstrap plan is available after Terraform creates both isolated state buckets"
+    exit 0
+  fi
+  if [[ $command_name != plan ]]; then
     "$TERRAFORM_BIN" -chdir="$state_bucket_root" apply \
       -input=false \
       -lock-timeout=60s \
       "$state_plan"
-    bucket_exists || fail "Terraform did not create the state bucket"
+    all_state_buckets_exist || fail "Terraform did not create both state buckets"
   fi
 
+  initialize_bootstrap
+  select_runtime_policy_mode
   plan_file="$BOOTSTRAP_TEMP_DIR/bootstrap.tfplan"
   plan_bootstrap "$plan_file"
   [[ $command_name != plan ]] || exit 0
 
-  "$TERRAFORM_BIN" -chdir="$terraform_root" apply \
-    -input=false \
-    -lock-timeout=60s \
-    "$plan_file"
+  apply_bootstrap_plan "$plan_file"
   verify_bootstrap
 
   if [[ $command_name == deploy ]]; then
@@ -171,9 +328,13 @@ main() {
     remote_revision=$(gh api "repos/$repository/commits/master" --jq '.sha')
     [[ $local_revision == "$remote_revision" ]] ||
       fail "push the current master revision before dispatching deployment"
-    gh workflow run deploy.yml --repo "$repository" --ref master
-    printf 'deployment workflow dispatched for %s at %s\n' \
-      "$repository" "$local_revision"
+    wait_for_deploy_workflow "$repository" "$local_revision"
+
+    export TF_VAR_enable_runtime_policy=true
+    post_deploy_plan="$BOOTSTRAP_TEMP_DIR/post-deploy-iam.tfplan"
+    plan_bootstrap "$post_deploy_plan"
+    apply_bootstrap_plan "$post_deploy_plan"
+    verify_bootstrap
   fi
 }
 

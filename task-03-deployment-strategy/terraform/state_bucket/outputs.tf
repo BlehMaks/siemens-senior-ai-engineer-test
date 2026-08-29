@@ -1,4 +1,7 @@
-output "state_bucket_name" {
-  description = "GCS bucket used by the remote Terraform backends."
-  value       = google_storage_bucket.terraform_state.name
+output "state_bucket_names" {
+  description = "Isolated GCS buckets for bootstrap and application Terraform state."
+  value = {
+    for scope, bucket in google_storage_bucket.terraform_state :
+    scope => bucket.name
+  }
 }

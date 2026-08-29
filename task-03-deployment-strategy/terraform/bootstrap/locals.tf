@@ -47,7 +47,7 @@ locals {
     GCP_REGION                     = var.region
     GCP_SECRET_IDS                 = jsonencode(var.secret_ids)
     GCP_TASKS_SERVICE_ACCOUNT      = module.identity["tasks"].email
-    GCP_TERRAFORM_STATE_BUCKET     = var.state_bucket_name
+    GCP_TERRAFORM_STATE_BUCKET     = var.application_state_bucket_name
     GCP_WORKER_SERVICE_ACCOUNT     = module.identity["worker"].email
     GCP_WORKLOAD_IDENTITY_PROVIDER = google_iam_workload_identity_pool_provider.github[0].name
   } : {}
@@ -70,11 +70,6 @@ locals {
     "run.services.delete",
     "run.services.get",
     "run.services.update",
-  ])
-
-  deployer_cloud_run_iam_permissions = toset([
-    "run.services.getIamPolicy",
-    "run.services.setIamPolicy",
   ])
 
   deployer_project_roles = toset([

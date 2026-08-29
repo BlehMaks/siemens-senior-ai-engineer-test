@@ -6,7 +6,7 @@ from pathlib import Path
 
 TASK_ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = TASK_ROOT / "scripts" / "bootstrap.sh"
-SEED_SECRET = TASK_ROOT / "scripts" / "seed_secret_version.sh"
+SECRET_VERSION_SCRIPT = TASK_ROOT / "scripts" / "seed_secret_version.sh"
 
 
 def _executable(path: Path, source: str) -> None:
@@ -20,7 +20,13 @@ def test_bootstrap_routes_all_cloud_mutations_through_terraform() -> None:
     assert BOOTSTRAP.stat().st_mode & 0o111
     assert '"$TERRAFORM_BIN" -chdir="$state_bucket_root" apply' in source
     assert '"$TERRAFORM_BIN" -chdir="$terraform_root" apply' in source
-    assert '-backend-config="bucket=$TF_VAR_state_bucket_name"' in source
+    assert '-backend-config="bucket=$TF_VAR_bootstrap_state_bucket_name"' in source
+    assert 'TF_VAR_application_state_bucket_name="${project_id}-sai-app-tf-state"' in source
+    assert "discover_existing_state_buckets" in source
+    assert 'for scope in bootstrap application' in source
+    assert 'gh run watch "$run_id"' in source
+    assert "TF_VAR_enable_runtime_policy=true" in source
+    assert "verify_secret_versions" in source
     assert "gh workflow run deploy.yml" in source
     for direct_mutation in (
         "gcloud run deploy",
@@ -68,11 +74,15 @@ printf '%s\n' 'QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB'
         "GCP_SECRET_ID": "sai-dev-api-key-pepper",
     }
 
-    subprocess.run([str(SEED_SECRET)], env=env, check=True, capture_output=True)
+    subprocess.run(
+        [str(SECRET_VERSION_SCRIPT)], env=env, check=True, capture_output=True
+    )
     first_log = log.read_text(encoding="utf-8")
     assert "secrets versions add sai-dev-api-key-pepper" in first_log
     assert "QUFB" not in first_log
 
     env["FAKE_EXISTING_VERSION"] = "projects/example/secrets/example/versions/1"
-    subprocess.run([str(SEED_SECRET)], env=env, check=True, capture_output=True)
+    subprocess.run(
+        [str(SECRET_VERSION_SCRIPT)], env=env, check=True, capture_output=True
+    )
     assert log.read_text(encoding="utf-8").count("secrets versions add") == 1

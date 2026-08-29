@@ -61,7 +61,7 @@ run "default_contract_is_bounded_and_digest_pinned" {
 
   assert {
     condition     = output.iam_contract.worker_invoker_binding_count == 1
-    error_message = "The application stack must own one authoritative worker invoker binding."
+    error_message = "The application contract must request one bootstrap-owned worker invoker binding."
   }
 
   assert {

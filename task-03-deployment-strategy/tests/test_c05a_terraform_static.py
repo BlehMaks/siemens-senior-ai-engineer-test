@@ -41,13 +41,15 @@ def test_run_services_keeps_worker_private_and_oidc_bound() -> None:
 
     assert source.count("invoker_iam_disabled = false") == 2
     assert "ingress              = var.worker_ingress" in source
+    assert "google_cloud_run_v2_service_iam_" not in source
     assert (
-        'resource "google_cloud_run_v2_service_iam_binding" "worker_invoker"' in source
+        'resource "google_cloud_run_v2_service_iam_binding" "worker_invoker"'
+        in bootstrap
     )
-    assert 'members  = ["serviceAccount:${var.tasks_service_account_email}"]' in source
+    assert 'members  = ["serviceAccount:${module.identity["tasks"].email}"]' in bootstrap
     assert (
         'resource "google_cloud_run_v2_service_iam_member" "api_public_invoker"'
-        in source
+        in bootstrap
     )
     assert "google_cloud_tasks_queue_iam_" not in source
     assert "google_service_account_iam_" not in source
@@ -60,7 +62,7 @@ def test_run_services_keeps_worker_private_and_oidc_bound() -> None:
     assert 'resource "google_cloud_tasks_queue"' not in source
     assert 'service_account_email = module.identity["tasks"].email' in bootstrap
     assert "audience              = local.worker_service_url" in bootstrap
-    assert source.count('member   = "allUsers"') == 1
+    assert bootstrap.count('member   = "allUsers"') == 1
     assert "allAuthenticatedUsers" not in source
 
 
@@ -101,7 +103,7 @@ def test_bootstrap_owns_the_cloud_tasks_queue_before_application_deploy() -> Non
 
     assert 'resource "google_cloud_tasks_queue" "dispatch"' not in source
     assert 'resource "google_cloud_tasks_queue" "dispatch"' in bootstrap
-    assert "enable_runtime_policy" not in bootstrap
+    assert "enable_runtime_policy" in bootstrap
     assert "local.worker_service_url" in bootstrap
     assert "cloudtasks.queues.update" not in read(
         TERRAFORM_ROOT / "bootstrap" / "locals.tf"

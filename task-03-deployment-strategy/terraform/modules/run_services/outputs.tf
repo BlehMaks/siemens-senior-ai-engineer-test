@@ -54,7 +54,8 @@ output "iam_contract" {
     worker_invoker_members         = ["serviceAccount:${var.tasks_service_account_email}"]
     worker_invoker_role            = "roles/run.invoker"
     worker_invoker_binding_count   = 1
-    api_public_invoker_count       = length(google_cloud_run_v2_service_iam_member.api_public_invoker)
+    api_public_invoker_count       = var.api_allow_unauthenticated ? 1 : 0
+    cloud_run_iam_owner            = "bootstrap-post-deploy"
     tasks_service_agent_token_role = "roles/iam.serviceAccountTokenCreator"
   }
 }

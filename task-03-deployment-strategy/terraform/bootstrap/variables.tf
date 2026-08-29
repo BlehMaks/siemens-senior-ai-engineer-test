@@ -41,13 +41,26 @@ variable "system_code" {
   }
 }
 
-variable "state_bucket_name" {
-  description = "Name of the GCS bucket that later Terraform stacks use as a remote backend."
+variable "bootstrap_state_bucket_name" {
+  description = "GCS bucket reserved for bootstrap Terraform state."
   type        = string
 
   validation {
-    condition     = can(regex("^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$", var.state_bucket_name))
-    error_message = "state_bucket_name must be a valid GCS bucket name."
+    condition     = can(regex("^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$", var.bootstrap_state_bucket_name))
+    error_message = "bootstrap_state_bucket_name must be a valid GCS bucket name."
+  }
+}
+
+variable "application_state_bucket_name" {
+  description = "GCS bucket reserved for application delivery Terraform state."
+  type        = string
+
+  validation {
+    condition = (
+      can(regex("^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$", var.application_state_bucket_name)) &&
+      var.application_state_bucket_name != var.bootstrap_state_bucket_name
+    )
+    error_message = "application_state_bucket_name must be valid and different from bootstrap_state_bucket_name."
   }
 }
 
@@ -76,6 +89,18 @@ variable "secret_ids" {
 
 variable "seed_secret_versions" {
   description = "Create an initial random version for an empty bootstrap-owned secret."
+  type        = bool
+  default     = true
+}
+
+variable "enable_runtime_policy" {
+  description = "Manage service-level Cloud Run IAM after the API and worker services exist."
+  type        = bool
+  default     = false
+}
+
+variable "api_allow_unauthenticated" {
+  description = "Grant the baseline API service roles/run.invoker to allUsers in the post-deploy phase."
   type        = bool
   default     = true
 }
