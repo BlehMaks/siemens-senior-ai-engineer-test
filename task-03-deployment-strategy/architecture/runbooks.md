@@ -14,8 +14,8 @@ payloads, or credential files.
 - the exact project ID, numeric project number, `europe-west3` region, and `dev`
   environment have been copied from reviewed bootstrap outputs;
 - a project-scoped billing budget is active before any smoke traffic;
-- smoke keys belong to two different tenants. Key A needs session/run read and
-  write scopes; key B needs session read scope.
+- the smoke operator's Application Default Credentials can read the pepper
+  secret and write API-key records in the named `sai-dev` database.
 
 The scripts reject non-`dev` targets. Normal preflight and smoke traffic should cost
 well below one euro. The EUR 5 project budget alerts the operator; the runtime and
@@ -37,18 +37,21 @@ needs no cleanup.
 ## Post-deploy API smoke and Firestore deletion proof
 
 ```bash
-export SMOKE_API_KEY_A='tenant-a-plaintext-key'
-export SMOKE_API_KEY_B='tenant-b-plaintext-key'
-task-03-deployment-strategy/scripts/api_smoke.sh \
-  https://api.example.run.app review-001
-unset SMOKE_API_KEY_A SMOKE_API_KEY_B
+task-03-deployment-strategy/scripts/cloud_api_smoke.sh \
+  liquidity-planning-platform europe-west3 dev 1027058459333 review-001
 ```
 
-The smoke checks liveness, managed readiness, missing authentication, session
-creation, cross-tenant concealment, run submission, typed SSE, cancellation, and
-session deletion. The final authenticated `GET` must return `404` after `DELETE
-/v1/sessions/{id}`; with the cloud configuration this exercises the Firestore
-cascade rather than an ephemeral local database.
+The wrapper reads the Cloud Run URL and API-key pepper, creates keys for two
+temporary tenants, and passes them to the HTTP smoke without printing either
+secret. It revokes both keys on success and makes a best-effort revocation after
+failure. Revoked key metadata remains in Firestore for the audit trail; no
+plaintext key is stored.
+
+The HTTP smoke checks liveness, managed readiness, missing authentication,
+session creation, cross-tenant concealment, run submission, typed SSE,
+cancellation, and session deletion. The final authenticated `GET` must return
+`404` after `DELETE /v1/sessions/{id}`. In the cloud configuration, that call
+exercises the Firestore cascade rather than an ephemeral local database.
 
 Ordinary HTTP probes have a 15-second wall-clock limit. The SSE probe has a
 30-second limit and requires HTTP `200` plus a typed `run.*` event; an event-shaped
@@ -57,8 +60,9 @@ error response cannot pass the smoke check.
 Success prints one summary line. The command creates at most one session and two
 runs, then deletes the session. A failed run may leave that bounded session behind;
 inspect sessions by the `smoke-<SMOKE_ID>` label and delete it through the same API.
-Retry with a new opaque smoke ID after fixing the cause. Never place keys on the
-command line or in a checked-in file.
+Retry with a new opaque smoke ID after fixing the cause. If cleanup warns that a
+key could not be revoked, revoke it with `agent-api-key-admin` before retrying.
+Never place keys on the command line or in a checked-in file.
 
 ## Runtime rollback to an existing revision
 

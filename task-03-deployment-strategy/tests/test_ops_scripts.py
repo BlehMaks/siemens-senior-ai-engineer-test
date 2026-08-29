@@ -13,6 +13,7 @@ import pytest
 TASK_ROOT = Path(__file__).resolve().parents[1]
 GCP_OPS = TASK_ROOT / "scripts" / "gcp_ops.sh"
 API_SMOKE = TASK_ROOT / "scripts" / "api_smoke.sh"
+CLOUD_API_SMOKE = TASK_ROOT / "scripts" / "cloud_api_smoke.sh"
 
 
 def _executable(path: Path, source: str) -> None:
@@ -140,7 +141,10 @@ def _run_ops(
 
 
 def test_operations_scripts_have_valid_bash_syntax() -> None:
-    subprocess.run(["bash", "-n", str(GCP_OPS), str(API_SMOKE)], check=True)
+    subprocess.run(
+        ["bash", "-n", str(GCP_OPS), str(API_SMOKE), str(CLOUD_API_SMOKE)],
+        check=True,
+    )
 
 
 def test_preflight_is_read_only_and_requires_a_budget(tmp_path: Path) -> None:

@@ -170,6 +170,18 @@ finishes, the wrapper reads the applied Terraform state and refuses success if
 those limits are absent. A Google Cloud budget sends alerts but does not stop
 charges by itself.
 
+Run the bounded cloud smoke after the workflow succeeds:
+
+```bash
+./task-03-deployment-strategy/scripts/cloud_api_smoke.sh \
+  liquidity-planning-platform europe-west3 dev 1027058459333 review-001
+```
+
+The script discovers the service URL, creates two temporary tenant keys in
+`sai-dev`, exercises the public API and Firestore deletion path, and revokes the
+keys. It keeps pepper and plaintext keys out of command arguments and output.
+The exact smoke-only IAM requirements are listed in the resource manifest.
+
 ## CI/CD path
 
 Pull requests and pushes to `master` run unprivileged checks. A deployment is
