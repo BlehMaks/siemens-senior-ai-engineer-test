@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -38,6 +38,8 @@ def main(argv: list[str] | None = None) -> int:
     create = subcommands.add_parser("create")
     create.add_argument("--tenant-id", required=True)
     create.add_argument("--scope", action="append", required=True)
+    create.add_argument("--output-file", type=Path)
+    create.add_argument("--ttl-seconds", type=int)
 
     rotate = subcommands.add_parser("rotate")
     rotate.add_argument("--authorization-env", default=_DEFAULT_AUTHORIZATION_ENV)
@@ -73,10 +75,27 @@ async def _run(args: argparse.Namespace) -> str | None:
                 await tenants.put(
                     TenantRecord(tenant_id=args.tenant_id, created_at=now)
                 )
-        generated = await manager.create(
-            tenant_id=args.tenant_id, scopes=args.scope, now=now
+        if args.ttl_seconds is not None and not 60 <= args.ttl_seconds <= 3600:
+            raise SystemExit("--ttl-seconds must be between 60 and 3600")
+        expires_at = (
+            None
+            if args.ttl_seconds is None
+            else now + timedelta(seconds=args.ttl_seconds)
         )
-        return generated.plaintext
+        generated = await manager.create(
+            tenant_id=args.tenant_id,
+            scopes=args.scope,
+            now=now,
+            expires_at=expires_at,
+            plaintext_sink=(
+                None
+                if args.output_file is None
+                else lambda plaintext: _write_plaintext_file(
+                    args.output_file, plaintext
+                )
+            ),
+        )
+        return None if args.output_file is not None else generated.plaintext
     if args.command == "rotate":
         generated = await manager.rotate(
             old_authorization=_authorization(args.authorization_env),
@@ -107,6 +126,26 @@ def _authorization(variable: str) -> str:
     if value is None:
         raise SystemExit("authorization environment variable is not set")
     return value
+
+
+def _write_plaintext_file(path: Path, plaintext: str) -> None:
+    if not path.is_absolute():
+        raise SystemExit("--output-file must be an absolute path")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = -1
+    try:
+        descriptor = os.open(path, flags, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            descriptor = -1
+            output.write(plaintext)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+    except OSError as exc:
+        if descriptor >= 0:
+            os.close(descriptor)
+        path.unlink(missing_ok=True)
+        raise SystemExit("could not write the protected output file") from exc
 
 
 if __name__ == "__main__":

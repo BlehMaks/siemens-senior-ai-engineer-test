@@ -36,12 +36,12 @@ and Actions variables. An organization may replace any predefined role with a
 custom role containing the same permissions.
 
 The post-deploy smoke uses the operator's Application Default Credentials. That
-identity also needs `roles/secretmanager.secretAccessor` on
-`sai-dev-api-key-pepper` and `roles/datastore.user` restricted to
+identity needs `roles/run.viewer` on the project,
+`roles/secretmanager.secretAccessor` on `sai-dev-api-key-pepper`, and
+`roles/datastore.user` restricted to
 `projects/PROJECT_ID/databases/sai-dev`. The infrastructure apply does not use
-these two grants. An existing project owner already has the required
-permissions; a separate smoke operator should receive only the two scoped
-grants.
+these three grants. An existing project owner already has the required
+permissions; a separate smoke operator should receive only this access.
 
 The linked billing account must use EUR. The wrapper reads `currencyCode` before
 the first Terraform mutation and stops if it is not `EUR`, because the test

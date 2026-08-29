@@ -44,16 +44,28 @@ esac
         fake_bin / "uv",
         """#!/usr/bin/env bash
 set -euo pipefail
-printf 'uv %s\n' "$*" >> "$FAKE_COMMAND_LOG"
+printf 'uv %s|%s\n' "$PWD" "$*" >> "$FAKE_COMMAND_LOG"
 if [[ " $* " != *" agent-api-key-admin "* ]]; then
   exit 0
 fi
+output_file=""
+previous=""
+for argument in "$@"; do
+  if [[ $previous == --output-file ]]; then
+    output_file=$argument
+  fi
+  previous=$argument
+done
 if [[ " $* " == *" create "* && " $* " == *" smoke-review-001-a "* ]]; then
   [[ ${AGENT_API_KEY_PEPPER:-} == test-pepper-value ]]
-  printf 'temporary-key-a\n'
+  [[ -n $output_file ]]
+  printf 'temporary-key-a\n' > "$output_file"
+  chmod 600 "$output_file"
 elif [[ " $* " == *" create "* && " $* " == *" smoke-review-001-b "* ]]; then
   [[ ${AGENT_API_KEY_PEPPER:-} == test-pepper-value ]]
-  printf 'temporary-key-b\n'
+  [[ -n $output_file ]]
+  printf 'temporary-key-b\n' > "$output_file"
+  chmod 600 "$output_file"
 elif [[ " $* " == *" revoke "* ]]; then
   [[ ${AGENT_API_KEY_PEPPER:-} == test-pepper-value ]]
   [[ ${AGENT_API_AUTHORIZATION:-} == "Bearer temporary-key-a" || ${AGENT_API_AUTHORIZATION:-} == "Bearer temporary-key-b" ]]
@@ -86,7 +98,9 @@ exit {smoke_exit}
     return wrapper, environment
 
 
-def _run(wrapper: Path, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run(
+    wrapper: Path, environment: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             str(wrapper),
@@ -128,6 +142,71 @@ def test_cloud_smoke_revokes_both_keys_when_http_smoke_fails(tmp_path: Path) -> 
     log = Path(environment["FAKE_COMMAND_LOG"]).read_text(encoding="utf-8")
     assert log.count(" revoke") == 2
     assert "cloud API smoke passed" not in result.stdout
+
+
+def test_cloud_smoke_revokes_a_key_persisted_before_create_exits(
+    tmp_path: Path,
+) -> None:
+    wrapper, environment = _fixture(tmp_path)
+    fake_uv = Path(environment["UV_BIN"])
+    _write_executable(
+        fake_uv,
+        """#!/usr/bin/env bash
+set -euo pipefail
+output_file=""
+previous=""
+for argument in "$@"; do
+  if [[ $previous == --output-file ]]; then output_file=$argument; fi
+  previous=$argument
+done
+if [[ " $* " != *" agent-api-key-admin "* ]]; then exit 0; fi
+if [[ " $* " == *" create "* ]]; then
+  printf 'temporary-key-a\n' > "$output_file"
+  chmod 600 "$output_file"
+  exit 23
+fi
+if [[ " $* " == *" revoke "* ]]; then
+  printf 'revoked:%s\n' "$AGENT_API_AUTHORIZATION" >> "$FAKE_COMMAND_LOG"
+  exit 0
+fi
+exit 8
+""",
+    )
+
+    result = _run(wrapper, environment)
+
+    assert result.returncode == 23
+    log = Path(environment["FAKE_COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "revoked:Bearer temporary-key-a" in log
+
+
+def test_cloud_smoke_anchors_uv_to_the_repository(tmp_path: Path) -> None:
+    wrapper, environment = _fixture(tmp_path)
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+
+    result = subprocess.run(
+        [
+            str(wrapper),
+            "liquidity-planning-platform",
+            "europe-west3",
+            "dev",
+            "1027058459333",
+            "review-001",
+        ],
+        cwd=unrelated,
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    log = Path(environment["FAKE_COMMAND_LOG"]).read_text(encoding="utf-8")
+    expected_root = wrapper.parents[2]
+    uv_lines = [line for line in log.splitlines() if line.startswith("uv ")]
+    assert uv_lines
+    assert all(line.startswith(f"uv {expected_root}|") for line in uv_lines)
 
 
 @pytest.mark.parametrize(

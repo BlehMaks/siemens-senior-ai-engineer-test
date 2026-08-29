@@ -14,8 +14,9 @@ payloads, or credential files.
 - the exact project ID, numeric project number, `europe-west3` region, and `dev`
   environment have been copied from reviewed bootstrap outputs;
 - a project-scoped billing budget is active before any smoke traffic;
-- the smoke operator's Application Default Credentials can read the pepper
-  secret and write API-key records in the named `sai-dev` database.
+- the smoke operator's Application Default Credentials can discover the Cloud
+  Run service, read the pepper secret, and write API-key records in the named
+  `sai-dev` database.
 
 The scripts reject non-`dev` targets. Normal preflight and smoke traffic should cost
 well below one euro. The EUR 5 project budget alerts the operator; the runtime and
@@ -43,9 +44,11 @@ task-03-deployment-strategy/scripts/cloud_api_smoke.sh \
 
 The wrapper reads the Cloud Run URL and API-key pepper, creates keys for two
 temporary tenants, and passes them to the HTTP smoke without printing either
-secret. It revokes both keys on success and makes a best-effort revocation after
-failure. Revoked key metadata remains in Firestore for the audit trail; no
-plaintext key is stored.
+secret. Before persistence, key-admin writes each plaintext key to a mode `0600`
+file in the wrapper's temporary directory. This lets failure cleanup recover and
+revoke a key even if the create subprocess exits after writing Firestore. The
+keys expire after 15 minutes as a fallback. Revoked key metadata remains in
+Firestore for the audit trail; no plaintext key is stored there.
 
 The HTTP smoke checks liveness, managed readiness, missing authentication,
 session creation, cross-tenant concealment, run submission, typed SSE,

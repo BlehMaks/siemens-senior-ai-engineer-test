@@ -7,7 +7,7 @@ import binascii
 import hmac
 import os
 import secrets
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -152,6 +152,7 @@ class ApiKeyManager:
         scopes: Sequence[str],
         now: datetime,
         expires_at: datetime | None = None,
+        plaintext_sink: Callable[[str], None] | None = None,
     ) -> GeneratedApiKey:
         generated = generate_api_key(
             tenant_id=tenant_id,
@@ -160,6 +161,8 @@ class ApiKeyManager:
             expires_at=expires_at,
             pepper=self._pepper_provider.pepper(),
         )
+        if plaintext_sink is not None:
+            plaintext_sink(generated.plaintext)
         await self._repository.put(generated.record)
         return generated
 

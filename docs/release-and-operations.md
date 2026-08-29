@@ -52,6 +52,7 @@ The operator computer needs:
 
 - Terraform 1.9.8;
 - Google Cloud CLI authenticated to the existing project;
+- Application Default Credentials for the smoke operator;
 - GitHub CLI authenticated to the target repository;
 - `git`, `jq`, and `openssl`;
 - the current `master` commit pushed before deployment dispatch.
@@ -61,9 +62,13 @@ Confirm the two authenticated accounts without changing either platform:
 ```bash
 gcloud auth list
 gcloud config get-value project
+gcloud auth application-default print-access-token >/dev/null
 gh auth status
 gh repo view BlehMaks/siemens-senior-ai-engineer-test
 ```
+
+If the ADC check fails on a local workstation, run
+`gcloud auth application-default login` once and repeat it.
 
 The project and its billing relationship must already exist. Everything inside
 the project, plus the repository delivery boundary, is managed by Terraform.
@@ -179,8 +184,10 @@ Run the bounded cloud smoke after the workflow succeeds:
 
 The script discovers the service URL, creates two temporary tenant keys in
 `sai-dev`, exercises the public API and Firestore deletion path, and revokes the
-keys. It keeps pepper and plaintext keys out of command arguments and output.
-The exact smoke-only IAM requirements are listed in the resource manifest.
+keys. Each key also expires after 15 minutes. The script writes plaintext only
+to mode `0600` files in its temporary directory, keeps it out of command
+arguments and output, and removes the directory on exit. The exact smoke-only
+IAM requirements are listed in the resource manifest.
 
 ## CI/CD path
 

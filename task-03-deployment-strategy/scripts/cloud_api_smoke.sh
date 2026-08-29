@@ -8,6 +8,8 @@ CLOUD_SMOKE_PEPPER=""
 CLOUD_SMOKE_PROJECT=""
 CLOUD_SMOKE_DATABASE=""
 CLOUD_SMOKE_UV_BIN=""
+CLOUD_SMOKE_KEY_FILE_A=""
+CLOUD_SMOKE_KEY_FILE_B=""
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -37,10 +39,26 @@ revoke_key() {
     revoke >/dev/null
 }
 
+load_key_file() {
+  local path=$1 variable=$2 value=""
+  [[ -f $path ]] || return 1
+  IFS= read -r value <"$path" || return 1
+  [[ -n $value ]] || return 1
+  printf -v "$variable" '%s' "$value"
+}
+
 cleanup() {
   local status=$? cleanup_failed=0
   trap - EXIT
   set +e
+  if [[ -z $CLOUD_SMOKE_API_KEY_A && -f $CLOUD_SMOKE_KEY_FILE_A ]] &&
+    ! load_key_file "$CLOUD_SMOKE_KEY_FILE_A" CLOUD_SMOKE_API_KEY_A; then
+    cleanup_failed=1
+  fi
+  if [[ -z $CLOUD_SMOKE_API_KEY_B && -f $CLOUD_SMOKE_KEY_FILE_B ]] &&
+    ! load_key_file "$CLOUD_SMOKE_KEY_FILE_B" CLOUD_SMOKE_API_KEY_B; then
+    cleanup_failed=1
+  fi
   if ! revoke_key "$CLOUD_SMOKE_API_KEY_A"; then
     cleanup_failed=1
   fi
@@ -81,6 +99,7 @@ main() {
 
   script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
   repository_root=$(cd "$script_dir/../.." && pwd -P)
+  cd "$repository_root"
   api_url=$(gcloud run services describe "sai-$environment-api" \
     --project "$project" \
     --region "$region" \
@@ -90,6 +109,8 @@ main() {
   CLOUD_SMOKE_PROJECT=$project
   CLOUD_SMOKE_DATABASE="sai-$environment"
   CLOUD_SMOKE_TEMP_DIR=$(mktemp -d -t sai-cloud-smoke.XXXXXX)
+  CLOUD_SMOKE_KEY_FILE_A="$CLOUD_SMOKE_TEMP_DIR/key-a"
+  CLOUD_SMOKE_KEY_FILE_B="$CLOUD_SMOKE_TEMP_DIR/key-b"
   trap cleanup EXIT
   export UV_PROJECT_ENVIRONMENT="$CLOUD_SMOKE_TEMP_DIR/venv"
   "$CLOUD_SMOKE_UV_BIN" sync --locked --all-packages --no-dev
@@ -101,28 +122,33 @@ main() {
     --project "$project")
   [[ -n $CLOUD_SMOKE_PEPPER ]] || fail "API key pepper secret is empty"
 
-  CLOUD_SMOKE_API_KEY_A=$(
-    AGENT_API_KEY_PEPPER="$CLOUD_SMOKE_PEPPER" \
-      "$CLOUD_SMOKE_UV_BIN" run --frozen --all-packages \
-      agent-api-key-admin \
-      --gcp-project "$project" \
-      --firestore-database "$CLOUD_SMOKE_DATABASE" \
-      create \
-      --tenant-id "smoke-$smoke_id-a" \
-      --scope sessions:read --scope sessions:write \
-      --scope runs:read --scope runs:write
-  )
-  CLOUD_SMOKE_API_KEY_B=$(
-    AGENT_API_KEY_PEPPER="$CLOUD_SMOKE_PEPPER" \
-      "$CLOUD_SMOKE_UV_BIN" run --frozen --all-packages \
-      agent-api-key-admin \
-      --gcp-project "$project" \
-      --firestore-database "$CLOUD_SMOKE_DATABASE" \
-      create \
-      --tenant-id "smoke-$smoke_id-b" \
-      --scope sessions:read --scope sessions:write \
-      --scope runs:read --scope runs:write
-  )
+  AGENT_API_KEY_PEPPER="$CLOUD_SMOKE_PEPPER" \
+    "$CLOUD_SMOKE_UV_BIN" run --frozen --all-packages \
+    agent-api-key-admin \
+    --gcp-project "$project" \
+    --firestore-database "$CLOUD_SMOKE_DATABASE" \
+    create \
+    --tenant-id "smoke-$smoke_id-a" \
+    --scope sessions:read --scope sessions:write \
+    --scope runs:read --scope runs:write \
+    --ttl-seconds 900 \
+    --output-file "$CLOUD_SMOKE_KEY_FILE_A"
+  load_key_file "$CLOUD_SMOKE_KEY_FILE_A" CLOUD_SMOKE_API_KEY_A ||
+    fail "protected smoke key file is unreadable"
+
+  AGENT_API_KEY_PEPPER="$CLOUD_SMOKE_PEPPER" \
+    "$CLOUD_SMOKE_UV_BIN" run --frozen --all-packages \
+    agent-api-key-admin \
+    --gcp-project "$project" \
+    --firestore-database "$CLOUD_SMOKE_DATABASE" \
+    create \
+    --tenant-id "smoke-$smoke_id-b" \
+    --scope sessions:read --scope sessions:write \
+    --scope runs:read --scope runs:write \
+    --ttl-seconds 900 \
+    --output-file "$CLOUD_SMOKE_KEY_FILE_B"
+  load_key_file "$CLOUD_SMOKE_KEY_FILE_B" CLOUD_SMOKE_API_KEY_B ||
+    fail "protected smoke key file is unreadable"
   [[ -n $CLOUD_SMOKE_API_KEY_A && -n $CLOUD_SMOKE_API_KEY_B ]] ||
     fail "smoke key creation returned an empty value"
 
@@ -133,8 +159,10 @@ main() {
 
   revoke_key "$CLOUD_SMOKE_API_KEY_A"
   CLOUD_SMOKE_API_KEY_A=""
+  rm -f -- "$CLOUD_SMOKE_KEY_FILE_A"
   revoke_key "$CLOUD_SMOKE_API_KEY_B"
   CLOUD_SMOKE_API_KEY_B=""
+  rm -f -- "$CLOUD_SMOKE_KEY_FILE_B"
   CLOUD_SMOKE_PEPPER=""
   printf 'cloud API smoke passed and temporary keys were revoked\n'
 }

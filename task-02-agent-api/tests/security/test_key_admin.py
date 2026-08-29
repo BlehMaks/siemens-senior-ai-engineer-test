@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from datetime import UTC, datetime
+import stat
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 import agent_api.security.key_admin as key_admin
+from agent_api.security import parse_authorization_header
 from agent_api.security.key_admin import main
 from agent_api.storage import (
+    ApiKeyHashRecord,
     SQLiteKeyHashRepository,
     SQLiteTenantRepository,
     TenantRecord,
@@ -113,6 +116,88 @@ def test_key_admin_requires_secret_input_outside_process_arguments(
 
     with pytest.raises(SystemExit, match="authorization environment variable"):
         main(["--db", str(path), "revoke"])
+
+
+def test_key_admin_writes_protected_recovery_output_before_persistence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "generated.key"
+
+    class FailingRepository:
+        async def put(self, record: ApiKeyHashRecord) -> bool:
+            del record
+            raise RuntimeError("persistence failed after key recovery output")
+
+    monkeypatch.setattr(
+        key_admin,
+        "_cloud_key_repository",
+        lambda **_: FailingRepository(),
+    )
+    monkeypatch.setenv("AGENT_API_KEY_PEPPER", _pepper())
+
+    with pytest.raises(RuntimeError, match="persistence failed"):
+        main(
+            [
+                "--gcp-project",
+                "project-one",
+                "create",
+                "--tenant-id",
+                "tenant-one",
+                "--scope",
+                "runs:read",
+                "--ttl-seconds",
+                "900",
+                "--output-file",
+                str(output),
+            ]
+        )
+
+    assert (
+        output.read_text(encoding="utf-8").strip().startswith("sai.v1.tenant-one.key-")
+    )
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    assert capsys.readouterr().out == ""
+
+
+def test_key_admin_protected_output_sets_a_bounded_expiry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    database = tmp_path / "keys.sqlite3"
+    output = tmp_path / "generated.key"
+    before = datetime.now(UTC)
+    monkeypatch.setenv("AGENT_API_KEY_PEPPER", _pepper())
+
+    assert (
+        main(
+            [
+                "--db",
+                str(database),
+                "create",
+                "--tenant-id",
+                "tenant-one",
+                "--scope",
+                "runs:read",
+                "--ttl-seconds",
+                "900",
+                "--output-file",
+                str(output),
+            ]
+        )
+        == 0
+    )
+
+    plaintext = output.read_text(encoding="utf-8").strip()
+    credentials = parse_authorization_header(f"Bearer {plaintext}")
+    record = asyncio.run(
+        SQLiteKeyHashRepository(database).get(
+            tenant_id=credentials.tenant_id,
+            key_id=credentials.key_id,
+        )
+    )
+    assert record is not None and record.expires_at is not None
+    assert before + timedelta(seconds=899) <= record.expires_at
+    assert record.expires_at <= datetime.now(UTC) + timedelta(seconds=901)
+    assert capsys.readouterr().out == ""
 
 
 def test_key_admin_cloud_backend_runs_full_lifecycle_without_local_migration(
