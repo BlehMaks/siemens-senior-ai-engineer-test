@@ -96,8 +96,14 @@ output "github_delivery" {
     repository_id = tostring(data.github_repository.target[0].repo_id)
     repository    = var.github_repository
     branch        = var.github_branch
-    environment   = github_repository_environment.deployment[0].environment
-    reviewer      = var.github_reviewer
-    variables     = sort(keys(github_actions_environment_variable.delivery))
+    branch_protection = {
+      admin_enforcement       = github_branch_protection.delivery[0].enforce_admins
+      allows_deletions        = github_branch_protection.delivery[0].allows_deletions
+      allows_force_pushes     = github_branch_protection.delivery[0].allows_force_pushes
+      required_linear_history = github_branch_protection.delivery[0].required_linear_history
+    }
+    environment = github_repository_environment.deployment[0].environment
+    reviewer    = var.github_reviewer
+    variables   = sort(keys(github_actions_environment_variable.delivery))
   } : null
 }

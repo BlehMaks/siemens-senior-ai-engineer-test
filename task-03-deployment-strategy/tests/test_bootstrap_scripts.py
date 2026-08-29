@@ -45,6 +45,7 @@ def test_bootstrap_routes_all_cloud_mutations_through_terraform() -> None:
     assert "TF_VAR_enable_runtime_policy=true" in source
     assert "verify_secret_versions" in source
     assert "gh workflow run deploy.yml" in source
+    assert ".branch_protection.admin_enforcement == true" in source
     for direct_mutation in (
         "gcloud run deploy",
         "gcloud run services update",
@@ -103,3 +104,49 @@ printf '%s\n' 'QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB'
         [str(SECRET_VERSION_SCRIPT)], env=env, check=True, capture_output=True
     )
     assert log.read_text(encoding="utf-8").count("secrets versions add") == 1
+
+
+def test_budget_recipient_rejects_mixed_case_service_account_domain(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _executable(
+        fake_bin / "gcloud",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ $1 == billing && $2 == accounts && $3 == describe ]]; then
+  printf '%s\n' EUR
+else
+  exit 91
+fi
+""",
+    )
+    script_prefix = BOOTSTRAP.read_text(encoding="utf-8").rsplit(
+        '\nmain "$@"', maxsplit=1
+    )[0]
+    probe = tmp_path / "probe.sh"
+    _executable(
+        probe,
+        script_prefix
+        + """
+resolve_budget_coordinates contract-assignment-dev
+""",
+    )
+
+    completed = subprocess.run(
+        [str(probe)],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "GCP_BILLING_ACCOUNT_ID": "ABC123-DEF456-789ABC",
+            "GCP_BUDGET_NOTIFICATION_EMAILS": (
+                '["automation@contract-assignment-dev.IAM.GSERVICEACCOUNT.COM"]'
+            ),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0

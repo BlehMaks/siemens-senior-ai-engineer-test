@@ -10,6 +10,17 @@ data "github_user" "reviewer" {
   username = var.github_reviewer
 }
 
+resource "github_branch_protection" "delivery" {
+  count = var.enable_github_wif ? 1 : 0
+
+  repository_id           = data.github_repository.target[0].node_id
+  pattern                 = var.github_branch
+  enforce_admins          = true
+  required_linear_history = true
+  allows_deletions        = false
+  allows_force_pushes     = false
+}
+
 resource "github_repository_environment" "deployment" {
   count = var.enable_github_wif ? 1 : 0
 

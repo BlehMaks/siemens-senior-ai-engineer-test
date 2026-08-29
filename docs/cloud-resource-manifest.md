@@ -59,6 +59,7 @@ with a complete domain; service-account addresses are rejected.
 | Monitoring channel | One channel per configured email | The wrapper defaults to the active human `gcloud` account |
 | Billing budget | `sai-dev-assessment-budget` | EUR 5 project budget with 20%, 50%, 80%, and 100% alerts |
 | Project custom role | `sai_dev_terraform_deployer` | Database and named Cloud Run lifecycle operations not covered by the selected predefined roles |
+| GitHub branch protection | `master` | Rejects deletion, force pushes, and non-linear history, including for administrators |
 
 The enabled services are:
 
@@ -130,9 +131,9 @@ service-account key.
 
 ## GitHub entities
 
-Terraform creates the `gcp-dev` repository Environment, restricts it to
-`master`, and assigns the requested reviewer. It writes these Environment
-variables:
+Terraform protects `master`, creates the `gcp-dev` repository Environment,
+restricts deployments to that branch, and assigns the requested reviewer. It
+writes these Environment variables:
 
 ```text
 GCP_API_SERVICE_ACCOUNT

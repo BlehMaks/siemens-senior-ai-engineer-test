@@ -15,6 +15,7 @@ mock_provider "github" {
     values = {
       name      = "siemens-senior-ai-engineer-test"
       full_name = "example-org/siemens-senior-ai-engineer-test"
+      node_id   = "R_kgDOExample"
       repo_id   = 123456789
     }
   }
@@ -105,6 +106,16 @@ run "github_wif_plans_in_one_pass" {
   assert {
     condition     = output.github_delivery.repository_id == "123456789" && length(output.github_delivery.variables) >= 10
     error_message = "GitHub delivery settings must derive the immutable repository ID and manage the environment variables."
+  }
+
+  assert {
+    condition = (
+      output.github_delivery.branch_protection.admin_enforcement &&
+      output.github_delivery.branch_protection.required_linear_history &&
+      !output.github_delivery.branch_protection.allows_deletions &&
+      !output.github_delivery.branch_protection.allows_force_pushes
+    )
+    error_message = "The delivery branch must reject deletion, force pushes, and non-linear history for every actor."
   }
 }
 

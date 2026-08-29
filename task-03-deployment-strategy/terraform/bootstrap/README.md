@@ -18,6 +18,7 @@ The main bootstrap creates or configures:
 - separate API, worker, Cloud Tasks, and deployer service accounts;
 - scoped predefined roles and small custom roles;
 - repository-ID, branch, and environment-bound GitHub WIF;
+- `master` protection against deletion, force pushes, and non-linear history;
 - the GitHub `gcp-dev` Environment, branch policy, reviewer, and Actions variables;
 - regional, deletion-protected Secret Manager containers;
 - one initial random version for each required secret when no enabled version

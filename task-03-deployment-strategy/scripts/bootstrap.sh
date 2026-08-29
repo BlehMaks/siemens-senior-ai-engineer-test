@@ -64,7 +64,7 @@ resolve_budget_coordinates() {
       and all(.[];
         type == "string"
         and test("^[^@[:space:]]+@[^@[:space:].]+(\\.[^@[:space:].]+)+$")
-        and (endswith(".gserviceaccount.com") | not)
+        and ((ascii_downcase | endswith(".gserviceaccount.com")) | not)
       )
     then sort | unique
     else error("expected at least one budget notification email")
@@ -328,7 +328,12 @@ verify_bootstrap() {
     -detailed-exitcode
   "$TERRAFORM_BIN" -chdir="$terraform_root" output -json github_delivery |
     jq -e --arg repository "$TF_VAR_github_repository" \
-      '.repository == $repository and (.variables | length) >= 10' >/dev/null
+      '.repository == $repository
+        and (.variables | length) >= 10
+        and .branch_protection.admin_enforcement == true
+        and .branch_protection.required_linear_history == true
+        and .branch_protection.allows_deletions == false
+        and .branch_protection.allows_force_pushes == false' >/dev/null
   verify_secret_versions
   gcloud tasks queues describe "${TF_VAR_system_code}-${TF_VAR_environment}-run-dispatch" \
     --project "$TF_VAR_project_id" \

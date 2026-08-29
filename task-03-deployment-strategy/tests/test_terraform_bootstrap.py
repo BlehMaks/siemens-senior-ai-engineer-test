@@ -405,6 +405,15 @@ def test_github_environment_and_delivery_variables_are_terraform_managed() -> No
     github_tf = read(BOOTSTRAP / "github.tf")
     locals_tf = read(BOOTSTRAP / "locals.tf")
 
+    assert 'resource "github_branch_protection" "delivery"' in github_tf
+    assert (
+        "repository_id           = data.github_repository.target[0].node_id"
+        in github_tf
+    )
+    assert "enforce_admins          = true" in github_tf
+    assert "required_linear_history = true" in github_tf
+    assert "allows_deletions        = false" in github_tf
+    assert "allows_force_pushes     = false" in github_tf
     assert 'resource "github_repository_environment" "deployment"' in github_tf
     assert "reviewers {" in github_tf
     assert "custom_branch_policies = true" in github_tf

@@ -71,6 +71,11 @@ Read the [cloud resource and IAM manifest](cloud-resource-manifest.md) before th
 first apply. It names the required operator access, every default entity, and
 every role Terraform will grant.
 
+The repository must already contain `master`. Terraform protects it against
+deletion, force pushes, and non-linear history for every actor. The rule does not
+require a second reviewer, so a single-person assessment repository remains
+usable; GitHub Actions still runs all checks on every push and pull request.
+
 The linked billing account must use EUR. The wrapper checks that requirement and
 the alert mailbox before Terraform creates anything. It rejects service-account
 mailboxes and addresses without a complete domain.
