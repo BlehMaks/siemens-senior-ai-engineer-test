@@ -9,7 +9,11 @@ def test_local_acceptance_installs_every_workspace_package_and_hides_keys() -> N
 
     assert LOCAL_ACCEPTANCE.stat().st_mode & 0o111
     assert 'UV_PROJECT_ENVIRONMENT="$LOCAL_ACCEPTANCE_TEMP_DIR/venv"' in source
-    assert "uv sync --locked --all-packages --dev" in source
+    assert '"$UV_BIN" sync --locked --all-packages --dev' in source
+    assert "set +x" in source
+    assert "-u AGENT_API_GCP_PROJECT_ID" in source
+    assert "-u AGENT_API_CLOUD_TASKS_QUEUE" in source
+    assert "-u GOOGLE_APPLICATION_CREDENTIALS" in source
     assert source.count("--scope runs:write") == 2
     assert "api_smoke.sh" in source
     assert "printf '%s' \"$api_key" not in source

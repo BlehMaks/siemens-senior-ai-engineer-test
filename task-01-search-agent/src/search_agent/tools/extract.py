@@ -5,14 +5,23 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import sys
 from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 
 from trafilatura import bare_extraction
 
 from .fetch import FetchedDocument, _validated_fetched_document
+
+
+def _worker_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    package_root = str(Path(__file__).resolve().parents[2])
+    environment["PYTHONPATH"] = package_root
+    return environment
 
 
 class ExtractionFailureReason(StrEnum):
@@ -211,6 +220,7 @@ class AsyncLocalExtractor:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            env=_worker_environment(),
         )
         try:
             stdout, _ = await process.communicate(payload)

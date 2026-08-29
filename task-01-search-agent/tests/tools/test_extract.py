@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -152,6 +154,39 @@ async def test_async_local_extractor_rejects_oversize_before_spawning(
 
     assert error.value.reason is ExtractionFailureReason.INPUT_TOO_LARGE
     assert spawned is False
+
+
+@pytest.mark.asyncio
+async def test_async_local_extractor_propagates_its_package_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker_environment: dict[str, str] | None = None
+
+    class Process:
+        returncode = 0
+
+        async def communicate(self, payload: bytes) -> tuple[bytes, bytes]:
+            del payload
+            return (
+                b'{"ok":true,"canonical_url":"https://example.com/report",'
+                b'"title":null,"text":"content"}',
+                b"",
+            )
+
+    async def create_process(*args: object, **kwargs: object) -> Process:
+        nonlocal worker_environment
+        del args
+        worker_environment = kwargs["env"]  # type: ignore[assignment]
+        return Process()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    await AsyncLocalExtractor().extract(
+        _document(b"content", content_type="text/plain")
+    )
+
+    assert worker_environment is not None
+    package_root = str(Path(extract_module.__file__).resolve().parents[2])
+    assert package_root in worker_environment["PYTHONPATH"].split(os.pathsep)
 
 
 @pytest.mark.asyncio

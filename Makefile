@@ -21,10 +21,10 @@ test:
 	$(UV) run pytest
 
 local-acceptance:
-	./task-03-deployment-strategy/scripts/local_acceptance.sh
+	UV_BIN="$(UV)" ./task-03-deployment-strategy/scripts/local_acceptance.sh
 
 local-submission:
-	./scripts/local_submission_check.sh
+	UV_BIN="$(UV)" ./scripts/local_submission_check.sh
 
 audit-submission:
 	$(UV) run python scripts/audit_submission.py
