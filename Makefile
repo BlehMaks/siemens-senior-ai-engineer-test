@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: sync lock-check format-check lint type test local-acceptance audit-submission check
+.PHONY: sync lock-check format-check lint type test local-acceptance local-submission audit-submission check
 
 sync:
 	$(UV) sync --locked --all-packages --dev
@@ -22,6 +22,9 @@ test:
 
 local-acceptance:
 	./task-03-deployment-strategy/scripts/local_acceptance.sh
+
+local-submission:
+	./scripts/local_submission_check.sh
 
 audit-submission:
 	$(UV) run python scripts/audit_submission.py
