@@ -46,7 +46,9 @@ def test_run_services_keeps_worker_private_and_oidc_bound() -> None:
         'resource "google_cloud_run_v2_service_iam_binding" "worker_invoker"'
         in bootstrap
     )
-    assert 'members  = ["serviceAccount:${module.identity["tasks"].email}"]' in bootstrap
+    assert (
+        'members  = ["serviceAccount:${module.identity["tasks"].email}"]' in bootstrap
+    )
     assert (
         'resource "google_cloud_run_v2_service_iam_member" "api_public_invoker"'
         in bootstrap

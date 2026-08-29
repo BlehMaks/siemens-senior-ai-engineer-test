@@ -91,7 +91,7 @@ def test_operator_docs_state_cost_and_destroy_limits() -> None:
     destroy_review = read(DEV / "destroy-review.md")
 
     assert "secret payloads and versions" in readme
-    assert "explicit recipient" in readme
+    assert "monitored recipient" in readme
     assert "alert, not an enforcement boundary" in cost_review
     assert "DELETE_PROTECTION_ENABLED" not in destroy_review
     assert "delete protection is enabled" in destroy_review

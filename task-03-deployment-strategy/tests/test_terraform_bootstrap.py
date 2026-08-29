@@ -89,8 +89,8 @@ def test_state_bucket_is_private_versioned_and_not_force_destroyed() -> None:
     bootstrap_main = read(BOOTSTRAP / "main.tf")
 
     assert "for_each = local.state_buckets" in main_tf
-    assert 'application = var.application_state_bucket_name' in main_tf
-    assert 'bootstrap   = var.bootstrap_state_bucket_name' in main_tf
+    assert "application = var.application_state_bucket_name" in main_tf
+    assert "bootstrap   = var.bootstrap_state_bucket_name" in main_tf
     assert "uniform_bucket_level_access = true" in main_tf
     assert 'public_access_prevention    = "enforced"' in main_tf
     assert "force_destroy               = false" in main_tf
@@ -202,8 +202,13 @@ def test_cloud_run_iam_is_bootstrap_owned_and_service_scoped() -> None:
     assert '"run.services.setIamPolicy"' not in locals_tf
     assert '"run.services.getIamPolicy"' not in locals_tf
     assert "deployer_cloud_run_iam" not in main_tf
-    assert 'resource "google_cloud_run_v2_service_iam_binding" "worker_invoker"' in main_tf
-    assert 'resource "google_cloud_run_v2_service_iam_member" "api_public_invoker"' in main_tf
+    assert (
+        'resource "google_cloud_run_v2_service_iam_binding" "worker_invoker"' in main_tf
+    )
+    assert (
+        'resource "google_cloud_run_v2_service_iam_member" "api_public_invoker"'
+        in main_tf
+    )
     assert "count = var.enable_runtime_policy ? 1 : 0" in main_tf
     assert 'name     = "${var.system_code}-${var.environment}-worker"' in main_tf
     assert 'name     = "${var.system_code}-${var.environment}-api"' in main_tf
@@ -270,7 +275,10 @@ def test_deployer_budget_role_is_scoped_to_the_linked_billing_account() -> None:
     assert 'count = var.billing_account_id == "" ? 0 : 1' in binding
     assert "billing_account_id = var.billing_account_id" in binding
     assert 'role               = "roles/billing.costsManager"' in binding
-    assert 'member             = "serviceAccount:${module.deployer_identity.email}"' in binding
+    assert (
+        'member             = "serviceAccount:${module.deployer_identity.email}"'
+        in binding
+    )
 
 
 def test_secrets_and_runtime_access_stay_in_human_bootstrap() -> None:
@@ -321,9 +329,7 @@ def test_deployer_can_attach_only_the_two_cloud_run_identities() -> None:
     )
 
 
-def test_queue_and_service_iam_are_owned_by_human_bootstrap() -> (
-    None
-):
+def test_queue_and_service_iam_are_owned_by_human_bootstrap() -> None:
     main_tf = read(BOOTSTRAP / "main.tf")
     run_services_tf = read(RUN_SERVICES / "main.tf")
 
@@ -345,8 +351,7 @@ def test_queue_and_service_iam_are_owned_by_human_bootstrap() -> (
     assert "name     = google_cloud_tasks_queue.dispatch.name" in main_tf
     assert "local.worker_service_url" in main_tf
     assert (
-        'resource "google_cloud_run_v2_service_iam_binding" "worker_invoker"'
-        in main_tf
+        'resource "google_cloud_run_v2_service_iam_binding" "worker_invoker"' in main_tf
     )
     assert (
         'resource "google_cloud_run_v2_service_iam_member" "api_public_invoker"'
@@ -386,8 +391,14 @@ def test_example_tfvars_are_secret_free_and_realistic() -> None:
     assert 'github_branch        = "master"' in example
     assert 'github_environment   = "gcp-dev"' in example
     assert 'github_reviewer      = "example-reviewer"' in example
-    assert 'bootstrap_state_bucket_name   = "example-assignment-dev-sai-bootstrap-tf-state"' in example
-    assert 'application_state_bucket_name = "example-assignment-dev-sai-app-tf-state"' in example
+    assert (
+        'bootstrap_state_bucket_name   = "example-assignment-dev-sai-bootstrap-tf-state"'
+        in example
+    )
+    assert (
+        'application_state_bucket_name = "example-assignment-dev-sai-app-tf-state"'
+        in example
+    )
 
 
 def test_github_environment_and_delivery_variables_are_terraform_managed() -> None:

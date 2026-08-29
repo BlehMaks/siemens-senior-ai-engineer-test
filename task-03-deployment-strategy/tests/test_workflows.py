@@ -48,7 +48,14 @@ def test_privileged_jobs_are_master_and_environment_gated() -> None:
     for name in ("infra-plan.yml", "deploy.yml"):
         source = read(WORKFLOW_ROOT / name)
 
-        assert "github.ref == 'refs/heads/master'" in source
+        if name == "infra-plan.yml":
+            assert "github.ref == 'refs/heads/master'" in source
+        else:
+            assert "Bind dispatch to the verified revision" in source
+            assert '"$GITHUB_REF" != refs/heads/master' in source
+            assert '"$GITHUB_SHA" != "$EXPECTED_SHA"' in source
+            assert "needs: revision" in source
+            assert "if: needs.revision.result == 'success'" in source
         assert "environment: gcp-dev" in source
         assert "id-token: write" in source
         assert "google-github-actions/auth@" in source
@@ -62,6 +69,7 @@ def test_deploy_promotes_the_tested_artifact_by_digest() -> None:
 
     assert "run-name: sai-deploy-${{ inputs.dispatch_id }}" in source
     assert "dispatch_id:" in source
+    assert "expected_sha:" in source
     assert "needs: verify" in source
     assert "docker save --output release-image.tar" in source
     assert "docker load --input release-image.tar" in source
