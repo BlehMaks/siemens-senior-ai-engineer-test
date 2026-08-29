@@ -176,6 +176,9 @@ async def test_telemetry_failures_are_fail_open_and_have_bounded_labels() -> Non
     telemetry.work_outcome(
         tenant_id="tenant-one", run_id="run-one", outcome="claimed", at=NOW
     )
+    telemetry.work_outcome(
+        tenant_id="tenant-one", run_id="run-one", outcome="stale", at=NOW
+    )
     with pytest.raises(ValueError, match="bounded"):
         telemetry.work_outcome(
             tenant_id="tenant-one",
@@ -194,6 +197,11 @@ async def test_telemetry_failures_are_fail_open_and_have_bounded_labels() -> Non
         (("component", "logging"),),
     }
     assert all("tenant" not in dict(sample.labels) for sample in samples)
+    assert any(
+        sample.name == "api_worker_outcomes_total"
+        and sample.labels == (("outcome", "stale"),)
+        for sample in samples
+    )
 
 
 @pytest.mark.asyncio

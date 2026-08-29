@@ -21,6 +21,7 @@ from agent_api.ports import (
     RunState,
     WorkItem,
 )
+from agent_api.security import FirestoreQuotaLimiter, LimitConfig
 from agent_api.storage import (
     CloudTask,
     CloudTasksWorkQueue,
@@ -386,21 +387,62 @@ async def test_worker_acknowledges_a_legacy_delivery_without_claiming() -> None:
     runs = FirestoreRunRepository(store)
     replacement = (await runs.create(submission())).run
     executor = CompletedExecutor()
+    work_queue = queue(store, FakeCloudTaskClient())
+    legacy = item()
+    await store.set(
+        collection="work_items",
+        document_id=legacy.work_id,
+        document={
+            "document_id": legacy.work_id,
+            "work_id": legacy.work_id,
+            "tenant_id": legacy.tenant_id,
+            "run_id": legacy.run_id,
+            "task_name": f"{QUEUE_NAME}/tasks/legacy",
+            "payload": legacy.model_dump_json(exclude={"generation_id"}),
+        },
+    )
     worker = LocalWorker(
         repository=runs,
-        queue=queue(store, FakeCloudTaskClient()),
+        queue=work_queue,
         executor=executor,
         worker_id="worker-one",
         clock=lambda: NOW,
     )
 
-    assert await worker.process(item())
+    assert await worker.process(legacy)
 
     stored = await runs.get(tenant_id="tenant-one", run_id="run-one")
     assert stored is not None
     assert stored.generation_id == replacement.generation_id
     assert stored.state is RunState.QUEUED
     assert not executor.calls
+    repaired = await work_queue.enqueue(item(generation_id=replacement.generation_id))
+    assert repaired.created
+    assert repaired.item.generation_id == replacement.generation_id
+
+
+@pytest.mark.asyncio
+async def test_worker_acknowledges_a_cascade_orphan_before_quota_retry() -> None:
+    store = FakeDocumentStore()
+    await _seed_session(store, tenant_id="tenant-one", session_id="session-one")
+    runs = FirestoreRunRepository(store)
+    run = (await runs.create(submission())).run
+    work_queue = queue(store, FakeCloudTaskClient())
+    delivered = (await work_queue.enqueue(item(generation_id=run.generation_id))).item
+    assert await runs.delete_run(tenant_id="tenant-one", run_id="run-one")
+    worker = LocalWorker(
+        repository=runs,
+        queue=work_queue,
+        executor=CompletedExecutor(),
+        worker_id="worker-one",
+        clock=lambda: NOW,
+        limiter=FirestoreQuotaLimiter(store, LimitConfig()),
+    )
+
+    assert await worker.process(delivered)
+    assert not await store.list(
+        collection="quota_execution_leases", filters={"tenant_id": "tenant-one"}
+    )
 
 
 @pytest.mark.asyncio

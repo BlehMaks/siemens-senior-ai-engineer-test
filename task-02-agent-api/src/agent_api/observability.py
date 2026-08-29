@@ -39,6 +39,7 @@ _WORK_OUTCOMES = frozenset(
         "failed",
         "not_found",
         "quota_blocked",
+        "stale",
         "terminal",
     }
 )

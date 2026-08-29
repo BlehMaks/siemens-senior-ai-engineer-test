@@ -474,8 +474,6 @@ class FirestoreQuotaLimiter:
         async def operation(
             tx: DocumentStoreTransaction,
         ) -> ExecutionPermit | None:
-            if await tx.get(collection=_RUNS, document_id=document_id) is None:
-                raise StorageError("execution run does not exist")
             guard_id, guard = await _next_quota_guard(
                 tx, tenant_id=checked_tenant, quota="execution"
             )

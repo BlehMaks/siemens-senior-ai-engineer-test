@@ -138,6 +138,7 @@ class LocalWorker:
     async def process(self, item: WorkItem) -> bool:
         if item.generation_id is None:
             self._observe_work(item, "stale")
+            await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
             return True
         permit: ExecutionPermit | None = None
         if self._limiter is not None:
