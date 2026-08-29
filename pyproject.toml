@@ -13,7 +13,16 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers --import-mode=importlib"
 asyncio_mode = "strict"
-pythonpath = [".", "task-02-agent-api/tests"]
+pythonpath = [
+    ".",
+    "task-01-search-agent/src",
+    "task-02-agent-api/src",
+    "task-02-agent-api/tests",
+    "task-03-deployment-strategy/src",
+    "task-04-binary-classification/src",
+    "task-05-material-similarity/src",
+    "task-06-category-consolidation/src",
+]
 testpaths = ["tests", "task-*/tests"]
 
 [tool.ruff]
