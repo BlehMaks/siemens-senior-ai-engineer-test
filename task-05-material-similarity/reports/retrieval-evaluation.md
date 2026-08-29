@@ -15,7 +15,7 @@ The grades mean:
 - 1: broad lexical match with a known conflict or missing evidence;
 - 0: incompatible or unsupported.
 
-No grade certifies a drop-in replacement. Precision treats grades 2–3 as relevant;
+No grade certifies a drop-in replacement. Precision treats grades 2 and 3 as relevant;
 nDCG uses all four grades and therefore distinguishes a close variant from a hard
 negative. The evaluator rejects self-labels, duplicate labels, unknown IDs, catalog
 hash drift, non-deterministic result IDs, and any top-five prediction that was not

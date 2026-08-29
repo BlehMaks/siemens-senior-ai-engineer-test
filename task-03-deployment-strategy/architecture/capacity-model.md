@@ -1,4 +1,4 @@
-# C01B — Capacity model and local fake-provider load proof
+# C01B: Capacity model and local fake-provider load proof
 
 Status: executable local proof; enterprise envelopes are design probes, not
 production capacity claims.
@@ -49,9 +49,9 @@ submission and recovery contracts that matter for deployment.
 
 | Envelope | Submission rate | In-flight range | Worksheet point | Fetch rate | Model throughput | Worker slots | Evidence status |
 |---|---:|---:|---:|---:|---:|---:|---|
-| Pilot | 1 run/s | 20–50 | 35 in-flight | 12 fetches/s | 6,000 tokens/s | 4 | Small local fake-provider proof only |
-| Business unit | 20 runs/s | 500–1,500 | 1,000 in-flight | 400 fetches/s | 200,000 tokens/s | 100 | Unmeasured design probe |
-| Enterprise stress | 100 runs/s plus burst | 5,000–15,000 | 10,000 in-flight | 3,000 fetches/s | 1,500,000 tokens/s | 1,000 | Unmeasured design probe; not a production claim |
+| Pilot | 1 run/s | 20 to 50 | 35 in-flight | 12 fetches/s | 6,000 tokens/s | 4 | Small local fake-provider proof only |
+| Business unit | 20 runs/s | 500 to 1,500 | 1,000 in-flight | 400 fetches/s | 200,000 tokens/s | 100 | Unmeasured design probe |
+| Enterprise stress | 100 runs/s plus burst | 5,000 to 15,000 | 10,000 in-flight | 3,000 fetches/s | 1,500,000 tokens/s | 1,000 | Unmeasured design probe; not a production claim |
 
 The 100 rps enterprise stress case is deliberately not presented as a locally proven
 capacity result. It is a sizing pressure test for provider quotas, inference

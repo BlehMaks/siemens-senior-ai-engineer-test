@@ -1,4 +1,4 @@
-# C01A — Enterprise production and migration gates
+# C01A: Enterprise production and migration gates
 
 Status: reviewer-facing production addendum. It defines decision gates, not a claim
 that Siemens production infrastructure has been deployed or approved.

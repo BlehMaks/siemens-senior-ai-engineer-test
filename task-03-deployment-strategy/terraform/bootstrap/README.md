@@ -1,56 +1,88 @@
-# C03 bootstrap Terraform
+# Bootstrap Terraform
 
-This stack is the manual bootstrap boundary for Task 3. It creates the state
-bucket, required APIs, workload identities, empty protected secret containers,
-their runtime access policies, and optional GitHub workload identity federation.
-The authenticated queue is added only in the second bootstrap phase; application
-services stay out of scope until C04 and C05.
+The bootstrap prepares the delivery boundary for the Tasks 1 to 3 assessment
+service. It is split into two Terraform roots to solve the first-run state problem:
 
-## What it guarantees
+1. `terraform/state_bucket` creates separate private, versioned GCS buckets for
+   privileged bootstrap state and application delivery state;
+2. `terraform/bootstrap` stores its own state in the privileged bucket and
+   creates the remaining GCP and GitHub resources.
+
+Operators should use `scripts/bootstrap.sh` rather than call these roots by hand.
+
+## Managed resources
+
+The main bootstrap creates or configures:
+
+- required project APIs;
+- separate API, worker, Cloud Tasks, and deployer service accounts;
+- scoped predefined roles and small custom roles;
+- repository-ID, branch, and environment-bound GitHub WIF;
+- the GitHub `gcp-dev` Environment, branch policy, reviewer, and Actions variables;
+- regional, deletion-protected Secret Manager containers;
+- one initial random version for each required secret when no enabled version
+  exists;
+- the authenticated Cloud Tasks queue and its OIDC caller policy;
+- application-state access for the deployer, with no bootstrap-state access;
+- a billing-account-scoped budget role for the EUR 5 dev alert.
+
+The application root owns the Cloud Run services. Bootstrap owns their
+post-deploy invoker policy and grants the deployer only the lifecycle operations
+needed for the two deterministic service names. It does not grant project IAM
+administration, queue lifecycle control, Secret Manager payload access, route
+invocation, or Cloud Run SSH.
+
+## Secret handling
+
+Terraform tracks secret containers, not payloads. A `terraform_data` provisioner
+calls `scripts/seed_secret_version.sh`, which generates 48 random bytes and sends
+the encoded value to the Cloud SDK over stdin. Existing enabled versions make the
+step a no-op. The payload is absent from Terraform state and command arguments.
+
+## Operator commands
+
+Terraform 1.9.8 is required. Set `TERRAFORM_BIN` when it is not on `PATH`:
+
+```bash
+export TERRAFORM_BIN=/absolute/path/to/terraform
+
+./task-03-deployment-strategy/scripts/bootstrap.sh plan \
+  PROJECT_ID OWNER/REPOSITORY REVIEWER REGION
+
+./task-03-deployment-strategy/scripts/bootstrap.sh apply \
+  PROJECT_ID OWNER/REPOSITORY REVIEWER REGION
+
+./task-03-deployment-strategy/scripts/bootstrap.sh verify \
+  PROJECT_ID OWNER/REPOSITORY REVIEWER REGION
+
+./task-03-deployment-strategy/scripts/bootstrap.sh deploy \
+  PROJECT_ID OWNER/REPOSITORY REVIEWER REGION
+```
+
+`plan` is read-only. On a first run it shows the two foundation buckets and stops.
+`apply` creates and verifies the bootstrap. `verify` requires a no-drift plan and
+checks the GitHub output and queue. `deploy` does the same work as `apply`, then
+dispatches `deploy.yml` only when local `HEAD` equals remote `master`; after the
+workflow it verifies the EUR 5 budget and one-instance Cloud Run caps from
+application state. The dispatch carries that verified SHA, and the workflow
+fails before cloud authentication if GitHub resolves `master` to another commit.
+
+## Guarantees and limits
 
 - no service-account keys;
-- no primitive Owner, Editor, or Viewer roles;
-- one service account per workload;
-- reviewed predefined roles plus a small database/budget/Cloud Run lifecycle
-  custom role for the application deployer, with no project-IAM, Firestore entity,
-  direct Cloud Run invocation, or Cloud Run SSH permissions;
-- `serviceAccountUser` only on the two Cloud Run identities it must attach and
-  `storage.objectAdmin` only on the Terraform state bucket;
-- project-level `datastore.user` bindings are bootstrap-owned and limited to the
-  API and worker identities, so the application deployer cannot grant itself data
-  access;
-- regional, deletion-protected secret containers and their resource-scoped runtime
-  access are bootstrap-owned; payload versions remain out of Terraform and the
-  application deployer has no Secret Manager administration or access role;
-- the Cloud Tasks queue, service-agent token grant, worker invoker, public API
-  invoker, and queue data-plane bindings are bootstrap-owned; the deployer has
-  no queue lifecycle permission and cannot mutate service, queue, or
-  service-account IAM policies;
-- GitHub OIDC trust anchored to one immutable numeric repository ID and also
-  narrowed to the expected owner/repository name and branch, with optional
-  environment pinning;
-- a versioned, non-public state bucket for later remote backend use.
+- no primitive Owner, Editor, or Viewer grants;
+- state bucket versioning, uniform access, public access prevention, and no force
+  destroy;
+- provider locks for Darwin ARM64, Darwin AMD64, and Linux AMD64;
+- idempotent secret seeding and Terraform retry behavior;
+- no direct resource creation by the wrapper.
 
-## Honest limits
+The complete entity and IAM inventory is maintained in
+[`docs/cloud-resource-manifest.md`](../../../docs/cloud-resource-manifest.md).
 
-- The bootstrap stack intentionally has no `backend` block because it is the
-  stack that creates the later remote backend bucket.
-- The committed provider lock is generated with Terraform 1.9 for Darwin ARM64
-  and Linux AMD64. Validation still needs the locked providers to be available
-  in the local Terraform cache.
-- Applying this stack still requires a human-held project-admin credential in a
-  dedicated assessment project. That live plan is deferred to O13.
-- The deployer can update Cloud Run services and attach the two named Cloud Run
-  identities. That is an intentional high-trust release capability: deployed code
-  runs with the selected identity. Repository-ID/ref/environment-bound WIF,
-  protected approvals, immutable image digests, and exact plan/apply binding are
-  therefore security boundaries, not optional process controls.
-- Cloud Run services do not exist on the first bootstrap apply. Leave
-  `enable_runtime_policy = false`, create the reviewed application services,
-  then reapply this stack with `enable_runtime_policy = true` to create the queue
-  and its runtime IAM. Set
-  `api_allow_unauthenticated` to match the application ingress mode. Later
-  application deploys never need IAM-policy mutation permissions.
-- The deployer custom role uses the single-project budget permissions documented
-  by Google Cloud. If the selected billing-account policy does not permit that
-  flow, an administrator must grant the external billing permission before O13.
+The project and billing relationship must already exist. A human credential is
+needed for the first bootstrap, and GitHub may require that person to approve the
+protected deployment. Account creation, billing setup, MFA, terms, and corporate
+policy decisions are outside Terraform's authority. The billing account must use
+EUR, and the alert recipient must be a monitored human mailbox with a complete
+domain. The wrapper validates both before Terraform changes either platform.

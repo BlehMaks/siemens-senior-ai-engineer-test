@@ -1,4 +1,4 @@
-# C01 — Cloud decision and target architecture
+# C01: Cloud decision and target architecture
 
 Status: accepted design; implementation evidence is intentionally deferred to the
 delivery gates named in [Boundaries and next evidence](#boundaries-and-next-evidence).
@@ -12,7 +12,7 @@ model-gateway contracts. It does not claim that GCP is universally superior.
 
 | Profile | Purpose | Runtime and data boundary | Cost posture | Evidence in C01 |
 |---|---|---|---|---|
-| Assessment cell | Prove packaging, async execution, identity, persistence, rollback, and teardown | One GCP region; Cloud Run, Cloud Tasks, Firestore, Secret Manager, Artifact Registry, WIF | CPU services scale to zero; bounded replicas/dispatch; no GPU by default; total live test budget under EUR 10 | Architecture and decision only; C02-C07 provide executable evidence |
+| Assessment cell | Prove packaging, async execution, identity, persistence, rollback, and teardown | One GCP region; Cloud Run, Cloud Tasks, Firestore, Secret Manager, Artifact Registry, WIF | CPU services scale to zero; one replica per service; one concurrent dispatch; no GPU; EUR 5 alert budget | Architecture and decision only; C02-C07 provide executable evidence |
 | Siemens-wide target | Define the production path for thousands of employees across legal regions | Independent jurisdictional cells; corporate identity; governed edge; regional workload, data, and model planes | Capacity and commitments follow measured SLO and unit economics, not a guessed fleet | Target design only; no claim that Apigee, Spanner, GKE, Vertex AI, or multi-cell routing was deployed |
 
 The concise decision record is [ADR-0001](adr/0001-gcp-reference-profiles.md).

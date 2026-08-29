@@ -24,12 +24,16 @@ rejected. Accepted tests become ordinary regression coverage with the remediatio
 | Strict production typing | `make type` | change author | Blocking |
 | Unit and integration tests | `make test` | change author | Blocking; flaky retries are not accepted |
 | Complete local gate | `make check` | change author | Blocking |
+| Clean-machine Tasks 1 to 6 check | `make local-submission` | release owner | Blocking before delivery |
+| Running Tasks 1 to 3 API smoke | `make local-acceptance` | release owner | Blocking before cloud deployment |
 | Submission boundary | `make audit-submission` | release owner | Blocking |
 
 Task packages add focused unit, integration, security, and evaluation markers only
 when those layers exist. The mandatory fixture suites require neither internet
 access, a cloud account, nor a local language model. Hardware and live-cloud tests
-use explicit opt-in commands and never replace deterministic coverage.
+use explicit opt-in commands and never replace deterministic coverage. Task 4 and
+Task 5 data checks use `SIEMENS_TASK4_INPUT_DIR` and `SIEMENS_FUSE_CSV`; without
+those private inputs, the affected tests skip with a reason.
 
 ## Review and security gates
 

@@ -30,7 +30,7 @@ docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
 
 `GET /health/live` proves the process is responsive. `GET /health/ready` also checks
 the SQLite schema and quota store. Uvicorn owns SIGTERM and drains the local worker
-within `AGENT_API_SHUTDOWN_SECONDS` (1–30 seconds).
+within `AGENT_API_SHUTDOWN_SECONDS` (1 to 30 seconds).
 
 Generate and scan the final image before promotion:
 

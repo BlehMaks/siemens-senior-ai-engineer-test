@@ -1,110 +1,95 @@
 # Keyless delivery contract
 
-The repository has three narrowly scoped workflows:
+The repository uses three workflows:
 
-- `ci.yml` runs unprivileged Python, Terraform, image, vulnerability, and SBOM
-  checks for pull requests and protected `master` updates;
-- `infra-plan.yml` authenticates only after a manual dispatch on `master` and
-  produces a one-day review artifact;
-- `deploy.yml` rebuilds and scans `master`, promotes that exact image, exposes a
-  Terraform plan bound to its push digest, and applies only that artifact after
-  a second protected-environment approval.
+- `ci.yml` runs unprivileged Python, Terraform, container, vulnerability, and SBOM
+  checks on pull requests and updates to `master`;
+- `infra-plan.yml` creates an approval-gated application plan for a supplied
+  immutable image digest;
+- `deploy.yml` rebuilds and scans `master`, pushes that exact image, exposes the
+  Terraform plan, and applies only the reviewed artifact.
 
-Every third-party action is pinned to a full commit SHA. Repository permissions
-default to none. Only the protected jobs receive `id-token: write`; neither
-workflow accepts a service-account key or reads a GitHub secret.
+Every third-party action is pinned to a full commit SHA. Workflow permissions
+start at none. Only protected jobs receive `id-token: write`, and no workflow uses
+a service-account key.
 
 ## One-time setup
 
-1. Apply `terraform/bootstrap` with a human-held administrator credential. Set
-   `github_repository_id` to GitHub's immutable numeric repository ID,
-   `github_repository` to its current `owner/repository`, `github_branch` to
-   `master`, and `github_environment` to `gcp-dev`.
-2. Create the GitHub environment `gcp-dev`, restrict it to `master`, and require
-   a human reviewer. The WIF provider repeats these controls in its OIDC
-   attribute condition; either boundary can deny federation.
-3. Configure these environment variables from the reviewed bootstrap outputs:
-
-   | Variable | Meaning |
-   |---|---|
-   | `GCP_PROJECT_ID` / `GCP_PROJECT_NUMBER` | Dedicated assessment project |
-   | `GCP_REGION` | Single reviewed region, normally `europe-west3` |
-   | `GCP_TERRAFORM_STATE_BUCKET` | Versioned C03 state bucket |
-   | `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full WIF provider resource name |
-   | `GCP_CI_SERVICE_ACCOUNT` | WIF entry identity that delegates to the deployer |
-   | `GCP_API_SERVICE_ACCOUNT` | API runtime identity |
-   | `GCP_WORKER_SERVICE_ACCOUNT` | Worker runtime identity |
-   | `GCP_TASKS_SERVICE_ACCOUNT` | Cloud Tasks OIDC caller |
-   | `GCP_DEPLOYER_SERVICE_ACCOUNT` | Reviewed Terraform/deployment identity |
-   | `GCP_SECRET_IDS` | JSON object with exactly `api_key_pepper` and `task_signing_hmac` container IDs |
-   | `GCP_BILLING_ACCOUNT_ID` | Optional budget billing account |
-   | `GCP_BUDGET_NOTIFICATION_EMAILS` | Optional Terraform set, for example `["owner@example.com"]` |
-
-4. Add enabled values to the two Terraform-owned Secret Manager containers,
-   `sai-dev-api-key-pepper` and `sai-dev-task-signing-hmac`, through an
-   out-of-band administrator session. Terraform and GitHub never receive the
-   payloads. The administrator must verify both enabled versions before the first
-   application apply; the deployer intentionally cannot inspect Secret Manager.
-5. Create the deterministic Cloud Run services with one reviewed application
-   apply. Reapply `terraform/bootstrap` as the human administrator
-   with `enable_runtime_policy = true` and `api_allow_unauthenticated` matching
-   the ingress mode. This one-time second phase creates the authenticated queue
-   and installs runtime IAM after its Cloud Run targets exist. Keep the queue and
-   these policies bootstrap-owned for later deployments.
-
-The deployer deliberately holds Cloud Run lifecycle permissions but no queue
-permission and no service, project, or service-account IAM-policy mutation. It
-also has no route-invoke or SSH permission. Because deploying code under a
-runtime service account is itself a privileged act, compromise of the approved
-deploy job can still exercise that
-runtime's permissions through replacement code. The two protected approvals,
-exact WIF repository/ref/environment binding, immutable digest, and binary-plan
-verification are the controls for that release authority.
-
-The budget remains disabled unless billing account, project number, positive
-amount, and at least one notification address are all present. A deployer also
-needs `roles/billing.costsManager` on that billing account when the budget is
-enabled; this external scope cannot be granted by project Terraform.
-
-## Review and deployment flow
-
-Pull requests run only `ci.yml`, which has no OIDC permission and therefore
-cannot obtain GCP credentials even when opened from a fork. A merge to `master`
-reruns the same checks. An operator then dispatches `infra-plan.yml` with an OCI
-`sha256` digest and reviews the short-lived plan artifact.
-
-For deployment, dispatch `deploy.yml` on `master`. The unprivileged job creates
-the image and SBOM. A first `gcp-dev` approval admits the plan job, which:
-
-1. creates only the Terraform-managed foundation when the state is empty;
-2. pushes the exact tested tar artifact and resolves its registry digest;
-3. publishes the binary plan, its readable rendering, and a manifest binding it
-   to the workflow revision and push digest.
-
-The apply job references `gcp-dev` again, so it requires a separate approval
-after the plan artifact is available for review. It verifies the manifest,
-downloads the artifact from the same workflow run, applies that exact binary
-plan, and prints the ready revision of each state-owned service.
-
-Deployment concurrency does not cancel an in-flight apply. CI and plan runs do
-cancel stale work. The GCS backend lock is the final serialization boundary.
-
-## Dry verification and failure behavior
-
-Before enabling the environment, run:
+Run the Terraform wrapper from an authenticated operator computer:
 
 ```bash
-actionlint .github/workflows/*.yml
-uv sync --frozen --all-packages --dev
-uv run ruff check .
-uv run pytest -q
-terraform -chdir=task-03-deployment-strategy/terraform fmt -check -recursive
-terraform -chdir=task-03-deployment-strategy/terraform/environments/dev init -backend=false
-terraform -chdir=task-03-deployment-strategy/terraform/environments/dev validate
+./task-03-deployment-strategy/scripts/bootstrap.sh apply \
+  PROJECT_ID OWNER/REPOSITORY REVIEWER REGION
 ```
 
-The workflows stop on a non-`master` ref, missing environment input, malformed
-digest, failed tests, HIGH/CRITICAL image finding, unavailable remote state,
-malformed secret-container IDs, failed plan, or failed apply. They do not fall
-back to static credentials, mutable image tags, local Terraform state, or a
-rebuild of an older revision.
+Terraform configures both platforms. On GCP it creates the delivery identities,
+WIF provider, scoped IAM, queue, and secret foundation. On GitHub it creates the
+`gcp-dev` Environment, limits deployments to `master`, sets the reviewer, and
+writes the environment variables consumed by the workflows.
+
+The variables include project and region IDs, the application-state bucket, WIF
+provider, deployer and runtime identities, secret container IDs, and required
+budget inputs. Secret payloads never enter GitHub.
+
+## Trust path
+
+The short-lived identity exchange is:
+
+```text
+reviewed GitHub job
+  -> repository ID + master + gcp-dev OIDC claims
+deployer service account
+  -> reviewed Terraform and Artifact Registry operations
+```
+
+The deployer can update the two named Cloud Run services and attach their runtime
+identities. That is a high-trust release capability because replacement code runs
+with those identities. Protected environment review, exact WIF claims, immutable
+digests, and the binary-plan handoff are part of the security boundary.
+
+## Deployment flow
+
+Pull requests run `ci.yml` without cloud credentials. After `master` is pushed,
+the operator uses:
+
+```bash
+./task-03-deployment-strategy/scripts/bootstrap.sh deploy \
+  PROJECT_ID OWNER/REPOSITORY REVIEWER REGION
+```
+
+The wrapper verifies Terraform and dispatches `deploy.yml` with the exact remote
+commit SHA and a random correlation ID. The first job checks GitHub's resolved
+`master` against that SHA. A branch movement makes the correlated run fail before
+it can obtain a cloud credential. The workflow then:
+
+1. installs the locked workspace, runs application checks, builds the image,
+   rejects HIGH or CRITICAL findings, and creates an SBOM;
+2. enters the protected environment and obtains a short-lived GCP credential;
+3. creates the managed foundation on an empty application state;
+4. pushes the tested image and verifies the registry digest;
+5. creates a binary Terraform plan and a manifest binding commit, digest, and run;
+6. passes those artifacts to the apply job;
+7. verifies provenance, applies only that plan, and prints the ready revisions.
+
+Deployment concurrency never cancels an in-flight apply. CI and plan jobs may
+cancel stale runs. The GCS state lock is the final serialization boundary.
+
+## Failure behavior
+
+The workflows stop on an unexpected branch, missing environment input, malformed
+digest, failed code or Terraform checks, image finding, unavailable state,
+malformed secret IDs, plan failure, or apply failure. They do not fall back to a
+static credential, mutable image tag, local application state, or rebuild of an
+older revision.
+
+The bootstrap is safe to rerun after a partial failure. Terraform reuses remote
+state, migrates the old combined backend when needed, keeps existing enabled
+secret versions, and dispatches deployment only after verification succeeds.
+
+The wrapper discovers the linked billing account and defaults the recipient to
+the active human account. Terraform grants the deployer
+`roles/billing.costsManager` on that account and creates the EUR 5 alert during
+the application apply. Before any mutation, the wrapper also requires the
+account currency to be EUR and rejects service-account or incomplete recipient
+addresses. The operator must already have billing-account administration
+permission for the first bootstrap.
