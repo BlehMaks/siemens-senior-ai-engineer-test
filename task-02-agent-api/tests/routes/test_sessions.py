@@ -16,7 +16,7 @@ from agent_api.storage import (
     TenantRecord,
     reflection_repository,
 )
-from search_agent.contracts import TerminalState
+from search_agent.contracts import EventType, TerminalState
 from search_agent.memory import CompletionEvidence, ReflectionUsage, RunReflection
 
 NOW = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
@@ -110,7 +110,7 @@ def _reflection(*, tenant_id: str, session_id: str, run_id: str) -> RunReflectio
         session_id=session_id,
         run_id=run_id,
         requested_outcome="Find the public Siemens report.",
-        actions=(),
+        actions=(EventType.EVIDENCE_READY,),
         failures=(),
         recovery_steps=(),
         completion_evidence=(

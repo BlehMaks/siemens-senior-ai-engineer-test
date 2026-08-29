@@ -48,7 +48,7 @@ Health endpoints are intentionally unversioned. The application API is under
 Header values reject whitespace, signs, padding, and unbounded numeric values.
 Neither an idempotency key nor a cursor carries tenant or database meaning.
 
-### Local key bootstrap
+### Key administration
 
 Set `AGENT_API_KEY_PEPPER` to an unpadded base64url value representing at least
 32 random bytes. Create a tenant key with:
@@ -62,7 +62,21 @@ The command prints the new key once. Store it in the caller's secret store. For
 rotation or revocation, put `Bearer <api-key>` in `AGENT_API_AUTHORIZATION` and
 run the corresponding subcommand. Credentials are intentionally never accepted
 as command-line values, where process listings and shell history could expose
-them. The bootstrap command is local administration tooling, not an HTTP route.
+them.
+
+Production operators must write the same Firestore database used by the Cloud
+Run replicas. With Application Default Credentials that can write that database,
+create a shared key with:
+
+```text
+agent-api-key-admin --gcp-project my-project \
+  --firestore-database '(default)' create \
+  --tenant-id tenant-one --scope sessions:read --scope sessions:write
+```
+
+The same backend options apply to `rotate` and `revoke`. The command stores only
+the key hash and prints newly generated plaintext once; it is administration
+tooling, not an HTTP route.
 
 ## Sessions and pagination
 

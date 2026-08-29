@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Annotated, Protocol
@@ -19,6 +20,10 @@ IdempotencyKey = Annotated[
         pattern=r"^[A-Za-z0-9]+(?:[._~-][A-Za-z0-9]+)*$",
     ),
 ]
+
+
+def _new_generation_id() -> str:
+    return "generation-" + secrets.token_hex(16)
 
 
 class RunState(StrEnum):
@@ -131,6 +136,7 @@ class RunSubmission(StrictModel):
     tenant_id: OpaqueId
     session_id: OpaqueId
     run_id: OpaqueId
+    generation_id: OpaqueId = Field(default_factory=_new_generation_id)
     idempotency_key: IdempotencyKey
     query: QueryText
     created_at: datetime
@@ -157,6 +163,7 @@ class RunRecord(StrictModel):
     tenant_id: OpaqueId
     session_id: OpaqueId
     run_id: OpaqueId
+    generation_id: OpaqueId = Field(default_factory=_new_generation_id)
     idempotency_key: IdempotencyKey
     query: QueryText
     state: RunState
@@ -282,6 +289,7 @@ class CreateRunResult(StrictModel):
 class ClaimRequest(StrictModel):
     tenant_id: OpaqueId
     run_id: OpaqueId
+    generation_id: OpaqueId | None = None
     worker_id: OpaqueId
     lease_id: OpaqueId
     now: datetime
@@ -297,6 +305,7 @@ class ClaimDisposition(StrEnum):
     CANCELLATION_REQUESTED = "cancellation_requested"
     TERMINAL = "terminal"
     LEASE_UNAVAILABLE = "lease_unavailable"
+    STALE = "stale"
     NOT_FOUND = "not_found"
 
 
@@ -595,6 +604,7 @@ class WorkItem(StrictModel):
     work_id: OpaqueId
     tenant_id: OpaqueId
     run_id: OpaqueId
+    generation_id: OpaqueId | None = None
     enqueued_at: datetime
     not_before: datetime
 

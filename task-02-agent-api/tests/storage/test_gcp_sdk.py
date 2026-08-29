@@ -6,10 +6,16 @@ from typing import cast
 
 import pytest
 from google.api_core.exceptions import AlreadyExists, InternalServerError, NotFound
+from google.auth.credentials import AnonymousCredentials
+from google.cloud.firestore_v1.async_client import AsyncClient
 from google.cloud.tasks_v2.types import Task
 
 import agent_api.storage.gcp as gcp_storage
-from agent_api.storage import CloudTask, CloudTaskAlreadyExistsError
+from agent_api.storage import (
+    CloudTask,
+    CloudTaskAlreadyExistsError,
+    DocumentStoreTransaction,
+)
 from agent_api.storage.gcp import (
     GoogleCloudTaskClient,
     GoogleFirestoreDocumentStore,
@@ -17,12 +23,24 @@ from agent_api.storage.gcp import (
 
 
 class FakeSnapshot:
-    def __init__(self, document: dict[str, object] | None) -> None:
+    def __init__(
+        self, document: dict[str, object] | None, document_id: str | None = None
+    ) -> None:
         self.exists = document is not None
         self._document = document
+        self.id = (
+            ""
+            if document is None
+            else document_id
+            or str(document.get("__name__", document.get("document_id", "")))
+        )
 
     def to_dict(self) -> dict[str, object] | None:
-        return self._document
+        if self._document is None:
+            return None
+        document = dict(self._document)
+        document.pop("__name__", None)
+        return document
 
 
 class FakeDocumentReference:
@@ -35,7 +53,8 @@ class FakeDocumentReference:
 
     async def get(self) -> FakeSnapshot:
         return FakeSnapshot(
-            self._store.documents.get(self.collection, {}).get(self.document_id)
+            self._store.documents.get(self.collection, {}).get(self.document_id),
+            self.document_id,
         )
 
 
@@ -45,7 +64,7 @@ class FakeQuery:
         store: FakeAsyncClient,
         collection: str,
         *,
-        filters: list[tuple[str, object]] | None = None,
+        filters: list[tuple[str, str, object]] | None = None,
         order_by: tuple[str, ...] = (),
         start_after: Mapping[str, object] | None = None,
         limit: int | None = None,
@@ -58,11 +77,11 @@ class FakeQuery:
         self.capped = limit
 
     def where(self, field_path: str, op_string: str, value: object) -> FakeQuery:
-        assert op_string == "=="
+        assert op_string in {"==", ">=", "<"}
         return FakeQuery(
             self._store,
             self.collection,
-            filters=[*self.filters, (field_path, value)],
+            filters=[*self.filters, (field_path, op_string, value)],
             order_by=self.ordering,
             start_after=self.cursor,
             limit=self.capped,
@@ -112,16 +131,19 @@ class FakeCollectionReference(FakeQuery):
 class FakeAsyncTransaction:
     def __init__(self, store: FakeAsyncClient) -> None:
         self._store = store
+        self.reads = 0
         self.writes: list[tuple[str, str, dict[str, object]] | tuple[str, str]] = []
 
     async def get(
         self, ref_or_query: FakeDocumentReference | FakeQuery
     ) -> AsyncIterator[FakeSnapshot]:
+        self.reads += 1
         if isinstance(ref_or_query, FakeDocumentReference):
             yield FakeSnapshot(
                 self._store.documents.get(ref_or_query.collection, {}).get(
                     ref_or_query.document_id
-                )
+                ),
+                ref_or_query.document_id,
             )
             return
         for row in self._store.query_rows(ref_or_query):
@@ -159,9 +181,22 @@ class FakeAsyncClient:
         return self.last_transaction
 
     def query_rows(self, query: FakeQuery) -> list[dict[str, object]]:
-        rows = list(self.documents.get(query.collection, {}).values())
-        for key, expected in query.filters:
-            rows = [row for row in rows if row.get(key) == expected]
+        rows = [
+            {**row, "__name__": document_id}
+            for document_id, row in self.documents.get(query.collection, {}).items()
+        ]
+        for key, operator, expected in query.filters:
+            comparable = (
+                expected.document_id
+                if key == "__name__" and isinstance(expected, FakeDocumentReference)
+                else expected
+            )
+            if operator == "==":
+                rows = [row for row in rows if row.get(key) == comparable]
+            elif operator == ">=":
+                rows = [row for row in rows if str(row.get(key)) >= str(comparable)]
+            else:
+                rows = [row for row in rows if str(row.get(key)) < str(comparable)]
         for field in reversed(query.ordering):
             rows.sort(key=lambda row: str(row[field]))
         if query.cursor is not None:
@@ -248,11 +283,60 @@ async def test_firestore_store_builds_filtered_ordered_query() -> None:
 
     assert rows == (
         {
+            "document_id": "2",
             "tenant_id": "t",
             "created_at": "2026-01-02T00:00:00+00:00",
             "session_id": "b",
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_firestore_store_scans_by_physical_document_prefix() -> None:
+    client = FakeAsyncClient()
+    client.documents["leases"] = {
+        "tenant-one|lease-a": {
+            "document_id": "tenant-two|lease-b",
+            "tenant_id": "tenant-two",
+        },
+        "tenant-one|\uf8ff": {"tenant_id": "tenant-one"},
+        "tenant-one|😀": {"tenant_id": "tenant-one"},
+        "tenant-two|lease-b": {"tenant_id": "tenant-one"},
+    }
+    store = GoogleFirestoreDocumentStore(cast(gcp_storage._FirestoreClient, client))
+
+    rows = await store.list(
+        collection="leases",
+        document_id_prefix="tenant-one|",
+    )
+
+    assert rows == (
+        {
+            "document_id": "tenant-one|lease-a",
+            "tenant_id": "tenant-two",
+        },
+        {"document_id": "tenant-one|\uf8ff", "tenant_id": "tenant-one"},
+        {"document_id": "tenant-one|😀", "tenant_id": "tenant-one"},
+    )
+
+
+def test_firestore_document_prefix_uses_reference_bounds() -> None:
+    client = AsyncClient(project="test-project", credentials=AnonymousCredentials())
+
+    query = gcp_storage._build_query(
+        client.collection("leases"),
+        document_id_prefix="tenant-one|",
+        filters=None,
+        order_by=(),
+        start_after=None,
+        limit=7,
+    )
+    structured = query._to_protobuf()  # type: ignore[attr-defined]
+
+    assert [
+        item.field_filter.value._pb.WhichOneof("value_type")
+        for item in structured.where.composite_filter.filters
+    ] == ["reference_value", "reference_value"]
 
 
 @pytest.mark.asyncio
@@ -309,6 +393,33 @@ async def test_firestore_transaction_get_and_delete_translate_missing_documents(
 
     assert found is None
     assert deleted is False
+
+
+@pytest.mark.asyncio
+async def test_firestore_transaction_deletes_known_documents_without_reading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeAsyncClient()
+    client.documents["leases"] = {"lease-one": {"lease_id": "lease-one"}}
+    store = GoogleFirestoreDocumentStore(cast(gcp_storage._FirestoreClient, client))
+    monkeypatch.setattr(
+        "agent_api.storage.gcp.async_transactional",
+        lambda function: function,
+    )
+
+    async def delete_known(tx: DocumentStoreTransaction) -> None:
+        await tx.delete_known(collection="leases", document_id="lease-one")
+        await tx.delete_known(collection="leases", document_id="already-missing")
+
+    await store.transaction(delete_known)
+
+    assert client.documents["leases"] == {}
+    assert client.last_transaction is not None
+    assert client.last_transaction.reads == 0
+    assert client.last_transaction.writes == [
+        ("delete", "lease-one"),
+        ("delete", "already-missing"),
+    ]
 
 
 @pytest.mark.asyncio

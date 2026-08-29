@@ -347,10 +347,12 @@ async def test_cloud_fake_worker_accepts_signed_task_delivery_for_retry(
         work_id="work-cloud-smoke",
         tenant_id="tenant-cloud",
         run_id="run-cloud",
+        generation_id="generation-cloud-smoke",
         enqueued_at=datetime(2026, 8, 27, 12, 0, tzinfo=UTC),
         not_before=datetime(2026, 8, 27, 12, 0, tzinfo=UTC),
     )
-    task_id = hashlib.sha256(item.work_id.encode()).hexdigest()[:32]
+    task_identity = f"{item.work_id}\x00{item.generation_id}"
+    task_id = hashlib.sha256(task_identity.encode()).hexdigest()[:32]
     task_name = f"{settings.queue_name}/tasks/work-{task_id}"
     body, signed_headers = codec.encode(
         item,

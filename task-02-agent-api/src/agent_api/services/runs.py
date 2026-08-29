@@ -107,6 +107,7 @@ class RunService:
                 work_id=f"work-{run.run_id}",
                 tenant_id=run.tenant_id,
                 run_id=run.run_id,
+                generation_id=run.generation_id,
                 enqueued_at=run.created_at,
                 not_before=run.created_at,
             )

@@ -21,7 +21,7 @@ from pydantic import (
 
 from search_agent.contracts import OpaqueId, StrictModel
 
-from ..storage import ApiKeyHashRecord, ApiKeyScope, SQLiteKeyHashRepository
+from ..storage import ApiKeyHashRecord, ApiKeyScope
 
 _OPAQUE_ID = TypeAdapter(OpaqueId)
 _SCOPE = TypeAdapter(ApiKeyScope)
@@ -36,6 +36,29 @@ _DEFAULT_PEPPER_ENV = "AGENT_API_KEY_PEPPER"
 
 class PepperProvider(Protocol):
     def pepper(self) -> bytes: ...
+
+
+class ApiKeyRepository(Protocol):
+    """Persistence contract required by the key lifecycle boundary."""
+
+    async def put(self, record: ApiKeyHashRecord) -> bool: ...
+
+    async def get(
+        self, *, tenant_id: OpaqueId, key_id: OpaqueId
+    ) -> ApiKeyHashRecord | None: ...
+
+    async def revoke(
+        self, *, tenant_id: OpaqueId, key_id: OpaqueId, at: datetime
+    ) -> bool: ...
+
+    async def rotate(
+        self,
+        *,
+        old_tenant_id: OpaqueId,
+        old_key_id: OpaqueId,
+        new_record: ApiKeyHashRecord,
+        at: datetime,
+    ) -> bool: ...
 
 
 class EnvPepperProvider:
@@ -117,7 +140,7 @@ class GeneratedApiKey:
 
 class ApiKeyManager:
     def __init__(
-        self, repository: SQLiteKeyHashRepository, pepper_provider: PepperProvider
+        self, repository: ApiKeyRepository, pepper_provider: PepperProvider
     ) -> None:
         self._repository = repository
         self._pepper_provider = pepper_provider

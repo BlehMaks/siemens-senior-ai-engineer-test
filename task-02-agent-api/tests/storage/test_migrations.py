@@ -193,7 +193,7 @@ async def test_tampered_and_future_migration_history_is_rejected(
         connection.execute(
             "INSERT INTO schema_migrations "
             "(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
-            (5, "future", "1" * 64, "2026-08-27T10:00:00+00:00"),
+            (6, "future", "1" * 64, "2026-08-27T10:00:00+00:00"),
         )
     with pytest.raises(MigrationError, match="newer"):
         await migrate(future)
@@ -219,7 +219,7 @@ async def test_failed_migration_rolls_back_schema_and_ledger(
     path = tmp_path / "rollback.sqlite3"
     await migrate(path)
     broken = schema._Migration(
-        5,
+        6,
         "broken",
         "CREATE TABLE rollback_probe (value TEXT);\n"
         "INSERT INTO table_that_does_not_exist VALUES (1);\n",
@@ -236,7 +236,7 @@ async def test_failed_migration_rolls_back_schema_and_ledger(
         probe = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'rollback_probe'"
         ).fetchone()
-    assert versions == [(1,), (2,), (3,), (4,)]
+    assert versions == [(1,), (2,), (3,), (4,), (5,)]
     assert probe is None
 
 
@@ -274,7 +274,7 @@ async def test_api_key_lifecycle_migration_keeps_old_rows_non_authorizing(
     with sqlite3.connect(path) as connection:
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,), (4,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,), (5,)]
         assert connection.execute(
             "SELECT scopes, rotated_from_key_id FROM api_key_hashes "
             "WHERE tenant_id = ? AND key_id = ?",
@@ -302,7 +302,7 @@ async def test_local_work_queue_migration_adds_due_indexes_on_reopen(
             row[1] for row in connection.execute('PRAGMA table_info("work_items")')
         )
 
-    assert versions == [(1,), (2,), (3,), (4,)]
+    assert versions == [(1,), (2,), (3,), (4,), (5,)]
     assert "work_items_by_due" in indexes
     assert columns == (
         "work_id",
@@ -310,7 +310,81 @@ async def test_local_work_queue_migration_adds_due_indexes_on_reopen(
         "run_id",
         "enqueued_at",
         "not_before",
+        "generation_id",
     )
+
+
+@pytest.mark.asyncio
+async def test_generation_migration_binds_existing_work_to_its_run(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "generation.sqlite3"
+    migrations = schema._MIGRATIONS
+    with sqlite3.connect(path) as connection:
+        connection.execute(schema._CREATE_LEDGER)
+        for migration in migrations[:4]:
+            connection.executescript(migration.sql)
+            connection.execute(
+                "INSERT INTO schema_migrations "
+                "(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
+                (
+                    migration.version,
+                    migration.name,
+                    migration.checksum,
+                    "2026-08-27T10:00:00+00:00",
+                ),
+            )
+        connection.execute(
+            "INSERT INTO tenants (tenant_id, created_at) VALUES (?, ?)",
+            ("tenant-one", "2026-08-27T10:00:00.000000+00:00"),
+        )
+        connection.execute(
+            "INSERT INTO sessions "
+            "(tenant_id, session_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (
+                "tenant-one",
+                "session-one",
+                "2026-08-27T10:00:00.000000+00:00",
+                "2026-08-27T10:00:00.000000+00:00",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO runs "
+            "(tenant_id, run_id, session_id, state, version, created_at, payload) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "tenant-one",
+                "run-one",
+                "session-one",
+                "queued",
+                "0",
+                "2026-08-27T10:00:00.000000+00:00",
+                '{"tenant_id":"tenant-one","run_id":"run-one"}',
+            ),
+        )
+        connection.execute(
+            "INSERT INTO work_items "
+            "(work_id, tenant_id, run_id, enqueued_at, not_before) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                "work-one",
+                "tenant-one",
+                "run-one",
+                "2026-08-27T10:00:00.000000+00:00",
+                "2026-08-27T10:00:00.000000+00:00",
+            ),
+        )
+    await migrate(path)
+
+    with sqlite3.connect(path) as connection:
+        run_generation = connection.execute(
+            "SELECT json_extract(payload, '$.generation_id') FROM runs"
+        ).fetchone()[0]
+        work_generation = connection.execute(
+            "SELECT generation_id FROM work_items"
+        ).fetchone()[0]
+    assert run_generation.startswith("generation-")
+    assert work_generation == run_generation
 
 
 @pytest.mark.asyncio

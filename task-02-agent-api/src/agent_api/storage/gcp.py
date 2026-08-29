@@ -37,6 +37,7 @@ class GoogleFirestoreDocumentStore(DocumentStore):
         self,
         *,
         collection: str,
+        document_id_prefix: str | None = None,
         filters: Mapping[str, object] | None = None,
         order_by: tuple[str, ...] = (),
         start_after: Mapping[str, object] | None = None,
@@ -44,6 +45,7 @@ class GoogleFirestoreDocumentStore(DocumentStore):
     ) -> tuple[dict[str, object], ...]:
         query = _build_query(
             self._client.collection(collection),
+            document_id_prefix=document_id_prefix,
             filters=filters,
             order_by=order_by,
             start_after=start_after,
@@ -79,13 +81,22 @@ class _GoogleFirestoreTransaction(DocumentStoreTransaction):
     ) -> None:
         self._client = client
         self._transaction = transaction
+        self._known_documents: set[tuple[str, str]] = set()
+        self._missing_documents: set[tuple[str, str]] = set()
 
     async def get(
         self, *, collection: str, document_id: str
     ) -> dict[str, object] | None:
+        key = (collection, document_id)
         document = self._client.collection(collection).document(document_id)
         async for snapshot in _stream_items(self._transaction.get(document)):
-            return _snapshot_document(snapshot)
+            decoded = _snapshot_document(snapshot)
+            if decoded is None:
+                self._missing_documents.add(key)
+            else:
+                self._known_documents.add(key)
+            return decoded
+        self._missing_documents.add(key)
         return None
 
     async def set(
@@ -93,20 +104,38 @@ class _GoogleFirestoreTransaction(DocumentStoreTransaction):
     ) -> None:
         reference = self._client.collection(collection).document(document_id)
         self._transaction.set(reference, dict(document))
+        self._known_documents.add((collection, document_id))
+        self._missing_documents.discard((collection, document_id))
 
     async def delete(self, *, collection: str, document_id: str) -> bool:
         reference = self._client.collection(collection).document(document_id)
+        key = (collection, document_id)
+        if key in self._known_documents:
+            self._transaction.delete(reference)
+            self._known_documents.discard(key)
+            self._missing_documents.add(key)
+            return True
+        if key in self._missing_documents:
+            return False
         async for snapshot in _stream_items(self._transaction.get(reference)):
             if not snapshot.exists:
+                self._missing_documents.add(key)
                 return False
             self._transaction.delete(reference)
+            self._missing_documents.add(key)
             return True
+        self._missing_documents.add(key)
         return False
+
+    async def delete_known(self, *, collection: str, document_id: str) -> None:
+        reference = self._client.collection(collection).document(document_id)
+        self._transaction.delete(reference)
 
     async def list(
         self,
         *,
         collection: str,
+        document_id_prefix: str | None = None,
         filters: Mapping[str, object] | None = None,
         order_by: tuple[str, ...] = (),
         start_after: Mapping[str, object] | None = None,
@@ -114,6 +143,7 @@ class _GoogleFirestoreTransaction(DocumentStoreTransaction):
     ) -> tuple[dict[str, object], ...]:
         query = _build_query(
             self._client.collection(collection),
+            document_id_prefix=document_id_prefix,
             filters=filters,
             order_by=order_by,
             start_after=start_after,
@@ -124,6 +154,9 @@ class _GoogleFirestoreTransaction(DocumentStoreTransaction):
             document = _snapshot_document(snapshot)
             if document is not None:
                 rows.append(document)
+                document_id = document.get("document_id")
+                if type(document_id) is str:
+                    self._known_documents.add((collection, document_id))
         return tuple(rows)
 
 
@@ -186,14 +219,20 @@ class GoogleCloudTaskClient(CloudTaskClient):
 
 
 def _build_query(
-    query: _FirestoreQuery,
+    query: _FirestoreCollectionReference,
     *,
+    document_id_prefix: str | None,
     filters: Mapping[str, object] | None,
     order_by: tuple[str, ...],
     start_after: Mapping[str, object] | None,
     limit: int | None,
 ) -> _FirestoreQuery:
-    built = query
+    built: _FirestoreQuery = query
+    if document_id_prefix is not None:
+        lower = query.document(document_id_prefix)
+        upper = query.document(_prefix_upper_bound(document_id_prefix))
+        built = built.where("__name__", ">=", lower)
+        built = built.where("__name__", "<", upper)
     if filters is not None:
         for key, value in filters.items():
             built = built.where(key, "==", value)
@@ -206,6 +245,14 @@ def _build_query(
     return built
 
 
+def _prefix_upper_bound(prefix: str) -> str:
+    for index in range(len(prefix) - 1, -1, -1):
+        codepoint = ord(prefix[index])
+        if codepoint < 0x10FFFF:
+            return prefix[:index] + chr(codepoint + 1)
+    raise ValueError("document ID prefix has no finite upper bound")
+
+
 def _snapshot_document(snapshot: object) -> dict[str, object] | None:
     checked = cast(_Snapshot, snapshot)
     if not checked.exists:
@@ -213,6 +260,7 @@ def _snapshot_document(snapshot: object) -> dict[str, object] | None:
     document = checked.to_dict()
     if type(document) is not dict:
         raise TypeError("Firestore document payload must be an object")
+    document["document_id"] = checked.id
     return document
 
 
@@ -240,6 +288,9 @@ def _decode_task(task: Task) -> CloudTask:
 
 
 class _Snapshot(Protocol):
+    @property
+    def id(self) -> str: ...
+
     @property
     def exists(self) -> bool: ...
 

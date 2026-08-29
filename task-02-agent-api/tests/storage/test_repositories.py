@@ -33,7 +33,7 @@ from agent_api.storage import (
     TenantRecord,
     reflection_repository,
 )
-from search_agent.contracts import Citation, ScopedAnswer, TerminalState
+from search_agent.contracts import Citation, EventType, ScopedAnswer, TerminalState
 from search_agent.memory import (
     CompletionEvidence,
     ReflectionStorageError,
@@ -69,7 +69,7 @@ def reflection(*, tenant_id: str, run_id: str) -> RunReflection:
         session_id="session-one",
         run_id=run_id,
         requested_outcome="Find the public Siemens report.",
-        actions=(),
+        actions=(EventType.EVIDENCE_READY,),
         failures=(),
         recovery_steps=(),
         completion_evidence=(
@@ -727,7 +727,8 @@ async def test_work_queue_receive_is_durable_and_recovers_visibility(
         not_before=NOW,
     )
 
-    assert (await queue.enqueue(item)).created is True
+    enqueued = await queue.enqueue(item)
+    assert enqueued.created is True
     claimed = await queue.receive(now=NOW, visibility_seconds=10)
     reopened = SQLiteWorkQueue(migrated_path)
     hidden = await reopened.receive(
@@ -737,7 +738,7 @@ async def test_work_queue_receive_is_durable_and_recovers_visibility(
         now=NOW + timedelta(seconds=10), visibility_seconds=10
     )
 
-    assert claimed == item
+    assert claimed == enqueued.item
     assert hidden is None
     assert recovered is not None
     assert recovered.work_id == item.work_id
@@ -761,14 +762,14 @@ async def test_work_queue_receive_is_claimed_once_across_two_consumers(
         enqueued_at=NOW,
         not_before=NOW,
     )
-    await queue.enqueue(item)
+    enqueued = await queue.enqueue(item)
 
     first, second = await asyncio.gather(
         queue.receive(now=NOW, visibility_seconds=10),
         SQLiteWorkQueue(migrated_path).receive(now=NOW, visibility_seconds=10),
     )
 
-    assert {first, second} == {item, None}
+    assert {first, second} == {enqueued.item, None}
 
 
 @pytest.mark.asyncio
@@ -792,7 +793,7 @@ async def test_work_queue_cancel_is_tenant_scoped_after_enqueue(
             not_before=NOW,
         )
     )
-    await queue.enqueue(
+    remaining = await queue.enqueue(
         WorkItem(
             work_id="work-two",
             tenant_id="tenant-two",
@@ -803,13 +804,7 @@ async def test_work_queue_cancel_is_tenant_scoped_after_enqueue(
     )
 
     assert await queue.cancel(tenant_id="tenant-one", run_id="run-one") == 1
-    assert await queue.receive(now=NOW, visibility_seconds=10) == WorkItem(
-        work_id="work-two",
-        tenant_id="tenant-two",
-        run_id="run-two",
-        enqueued_at=NOW,
-        not_before=NOW,
-    )
+    assert await queue.receive(now=NOW, visibility_seconds=10) == remaining.item
 
 
 @pytest.mark.asyncio

@@ -59,6 +59,12 @@ class RunSnapshot(StrictModel):
         if self.status is RunStatus.ANSWER_READY and self.answer is None:
             msg = "answer_ready runs require an answer"
             raise ValueError(msg)
+        if self.status is RunStatus.ANSWER_READY and (
+            self.answer is not None
+            and bool(self.answer.citations) != bool(self.evidence)
+        ):
+            msg = "answer citations must match the evidence-backed run path"
+            raise ValueError(msg)
         terminal_statuses = {
             RunStatus.COMPLETED: TerminalState.COMPLETED,
             RunStatus.FAILED: TerminalState.FAILED,
@@ -76,7 +82,7 @@ class RunSnapshot(StrictModel):
         if self.status is RunStatus.COMPLETED and self.answer is None:
             msg = "completed runs require an answer"
             raise ValueError(msg)
-        if self.status in {RunStatus.ANSWER_READY, RunStatus.COMPLETED} and (
+        if self.status is RunStatus.COMPLETED and (
             self.answer is not None
             and bool(self.answer.citations) != bool(self.evidence)
         ):

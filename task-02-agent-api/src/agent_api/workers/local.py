@@ -136,6 +136,9 @@ class LocalWorker:
         return True
 
     async def process(self, item: WorkItem) -> bool:
+        if item.generation_id is None:
+            self._observe_work(item, "stale")
+            return True
         permit: ExecutionPermit | None = None
         if self._limiter is not None:
             permit = await self._limiter.acquire_execution(
@@ -164,6 +167,7 @@ class LocalWorker:
             ClaimRequest(
                 tenant_id=item.tenant_id,
                 run_id=item.run_id,
+                generation_id=item.generation_id,
                 worker_id=self._worker_id,
                 lease_id=self._lease_id_factory(),
                 now=self._clock(),
@@ -171,6 +175,9 @@ class LocalWorker:
             )
         )
         run = claim.run
+        if claim.disposition is ClaimDisposition.STALE:
+            self._observe_work(item, "stale")
+            return True
         if claim.disposition in {
             ClaimDisposition.TERMINAL,
             ClaimDisposition.NOT_FOUND,

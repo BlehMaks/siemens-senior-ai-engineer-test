@@ -38,6 +38,7 @@ _MIGRATIONS = (
     _bundled_migration(2, "api-key-lifecycle", "002_api_key_lifecycle.sql"),
     _bundled_migration(3, "local-work-queue", "003_local_work_queue.sql"),
     _bundled_migration(4, "quota-accounting", "004_quota_accounting.sql"),
+    _bundled_migration(5, "work-item-generation", "005_work_item_generation.sql"),
 )
 _CREATE_LEDGER = """
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -86,6 +87,7 @@ _REQUIRED_COLUMNS = {
         "run_id",
         "enqueued_at",
         "not_before",
+        "generation_id",
     ),
     "quota_rate_buckets": ("tenant_id", "key_id", "tokens", "last_refill"),
     "quota_run_admissions": (

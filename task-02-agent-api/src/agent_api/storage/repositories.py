@@ -611,6 +611,11 @@ class SQLiteRunRepository(_PathRepository):
             run = await _get_run(connection, checked.tenant_id, checked.run_id)
             if run is None:
                 return ClaimResult(disposition=ClaimDisposition.NOT_FOUND, run=None)
+            if (
+                checked.generation_id is not None
+                and checked.generation_id != run.generation_id
+            ):
+                return ClaimResult(disposition=ClaimDisposition.STALE, run=run)
             if run.state in TERMINAL_RUN_STATES:
                 return ClaimResult(disposition=ClaimDisposition.TERMINAL, run=run)
             if checked.now < run.updated_at:
@@ -967,34 +972,56 @@ class SQLiteWorkQueue(_PathRepository):
         async with _connection(self._path, write=True) as connection:
             row = await (
                 await connection.execute(
-                    "SELECT work_id, tenant_id, run_id, enqueued_at, not_before "
+                    "SELECT work_id, tenant_id, run_id, generation_id, "
+                    "enqueued_at, not_before "
                     "FROM work_items WHERE work_id = ?",
                     (checked.work_id,),
                 )
             ).fetchone()
-            if row is not None:
-                existing = _decode_work_item(row)
-                if (existing.tenant_id, existing.run_id) != (
-                    checked.tenant_id,
-                    checked.run_id,
+            existing = _decode_work_item(row) if row is not None else None
+            if existing is not None and (existing.tenant_id, existing.run_id) != (
+                checked.tenant_id,
+                checked.run_id,
+            ):
+                raise QueueConflictError("work id already identifies another run")
+            parent = await _get_run(connection, checked.tenant_id, checked.run_id)
+            if parent is None:
+                raise RunParentNotFoundError("work item run does not exist")
+            if (
+                checked.generation_id is not None
+                and checked.generation_id != parent.generation_id
+            ):
+                raise QueueConflictError("work item belongs to another run generation")
+            bound = _checked(
+                WorkItem,
+                checked.model_copy(update={"generation_id": parent.generation_id}),
+            )
+            if existing is not None:
+                if (
+                    existing.tenant_id,
+                    existing.run_id,
+                    existing.generation_id,
+                ) != (
+                    bound.tenant_id,
+                    bound.run_id,
+                    bound.generation_id,
                 ):
                     raise QueueConflictError("work id already identifies another run")
                 return EnqueueResult(item=existing, created=False)
-            if await _get_run(connection, checked.tenant_id, checked.run_id) is None:
-                raise RunParentNotFoundError("work item run does not exist")
             await connection.execute(
                 "INSERT INTO work_items "
-                "(work_id, tenant_id, run_id, enqueued_at, not_before) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "(work_id, tenant_id, run_id, generation_id, enqueued_at, not_before) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (
-                    checked.work_id,
-                    checked.tenant_id,
-                    checked.run_id,
-                    _timestamp(checked.enqueued_at),
-                    _timestamp(checked.not_before),
+                    bound.work_id,
+                    bound.tenant_id,
+                    bound.run_id,
+                    bound.generation_id,
+                    _timestamp(bound.enqueued_at),
+                    _timestamp(bound.not_before),
                 ),
             )
-            return EnqueueResult(item=checked, created=True)
+            return EnqueueResult(item=bound, created=True)
 
     async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int:
         scope = (_scope_id(tenant_id), _scope_id(run_id))
@@ -1017,7 +1044,8 @@ class SQLiteWorkQueue(_PathRepository):
         async with _connection(self._path, write=True) as connection:
             row = await (
                 await connection.execute(
-                    "SELECT work_id, tenant_id, run_id, enqueued_at, not_before "
+                    "SELECT work_id, tenant_id, run_id, generation_id, "
+                    "enqueued_at, not_before "
                     "FROM work_items WHERE not_before <= ? "
                     "ORDER BY not_before, enqueued_at, work_id LIMIT 1",
                     (_timestamp(checked_now),),
@@ -1028,7 +1056,7 @@ class SQLiteWorkQueue(_PathRepository):
             cursor = await connection.execute(
                 "UPDATE work_items SET not_before = ? "
                 "WHERE work_id = ? AND not_before = ?",
-                (_timestamp(next_due), row[0], row[4]),
+                (_timestamp(next_due), row[0], row[5]),
             )
             if cursor.rowcount != 1:
                 return None
@@ -1335,8 +1363,9 @@ def _decode_work_item(row: Sequence[object]) -> WorkItem:
                 "work_id": row[0],
                 "tenant_id": row[1],
                 "run_id": row[2],
-                "enqueued_at": _parse_timestamp(row[3]),
-                "not_before": _parse_timestamp(row[4]),
+                "generation_id": row[3],
+                "enqueued_at": _parse_timestamp(row[4]),
+                "not_before": _parse_timestamp(row[5]),
             }
         )
     except (TypeError, ValueError) as exc:

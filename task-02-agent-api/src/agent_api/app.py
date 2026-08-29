@@ -21,6 +21,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from search_agent.contracts import OpaqueId
 
 from .observability import (
+    AuditWriter,
     OperationalTelemetry,
     ReadinessProbe,
     SQLiteReadinessProbe,
@@ -37,7 +38,11 @@ from .schemas import ErrorCode, ErrorDetail, ErrorEnvelope
 from .security import (
     ApiKeyAuthError,
     ApiKeyManager,
+    ApiKeyRepository,
     EnvPepperProvider,
+    FirestoreApiKeyRepository,
+    FirestoreAuditRepository,
+    FirestoreQuotaLimiter,
     LimitConfig,
     PepperProvider,
     QuotaExceeded,
@@ -57,6 +62,7 @@ from .services import (
 )
 from .storage import (
     CloudTasksWorkQueue,
+    DocumentStore,
     FirestoreEventRepository,
     FirestoreRunRepository,
     FirestoreSessionRepository,
@@ -73,6 +79,22 @@ from .storage import (
 from .workers import LocalWorker, QueueReceiver, RunExecutor, worker_lifespan
 
 _OPAQUE_ID = TypeAdapter(OpaqueId)
+
+
+class _DocumentStoreReadinessProbe:
+    """Verify the shared production store without writing probe data."""
+
+    def __init__(self, store: DocumentStore) -> None:
+        self._store = store
+
+    async def ready(self) -> bool:
+        try:
+            await self._store.get(
+                collection="_readiness", document_id="connectivity-probe"
+            )
+        except Exception:
+            return False
+        return True
 
 
 async def _correlation_header(
@@ -152,6 +174,19 @@ def create_app(
             run_repository.document_store,
             run_repository,
         )
+    cloud_store = (
+        run_repository.document_store
+        if isinstance(run_repository, FirestoreRunRepository)
+        else None
+    )
+    key_repository: ApiKeyRepository | None = None
+    audit_writer: AuditWriter | None = None
+    limiter = quota_limiter
+    if production_environment and cloud_store is not None:
+        key_repository = FirestoreApiKeyRepository(cloud_store)
+        audit_writer = FirestoreAuditRepository(cloud_store)
+        if limiter is None:
+            limiter = FirestoreQuotaLimiter(cloud_store, limits)
     _validate_authoritative_runtime(
         production_environment=production_environment,
         run_state_backend=run_state_backend,
@@ -173,11 +208,25 @@ def create_app(
             event_repository,
             work_queue,
         ),
+        cloud_key_repository=isinstance(key_repository, FirestoreApiKeyRepository),
+        cloud_quota_limiter=isinstance(limiter, FirestoreQuotaLimiter),
+        cloud_audit_writer=isinstance(audit_writer, FirestoreAuditRepository),
+        shared_security_store=(
+            cloud_store is not None
+            and isinstance(key_repository, FirestoreApiKeyRepository)
+            and key_repository.document_store is cloud_store
+            and isinstance(limiter, FirestoreQuotaLimiter)
+            and limiter.document_store is cloud_store
+            and isinstance(audit_writer, FirestoreAuditRepository)
+            and audit_writer.document_store is cloud_store
+        ),
+        custom_production_telemetry=production_environment and telemetry is not None,
     )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        await migrate(database_path)
+        if not production_environment:
+            await migrate(database_path)
         durable_runs = (
             SQLiteRunRepository(database_path)
             if run_repository is None
@@ -191,29 +240,37 @@ def create_app(
             if event_repository is None
             else event_repository
         )
-        limiter = (
-            SQLiteQuotaLimiter(database_path, limits)
-            if quota_limiter is None
-            else quota_limiter
+        runtime_limiter = (
+            SQLiteQuotaLimiter(database_path, limits) if limiter is None else limiter
         )
-        app.state.quota_limiter = limiter
+        app.state.quota_limiter = runtime_limiter
         runtime_telemetry = (
             OperationalTelemetry(
                 pseudonym_key=provider.pepper(),
-                audit=SQLiteAuditRepository(database_path),
+                audit=(
+                    SQLiteAuditRepository(database_path)
+                    if audit_writer is None
+                    else audit_writer
+                ),
             )
             if telemetry is None
             else telemetry
         )
         app.state.telemetry = runtime_telemetry
-        app.state.readiness_probe = (
-            SQLiteReadinessProbe(database_path)
-            if readiness_probe is None
-            else readiness_probe
+        runtime_readiness = readiness_probe
+        if runtime_readiness is None:
+            runtime_readiness = (
+                _DocumentStoreReadinessProbe(cloud_store)
+                if production_environment and cloud_store is not None
+                else SQLiteReadinessProbe(database_path)
+            )
+        app.state.readiness_probe = runtime_readiness
+        runtime_keys = (
+            SQLiteKeyHashRepository(database_path)
+            if key_repository is None
+            else key_repository
         )
-        app.state.auth_manager = ApiKeyManager(
-            SQLiteKeyHashRepository(database_path), provider
-        )
+        app.state.auth_manager = ApiKeyManager(runtime_keys, provider)
         app.state.session_service = SessionService(
             (
                 SQLiteSessionRepository(database_path)
@@ -228,7 +285,7 @@ def create_app(
             durable_queue,
             clock=now,
             run_id_factory=run_id_factory,
-            limiter=limiter,
+            limiter=runtime_limiter,
         )
         app.state.event_stream_service = EventStreamService(
             durable_runs,
@@ -248,7 +305,7 @@ def create_app(
                 worker_id="worker-local",
                 clock=now,
                 cancellation_drain_seconds=worker_shutdown_seconds,
-                limiter=limiter,
+                limiter=runtime_limiter,
                 telemetry=runtime_telemetry,
             )
         )
@@ -477,6 +534,11 @@ def _validate_authoritative_runtime(
     cloud_event_repository: bool,
     cloud_work_queue: bool,
     shared_cloud_store: bool,
+    cloud_key_repository: bool,
+    cloud_quota_limiter: bool,
+    cloud_audit_writer: bool,
+    shared_security_store: bool,
+    custom_production_telemetry: bool,
 ) -> None:
     if not production_environment:
         return
@@ -502,6 +564,16 @@ def _validate_authoritative_runtime(
         raise ValueError("production_environment requires a Cloud Tasks work queue")
     if not shared_cloud_store:
         raise ValueError("production cloud adapters must share the same document store")
+    if not cloud_key_repository:
+        raise ValueError("production_environment requires Firestore API-key state")
+    if not cloud_quota_limiter:
+        raise ValueError("production_environment requires Firestore quota state")
+    if not cloud_audit_writer:
+        raise ValueError("production_environment requires Firestore audit state")
+    if not shared_security_store:
+        raise ValueError("production security state must share the document store")
+    if custom_production_telemetry:
+        raise ValueError("production telemetry must use the shared audit authority")
     if has_run_executor and not task_delivery_enabled:
         raise ValueError("production worker requires signed task delivery")
 

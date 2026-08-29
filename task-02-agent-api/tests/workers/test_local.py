@@ -821,7 +821,7 @@ async def test_cancelled_error_during_shutdown_leaves_work_recoverable(
         )
     )
     queue = SQLiteWorkQueue(database_path)
-    await queue.enqueue(work_item())
+    await queue.enqueue(work_item(generation_id=None))
 
     block = asyncio.Event()
     executor = ScriptedExecutor(result=completed_result(), block=block)
@@ -876,6 +876,7 @@ def queued_run() -> RunRecord:
         tenant_id="tenant-one",
         session_id="session-one",
         run_id="run-one",
+        generation_id="generation-test",
         idempotency_key="request-key-one",
         query="find the documented answer",
         state=RunState.QUEUED,
@@ -886,11 +887,14 @@ def queued_run() -> RunRecord:
     )
 
 
-def work_item(*, not_before: datetime = NOW) -> WorkItem:
+def work_item(
+    *, not_before: datetime = NOW, generation_id: str | None = "generation-test"
+) -> WorkItem:
     return WorkItem(
         work_id="work-one",
         tenant_id="tenant-one",
         run_id="run-one",
+        generation_id=generation_id,
         enqueued_at=NOW,
         not_before=not_before,
     )

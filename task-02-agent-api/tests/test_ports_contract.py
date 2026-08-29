@@ -593,7 +593,7 @@ class WorkQueueContract:
 
         assert first.created is True
         assert retry.created is False
-        assert retry.item == item
+        assert retry.item == first.item
         with pytest.raises(QueueConflictError):
             await queue.enqueue(item.model_copy(update={"run_id": "run-two"}))
 

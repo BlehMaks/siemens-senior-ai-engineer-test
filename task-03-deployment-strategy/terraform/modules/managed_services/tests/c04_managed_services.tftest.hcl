@@ -59,7 +59,10 @@ run "default_contract_is_low_cost_and_container_only" {
   }
 
   assert {
-    condition = toset(output.firestore.composite_indexes) == toset([
+    condition = output.firestore.composite_indexes == sort([
+      "audit_entries",
+      "quota_execution_leases",
+      "quota_sse_leases",
       "run_events",
       "runs",
       "sessions",

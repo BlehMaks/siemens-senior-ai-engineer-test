@@ -54,7 +54,7 @@ The exact contract remains subject to implementation review. A synchronous conve
 - Document retry semantics and ensure repeated client requests cannot create duplicate expensive runs.
 - Threat-model SSRF, prompt injection, broken object-level authorization, mass assignment, resource exhaustion, injection, unsafe output handling, and sensitive-data leakage.
 
-## Local quota boundary
+## Quota boundary
 
 `QuotaLimiter` is the replaceable admission port. The local adapter uses SQLite
 transactions for per-key token buckets, idempotency-keyed daily work admission,
@@ -63,14 +63,19 @@ bodies are pre-read only up to the configured ceiling and replayed for validatio
 Accounting errors reject work with `503`; quota exhaustion returns a safe `429`
 and integer `Retry-After`; oversized authenticated requests return `413`.
 
+The assessment deployment keeps API-key hashes, quota guards and leases, and audit
+entries in the same Firestore authority as run state. Successful lease acquisition
+reclaims a bounded batch of expired execution or SSE leases, so crashed clients do
+not leave an ever-growing collection. The production readiness probe performs a
+read-only lookup against that shared store and never creates a local SQLite file.
+
 Task 1 `RunBudget` remains the only counter for tool calls, model calls/attempts,
 pages, raw/decoded bytes, tokens, iterations, and wall-clock timeout. The API does
 not maintain a second copy of those counters.
 
 The GCP target maps unauthenticated/global edge throttling to Cloud Armor or an API
 gateway, dispatch/concurrency to Cloud Tasks queue controls, and durable work/SSE
-accounting to a shared transactional store. This repository deliberately contains
-no pretend cloud adapter or SDK dependency.
+accounting to Firestore transactions.
 
 Operational logging, bounded metric dimensions, durable audit actions, correlation
 behavior, and health-probe semantics are documented in

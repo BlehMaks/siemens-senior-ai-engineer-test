@@ -4,11 +4,17 @@ from .auth import (
     ApiKeyAuthError,
     ApiKeyCredentials,
     ApiKeyManager,
+    ApiKeyRepository,
     AuthenticatedApiKey,
     EnvPepperProvider,
     PepperProvider,
     generate_api_key,
     parse_authorization_header,
+)
+from .cloud_state import (
+    FirestoreApiKeyRepository,
+    FirestoreAuditRepository,
+    FirestoreQuotaLimiter,
 )
 from .limits import (
     ExecutionPermit,
@@ -27,9 +33,13 @@ __all__ = [
     "ApiKeyAuthError",
     "ApiKeyCredentials",
     "ApiKeyManager",
+    "ApiKeyRepository",
     "AuthenticatedApiKey",
     "EnvPepperProvider",
     "ExecutionPermit",
+    "FirestoreApiKeyRepository",
+    "FirestoreAuditRepository",
+    "FirestoreQuotaLimiter",
     "LimitConfig",
     "PepperProvider",
     "QuotaExceeded",

@@ -141,6 +141,59 @@ resource "google_firestore_index" "run_events" {
   }
 }
 
+resource "google_firestore_index" "audit_entries" {
+  project    = var.project_id
+  database   = google_firestore_database.assessment.name
+  collection = "audit_entries"
+
+  fields {
+    field_path = "tenant_id"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "occurred_at"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "entry_id"
+    order      = "ASCENDING"
+  }
+}
+
+resource "google_firestore_index" "quota_execution_leases_active" {
+  project    = var.project_id
+  database   = google_firestore_database.assessment.name
+  collection = "quota_execution_leases"
+
+  fields {
+    field_path = "tenant_id"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "expires_at"
+    order      = "ASCENDING"
+  }
+}
+
+resource "google_firestore_index" "quota_sse_leases_active" {
+  project    = var.project_id
+  database   = google_firestore_database.assessment.name
+  collection = "quota_sse_leases"
+
+  fields {
+    field_path = "tenant_id"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "expires_at"
+    order      = "ASCENDING"
+  }
+}
+
 resource "google_logging_project_bucket_config" "application" {
   project        = var.project_id
   location       = var.region

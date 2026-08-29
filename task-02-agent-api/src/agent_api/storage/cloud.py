@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import secrets
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -70,6 +71,10 @@ _IDEMPOTENCY = "idempotency_records"
 _EVENTS = "run_events"
 _REFLECTIONS = "run_reflections"
 _WORK_ITEMS = "work_items"
+# Firestore charges deleted document and index bytes against the 10 MiB
+# transaction limit. Five documents still fit when every payload approaches the
+# 1 MiB document ceiling, while also staying far below the 500-write ceiling.
+_DELETE_BATCH_SIZE = 5
 _SIGNATURE_HEADER = "X-Agent-Api-Task-Signature"
 _TASK_NAME_HEADER = "X-CloudTasks-TaskName"
 _QUEUE_NAME_HEADER = "X-CloudTasks-QueueName"
@@ -143,10 +148,15 @@ class DocumentStoreTransaction(Protocol):
 
     async def delete(self, *, collection: str, document_id: str) -> bool: ...
 
+    async def delete_known(self, *, collection: str, document_id: str) -> None:
+        """Delete a document already observed during the transaction read phase."""
+        ...
+
     async def list(
         self,
         *,
         collection: str,
+        document_id_prefix: str | None = None,
         filters: Mapping[str, object] | None = None,
         order_by: tuple[str, ...] = (),
         start_after: Mapping[str, object] | None = None,
@@ -163,6 +173,7 @@ class DocumentStore(Protocol):
         self,
         *,
         collection: str,
+        document_id_prefix: str | None = None,
         filters: Mapping[str, object] | None = None,
         order_by: tuple[str, ...] = (),
         start_after: Mapping[str, object] | None = None,
@@ -180,13 +191,6 @@ class CloudTask:
     schedule_at: datetime
     body: bytes
     headers: tuple[tuple[str, str], ...]
-
-
-@dataclass(frozen=True, slots=True)
-class _RunDeletion:
-    run: RunRecord
-    event_ids: tuple[str, ...]
-    work_item_ids: tuple[str, ...]
 
 
 class CloudTaskClient(Protocol):
@@ -380,6 +384,11 @@ class FirestoreRunRepository:
             )
             if run is None:
                 return ClaimResult(disposition=ClaimDisposition.NOT_FOUND, run=None)
+            if (
+                checked.generation_id is not None
+                and checked.generation_id != run.generation_id
+            ):
+                return ClaimResult(disposition=ClaimDisposition.STALE, run=run)
             if run.state in TERMINAL_RUN_STATES:
                 return ClaimResult(disposition=ClaimDisposition.TERMINAL, run=run)
             if checked.now < run.updated_at:
@@ -607,82 +616,169 @@ class FirestoreRunRepository:
     async def delete_run(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> bool:
         checked_tenant = _scope_id(tenant_id)
         checked_run = _scope_id(run_id)
-
-        async def operation(tx: DocumentStoreTransaction) -> bool:
-            run = await self._tx_get_run(
-                tx, tenant_id=checked_tenant, run_id=checked_run
+        run = await self.get(tenant_id=checked_tenant, run_id=checked_run)
+        if run is None:
+            return False
+        while True:
+            await self._delete_scoped_documents(
+                collection=_EVENTS,
+                filters={"tenant_id": checked_tenant, "run_id": checked_run},
             )
-            if run is None:
-                return False
-            deletion = await self._read_run_deletion(tx, run=run)
-            await self._apply_run_deletion(tx, deletion=deletion)
-            return True
+            await self._delete_scoped_documents(
+                collection=_WORK_ITEMS,
+                filters={"tenant_id": checked_tenant, "run_id": checked_run},
+            )
 
-        return await self._store.transaction(operation)
+            async def operation(tx: DocumentStoreTransaction) -> bool | None:
+                stored = await self._tx_get_run(
+                    tx, tenant_id=checked_tenant, run_id=checked_run
+                )
+                if stored is None:
+                    return None
+                event_ids = await _document_ids(
+                    tx,
+                    collection=_EVENTS,
+                    filters={"tenant_id": checked_tenant, "run_id": checked_run},
+                    limit=1,
+                )
+                work_item_ids = await _document_ids(
+                    tx,
+                    collection=_WORK_ITEMS,
+                    filters={"tenant_id": checked_tenant, "run_id": checked_run},
+                    limit=1,
+                )
+                if event_ids or work_item_ids:
+                    return False
+                await tx.get(
+                    collection=_IDEMPOTENCY,
+                    document_id=_document_id(checked_tenant, stored.idempotency_key),
+                )
+                await tx.get(
+                    collection=_REFLECTIONS,
+                    document_id=_document_id(
+                        checked_tenant, stored.session_id, checked_run
+                    ),
+                )
+                await tx.delete(
+                    collection=_IDEMPOTENCY,
+                    document_id=_document_id(checked_tenant, stored.idempotency_key),
+                )
+                await tx.delete(
+                    collection=_REFLECTIONS,
+                    document_id=_document_id(
+                        checked_tenant, stored.session_id, checked_run
+                    ),
+                )
+                await tx.delete(
+                    collection=_RUNS,
+                    document_id=_document_id(checked_tenant, checked_run),
+                )
+                return True
+
+            result = await self._store.transaction(operation)
+            if result is None:
+                return False
+            if result:
+                return True
 
     async def delete_session(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> int:
         checked_tenant = _scope_id(tenant_id)
         checked_session = _scope_id(session_id)
-
-        async def operation(tx: DocumentStoreTransaction) -> int:
-            runs = await tx.list(
+        filters = {"tenant_id": checked_tenant, "session_id": checked_session}
+        deleted = 0
+        while True:
+            runs = await self._store.list(
                 collection=_RUNS,
-                filters={
-                    "tenant_id": checked_tenant,
-                    "session_id": checked_session,
-                },
+                filters=filters,
+                limit=_DELETE_BATCH_SIZE,
             )
-            deletions = [
-                await self._read_run_deletion(tx, run=_decode_required_run(row))
-                for row in runs
-            ]
-            reflection_ids = await _document_ids(
-                tx,
+            if runs:
+                for row in runs:
+                    run = _decode_required_run(row)
+                    deleted += int(
+                        await self.delete_run(
+                            tenant_id=checked_tenant, run_id=run.run_id
+                        )
+                    )
+                continue
+            await self._delete_scoped_documents(
                 collection=_REFLECTIONS,
-                filters={"tenant_id": checked_tenant, "session_id": checked_session},
+                filters=filters,
             )
-            for deletion in deletions:
-                await self._apply_run_deletion(tx, deletion=deletion)
-            await tx.delete(
-                collection=_SESSIONS,
-                document_id=_document_id(checked_tenant, checked_session),
-            )
-            await _delete_document_ids(
-                tx, collection=_REFLECTIONS, document_ids=reflection_ids
-            )
-            return len(deletions)
 
-        return await self._store.transaction(operation)
+            async def operation(tx: DocumentStoreTransaction) -> bool:
+                session_id_value = _document_id(checked_tenant, checked_session)
+                session = await tx.get(
+                    collection=_SESSIONS,
+                    document_id=session_id_value,
+                )
+                child_runs = await _document_ids(
+                    tx,
+                    collection=_RUNS,
+                    filters=filters,
+                    limit=1,
+                )
+                child_reflections = await _document_ids(
+                    tx,
+                    collection=_REFLECTIONS,
+                    filters=filters,
+                    limit=1,
+                )
+                if child_runs or child_reflections:
+                    return False
+                if session is not None:
+                    await tx.delete(
+                        collection=_SESSIONS,
+                        document_id=session_id_value,
+                    )
+                return True
+
+            if await self._store.transaction(operation):
+                return deleted
 
     async def delete_tenant(self, *, tenant_id: OpaqueId) -> int:
         checked_tenant = _scope_id(tenant_id)
-
-        async def operation(tx: DocumentStoreTransaction) -> int:
-            runs = await tx.list(
+        filters = {"tenant_id": checked_tenant}
+        deleted = 0
+        while True:
+            runs = await self._store.list(
                 collection=_RUNS,
-                filters={"tenant_id": checked_tenant},
+                filters=filters,
+                limit=_DELETE_BATCH_SIZE,
             )
-            deletions = [
-                await self._read_run_deletion(tx, run=_decode_required_run(row))
-                for row in runs
-            ]
-            session_ids = await _document_ids(
-                tx, collection=_SESSIONS, filters={"tenant_id": checked_tenant}
+            if runs:
+                for row in runs:
+                    run = _decode_required_run(row)
+                    deleted += int(
+                        await self.delete_run(
+                            tenant_id=checked_tenant, run_id=run.run_id
+                        )
+                    )
+                continue
+            await self._delete_scoped_documents(
+                collection=_SESSIONS,
+                filters=filters,
             )
-            reflection_ids = await _document_ids(
-                tx, collection=_REFLECTIONS, filters={"tenant_id": checked_tenant}
+            await self._delete_scoped_documents(
+                collection=_REFLECTIONS,
+                filters=filters,
             )
-            for deletion in deletions:
-                await self._apply_run_deletion(tx, deletion=deletion)
-            await _delete_document_ids(
-                tx, collection=_SESSIONS, document_ids=session_ids
-            )
-            await _delete_document_ids(
-                tx, collection=_REFLECTIONS, document_ids=reflection_ids
-            )
-            return len(deletions)
 
-        return await self._store.transaction(operation)
+            async def operation(tx: DocumentStoreTransaction) -> bool:
+                collections = (_RUNS, _SESSIONS, _REFLECTIONS)
+                remaining = [
+                    await _document_ids(
+                        tx,
+                        collection=collection,
+                        filters=filters,
+                        limit=1,
+                    )
+                    for collection in collections
+                ]
+                return not any(remaining)
+
+            if await self._store.transaction(operation):
+                return deleted
 
     async def _tx_get_run(
         self, tx: DocumentStoreTransaction, *, tenant_id: str, run_id: str
@@ -702,47 +798,30 @@ class FirestoreRunRepository:
             document=_run_document(changed),
         )
 
-    async def _read_run_deletion(
-        self, tx: DocumentStoreTransaction, *, run: RunRecord
-    ) -> _RunDeletion:
-        event_ids = await _document_ids(
-            tx,
-            collection=_EVENTS,
-            filters={"tenant_id": run.tenant_id, "run_id": run.run_id},
-        )
-        work_item_ids = await _document_ids(
-            tx,
-            collection=_WORK_ITEMS,
-            filters={"tenant_id": run.tenant_id, "run_id": run.run_id},
-        )
-        return _RunDeletion(
-            run=run,
-            event_ids=event_ids,
-            work_item_ids=work_item_ids,
-        )
+    async def _delete_scoped_documents(
+        self, *, collection: str, filters: Mapping[str, object]
+    ) -> int:
+        deleted = 0
+        while True:
 
-    async def _apply_run_deletion(
-        self, tx: DocumentStoreTransaction, *, deletion: _RunDeletion
-    ) -> None:
-        run = deletion.run
-        await tx.delete(
-            collection=_IDEMPOTENCY,
-            document_id=_document_id(run.tenant_id, run.idempotency_key),
-        )
-        await _delete_document_ids(
-            tx, collection=_EVENTS, document_ids=deletion.event_ids
-        )
-        await tx.delete(
-            collection=_REFLECTIONS,
-            document_id=_document_id(run.tenant_id, run.session_id, run.run_id),
-        )
-        await _delete_document_ids(
-            tx, collection=_WORK_ITEMS, document_ids=deletion.work_item_ids
-        )
-        await tx.delete(
-            collection=_RUNS,
-            document_id=_document_id(run.tenant_id, run.run_id),
-        )
+            async def operation(tx: DocumentStoreTransaction) -> int:
+                document_ids = await _document_ids(
+                    tx,
+                    collection=collection,
+                    filters=filters,
+                    limit=_DELETE_BATCH_SIZE,
+                )
+                await _delete_document_ids(
+                    tx,
+                    collection=collection,
+                    document_ids=document_ids,
+                )
+                return len(document_ids)
+
+            batch_count = await self._store.transaction(operation)
+            deleted += batch_count
+            if batch_count < _DELETE_BATCH_SIZE:
+                return deleted
 
     async def _next_event_sequence(
         self, tx: DocumentStoreTransaction, run: RunRecord
@@ -906,13 +985,19 @@ class FirestoreSessionRepository:
                     "tenant_id": checked_tenant,
                     "session_id": checked_session,
                 },
+                limit=_DELETE_BATCH_SIZE,
             )
             await _delete_document_ids(
                 tx, collection=_REFLECTIONS, document_ids=document_ids
             )
             return len(document_ids)
 
-        return await self._store.transaction(operation)
+        deleted_count = 0
+        while True:
+            batch_count = await self._store.transaction(operation)
+            deleted_count += batch_count
+            if batch_count < _DELETE_BATCH_SIZE:
+                return deleted_count
 
     async def delete(self, *, tenant_id: OpaqueId, session_id: OpaqueId) -> bool:
         existing = await self.get(tenant_id=tenant_id, session_id=session_id)
@@ -1037,30 +1122,50 @@ class CloudTasksWorkQueue:
         )
         if existing is not None:
             stored = _decode_work_document(existing)
-            if (stored.tenant_id, stored.run_id) != (checked.tenant_id, checked.run_id):
+            if (stored.tenant_id, stored.run_id) != (
+                checked.tenant_id,
+                checked.run_id,
+            ):
                 raise QueueConflictError("work id already identifies another run")
-            return EnqueueResult(item=stored, created=False)
-        if (
+        observed_parent = _decode_run_document(
             await self._store.get(
                 collection=_RUNS,
                 document_id=_document_id(checked.tenant_id, checked.run_id),
             )
-            is None
-        ):
+        )
+        if observed_parent is None:
             raise RunParentNotFoundError("work item run does not exist")
-        task_name = self._task_name(checked.work_id)
+        if (
+            checked.generation_id is not None
+            and checked.generation_id != observed_parent.generation_id
+        ):
+            raise QueueConflictError("work item belongs to another run generation")
+        bound = _checked_item(
+            checked.model_copy(update={"generation_id": observed_parent.generation_id})
+        )
+        if existing is not None:
+            if (
+                stored.tenant_id,
+                stored.run_id,
+                stored.generation_id,
+            ) != (bound.tenant_id, bound.run_id, bound.generation_id):
+                raise QueueConflictError("work id already identifies another run")
+            return EnqueueResult(item=stored, created=False)
+        task_name = self._task_name(bound.work_id, bound.generation_id)
         body, headers = self._codec.encode(
-            checked, task_name=task_name, queue_name=self._queue_name
+            bound, task_name=task_name, queue_name=self._queue_name
         )
         try:
             await self._tasks.create(
                 CloudTask(
                     name=task_name,
-                    schedule_at=checked.not_before,
+                    schedule_at=bound.not_before,
                     body=body,
                     headers=headers,
                 )
             )
+            indexed = bound
+            created = True
         except CloudTaskAlreadyExistsError as err:
             remote = await self._tasks.get(name=task_name)
             if remote is None:
@@ -1071,29 +1176,71 @@ class CloudTasksWorkQueue:
                 task_name=remote.name,
                 queue_name=self._queue_name,
             )
-            if (decoded.tenant_id, decoded.run_id) != (
-                checked.tenant_id,
-                checked.run_id,
-            ):
+            if (
+                decoded.tenant_id,
+                decoded.run_id,
+                decoded.generation_id,
+            ) != (bound.tenant_id, bound.run_id, bound.generation_id):
+                if (decoded.tenant_id, decoded.run_id) == (
+                    bound.tenant_id,
+                    bound.run_id,
+                ):
+                    await self._tasks.delete(name=task_name)
                 raise QueueConflictError(
                     "work id already identifies another run"
                 ) from err
-            await self._store.transaction(
-                lambda tx: tx.set(
-                    collection=_WORK_ITEMS,
-                    document_id=_document_id(decoded.work_id),
-                    document=_work_document(decoded, task_name=task_name),
+            indexed = decoded
+            created = False
+        index_token = secrets.token_hex(16)
+
+        async def persist_index(
+            tx: DocumentStoreTransaction,
+        ) -> tuple[WorkItem, bool]:
+            parent = _decode_run_document(
+                await tx.get(
+                    collection=_RUNS,
+                    document_id=_document_id(indexed.tenant_id, indexed.run_id),
                 )
             )
-            return EnqueueResult(item=decoded, created=False)
-        await self._store.transaction(
-            lambda tx: tx.set(
+            existing_index = await tx.get(
                 collection=_WORK_ITEMS,
-                document_id=_document_id(checked.work_id),
-                document=_work_document(checked, task_name=task_name),
+                document_id=_document_id(indexed.work_id),
             )
-        )
-        return EnqueueResult(item=checked, created=True)
+            if (
+                parent is None
+                or parent.generation_id != observed_parent.generation_id
+                or indexed.generation_id != observed_parent.generation_id
+            ):
+                return indexed, False
+            if existing_index is not None:
+                stored = _decode_work_document(existing_index)
+                if (
+                    stored.tenant_id,
+                    stored.run_id,
+                    stored.generation_id,
+                ) != (
+                    indexed.tenant_id,
+                    indexed.run_id,
+                    indexed.generation_id,
+                ):
+                    raise QueueConflictError("work id already identifies another run")
+                return stored, True
+            await tx.set(
+                collection=_WORK_ITEMS,
+                document_id=_document_id(indexed.work_id),
+                document=_work_document(
+                    indexed,
+                    task_name=task_name,
+                    index_token=index_token,
+                ),
+            )
+            return indexed, True
+
+        stored, parent_exists = await self._store.transaction(persist_index)
+        if not parent_exists:
+            await self._tasks.delete(name=task_name)
+            raise RunParentNotFoundError("work item run does not exist")
+        return EnqueueResult(item=stored, created=created)
 
     async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int:
         checked_tenant = _scope_id(tenant_id)
@@ -1106,13 +1253,39 @@ class CloudTasksWorkQueue:
         for row in rows:
             task_name = _require_text(row, "task_name")
             document_id = _require_text(row, "document_id")
+            index_token = _optional_text(row, "index_token")
+            expected = _decode_work_document(row)
+            index_identity_is_valid = (
+                expected.tenant_id == checked_tenant
+                and expected.run_id == checked_run
+                and _require_text(row, "work_id") == expected.work_id
+                and document_id == _document_id(expected.work_id)
+            )
+            if not index_identity_is_valid:
+                continue
+            if task_name != self._task_name(expected.work_id, expected.generation_id):
+                if await self._store.transaction(
+                    partial(
+                        _delete_matching_work,
+                        document_id=document_id,
+                        expected=expected,
+                        task_name=task_name,
+                        index_token=index_token,
+                    )
+                ):
+                    removed += 1
+                continue
             deleted = await self._tasks.delete(name=task_name)
             if not deleted and await self._tasks.get(name=task_name) is not None:
                 continue
 
             if await self._store.transaction(
                 partial(
-                    _delete_document, collection=_WORK_ITEMS, document_id=document_id
+                    _delete_matching_work,
+                    document_id=document_id,
+                    expected=expected,
+                    task_name=task_name,
+                    index_token=index_token,
                 )
             ):
                 removed += 1
@@ -1137,12 +1310,13 @@ class CloudTasksWorkQueue:
             task_name=canonical_task,
             queue_name=canonical_queue,
         )
-        if canonical_task != self._task_name(item.work_id):
+        if canonical_task != self._task_name(item.work_id, item.generation_id):
             raise TaskDeliveryAuthError("task delivery name is invalid")
         return item
 
-    def _task_name(self, work_id: str) -> str:
-        suffix = hashlib.sha256(work_id.encode("utf-8")).hexdigest()[:32]
+    def _task_name(self, work_id: str, generation_id: str | None = None) -> str:
+        identity = work_id if generation_id is None else f"{work_id}\x00{generation_id}"
+        suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
         return f"{self._queue_name}/tasks/work-{suffix}"
 
 
@@ -1204,6 +1378,13 @@ def _canonical_task_resource(received: str | None, queue_name: str) -> str:
 def _require_text(document: Mapping[str, object], field: str) -> str:
     value = document.get(field)
     if type(value) is not str:
+        raise StorageError(f"{field} is not stored as text")
+    return value
+
+
+def _optional_text(document: Mapping[str, object], field: str) -> str | None:
+    value = document.get(field)
+    if value is not None and type(value) is not str:
         raise StorageError(f"{field} is not stored as text")
     return value
 
@@ -1273,6 +1454,20 @@ def _decode_run_document(document: Mapping[str, object] | None) -> RunRecord | N
         payload = json.loads(_require_text(document, "payload"))
         if type(payload) is not dict:
             raise ValueError("run payload is not an object")
+        # Pre-token documents need one stable identity until their next normal write.
+        if payload.get("generation_id") is None:
+            legacy_identity = "\x00".join(
+                (
+                    _require_text(document, "tenant_id"),
+                    _require_text(document, "run_id"),
+                    _require_text(document, "created_at"),
+                    _require_text(document, "idempotency_key"),
+                )
+            )
+            payload["generation_id"] = (
+                "generation-"
+                + hashlib.sha256(legacy_identity.encode("utf-8")).hexdigest()[:32]
+            )
         for field in (
             "created_at",
             "updated_at",
@@ -1367,13 +1562,16 @@ def _decode_event_document(document: Mapping[str, object]) -> RunEvent:
     return event
 
 
-def _work_document(item: WorkItem, *, task_name: str) -> dict[str, object]:
+def _work_document(
+    item: WorkItem, *, task_name: str, index_token: str
+) -> dict[str, object]:
     return {
         "document_id": _document_id(item.work_id),
         "work_id": item.work_id,
         "tenant_id": item.tenant_id,
         "run_id": item.run_id,
         "task_name": task_name,
+        "index_token": index_token,
         "payload": item.model_dump_json(),
     }
 
@@ -1385,13 +1583,37 @@ def _decode_work_document(document: Mapping[str, object]) -> WorkItem:
         raise StorageError("stored work item failed validation") from exc
 
 
+async def _delete_matching_work(
+    tx: DocumentStoreTransaction,
+    *,
+    document_id: str,
+    expected: WorkItem,
+    task_name: str,
+    index_token: str | None,
+) -> bool:
+    current = await tx.get(collection=_WORK_ITEMS, document_id=document_id)
+    if (
+        current is None
+        or _decode_work_document(current) != expected
+        or _require_text(current, "tenant_id") != expected.tenant_id
+        or _require_text(current, "run_id") != expected.run_id
+        or _require_text(current, "work_id") != expected.work_id
+        or _require_text(current, "document_id") != document_id
+        or _require_text(current, "task_name") != task_name
+        or _optional_text(current, "index_token") != index_token
+    ):
+        return False
+    return await tx.delete(collection=_WORK_ITEMS, document_id=document_id)
+
+
 async def _document_ids(
     tx: DocumentStoreTransaction,
     *,
     collection: str,
     filters: Mapping[str, object],
+    limit: int | None = None,
 ) -> tuple[str, ...]:
-    rows = await tx.list(collection=collection, filters=filters)
+    rows = await tx.list(collection=collection, filters=filters, limit=limit)
     return tuple(_require_text(row, "document_id") for row in rows)
 
 

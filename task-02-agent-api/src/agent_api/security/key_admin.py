@@ -1,4 +1,4 @@
-"""Local API-key bootstrap CLI."""
+"""API-key administration for local SQLite and shared Firestore state."""
 
 from __future__ import annotations
 
@@ -7,21 +7,31 @@ import asyncio
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
+
+from google.cloud.firestore_v1 import AsyncClient as FirestoreAsyncClient
+
+import agent_api.storage.gcp as gcp_storage
 
 from ..storage import (
+    GoogleFirestoreDocumentStore,
     SQLiteKeyHashRepository,
     SQLiteTenantRepository,
     TenantRecord,
     migrate,
 )
-from .auth import ApiKeyManager, EnvPepperProvider
+from .auth import ApiKeyManager, ApiKeyRepository, EnvPepperProvider
+from .cloud_state import FirestoreApiKeyRepository
 
 _DEFAULT_AUTHORIZATION_ENV = "AGENT_API_AUTHORIZATION"
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="agent-api-key-admin")
-    parser.add_argument("--db", required=True, type=Path)
+    backend = parser.add_mutually_exclusive_group(required=True)
+    backend.add_argument("--db", type=Path)
+    backend.add_argument("--gcp-project")
+    parser.add_argument("--firestore-database")
     parser.add_argument("--pepper-env", default="AGENT_API_KEY_PEPPER")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
@@ -44,15 +54,25 @@ def main(argv: list[str] | None = None) -> int:
 
 
 async def _run(args: argparse.Namespace) -> str | None:
-    await migrate(args.db)
     now = datetime.now(UTC)
-    manager = ApiKeyManager(
-        SQLiteKeyHashRepository(args.db), EnvPepperProvider(args.pepper_env)
-    )
+    if args.db is not None:
+        if args.firestore_database is not None:
+            raise SystemExit("--firestore-database requires --gcp-project")
+        await migrate(args.db)
+        repository: ApiKeyRepository = SQLiteKeyHashRepository(args.db)
+    else:
+        repository = _cloud_key_repository(
+            project=args.gcp_project,
+            database=args.firestore_database or "(default)",
+        )
+    manager = ApiKeyManager(repository, EnvPepperProvider(args.pepper_env))
     if args.command == "create":
-        tenants = SQLiteTenantRepository(args.db)
-        if await tenants.get(tenant_id=args.tenant_id) is None:
-            await tenants.put(TenantRecord(tenant_id=args.tenant_id, created_at=now))
+        if args.db is not None:
+            tenants = SQLiteTenantRepository(args.db)
+            if await tenants.get(tenant_id=args.tenant_id) is None:
+                await tenants.put(
+                    TenantRecord(tenant_id=args.tenant_id, created_at=now)
+                )
         generated = await manager.create(
             tenant_id=args.tenant_id, scopes=args.scope, now=now
         )
@@ -70,6 +90,16 @@ async def _run(args: argparse.Namespace) -> str | None:
         )
         return None
     raise SystemExit(f"unsupported command: {args.command}")
+
+
+def _cloud_key_repository(*, project: str, database: str) -> ApiKeyRepository:
+    if not project or project.strip() != project:
+        raise SystemExit("--gcp-project must be a non-empty clean value")
+    if not database or database.strip() != database:
+        raise SystemExit("--firestore-database must be a non-empty clean value")
+    client = FirestoreAsyncClient(project=project, database=database)
+    store = GoogleFirestoreDocumentStore(cast(gcp_storage._FirestoreClient, client))
+    return FirestoreApiKeyRepository(store)
 
 
 def _authorization(variable: str) -> str:
