@@ -21,20 +21,25 @@ def test_bootstrap_routes_all_cloud_mutations_through_terraform() -> None:
     assert '"$TERRAFORM_BIN" -chdir="$state_bucket_root" apply' in source
     assert '"$TERRAFORM_BIN" -chdir="$terraform_root" apply' in source
     assert '-backend-config="bucket=$TF_VAR_bootstrap_state_bucket_name"' in source
-    assert 'TF_VAR_application_state_bucket_name="${project_id}-sai-app-tf-state"' in source
+    assert (
+        'TF_VAR_application_state_bucket_name="${project_id}-sai-app-tf-state"'
+        in source
+    )
     assert 'legacy_state_bucket_name="${project_id}-sai-tf-state"' in source
     assert "-migrate-state" in source
     assert "-force-copy" in source
     assert "discover_existing_state_buckets" in source
-    assert 'for scope in bootstrap application' in source
+    assert "for scope in bootstrap application" in source
     assert "resolve_budget_coordinates" in source
     assert "gcloud billing projects describe" in source
+    assert "gcloud billing accounts describe" in source
     assert "GCP_BUDGET_NOTIFICATION_EMAILS" in source
     assert "verify_application_cost_controls" in source
     assert '.budget.amount_units == "5"' in source
     assert ".api_service.max_instances == 1" in source
     assert ".worker_service.max_instances == 1" in source
     assert '-f "dispatch_id=$dispatch_id"' in source
+    assert '-f "expected_sha=$revision"' in source
     assert 'run_title="sai-deploy-$dispatch_id"' in source
     assert 'gh run watch "$run_id"' in source
     assert "TF_VAR_enable_runtime_policy=true" in source

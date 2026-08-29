@@ -28,7 +28,7 @@ require_tool() {
 }
 
 resolve_budget_coordinates() {
-  local project_id=$1 billing_name active_account recipients
+  local project_id=$1 billing_name billing_currency active_account recipients
 
   if [[ -n ${GCP_BILLING_ACCOUNT_ID:-} ]]; then
     resolved_billing_account_id=$GCP_BILLING_ACCOUNT_ID
@@ -39,6 +39,10 @@ resolve_budget_coordinates() {
   fi
   [[ $resolved_billing_account_id =~ ^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$ ]] ||
     fail "the project must have a readable linked billing account"
+  billing_currency=$(gcloud billing accounts describe "$resolved_billing_account_id" \
+    --format='value(currencyCode)')
+  [[ $billing_currency == EUR ]] ||
+    fail "the linked billing account must use EUR for the EUR 5 test budget"
 
   if [[ -n ${GCP_BUDGET_NOTIFICATION_EMAILS:-} ]]; then
     recipients=$GCP_BUDGET_NOTIFICATION_EMAILS
@@ -57,7 +61,11 @@ resolve_budget_coordinates() {
   resolved_budget_notification_emails=$(jq -cer '
     if type == "array"
       and length > 0
-      and all(.[]; type == "string" and test("^[^@[:space:]]+@[^@[:space:]]+$"))
+      and all(.[];
+        type == "string"
+        and test("^[^@[:space:]]+@[^@[:space:].]+(\\.[^@[:space:].]+)+$")
+        and (endswith(".gserviceaccount.com") | not)
+      )
     then sort | unique
     else error("expected at least one budget notification email")
     end
@@ -345,7 +353,8 @@ wait_for_deploy_workflow() {
   gh workflow run deploy.yml \
     --repo "$repository" \
     --ref master \
-    -f "dispatch_id=$dispatch_id"
+    -f "dispatch_id=$dispatch_id" \
+    -f "expected_sha=$revision"
   deadline=$((SECONDS + 300))
   while ((SECONDS < deadline)); do
     run_id=$(gh run list \
@@ -355,7 +364,7 @@ wait_for_deploy_workflow() {
       --event workflow_dispatch \
       --limit 20 \
       --json databaseId,displayTitle,headSha \
-      --jq "map(select(.headSha == \"$revision\" and .displayTitle == \"$run_title\")) | first | .databaseId // empty")
+      --jq "map(select(.displayTitle == \"$run_title\")) | first | .databaseId // empty")
     if [[ -n $run_id ]]; then
       gh run watch "$run_id" --repo "$repository" --exit-status
       printf 'deployment workflow %s completed for %s\n' "$run_id" "$revision"

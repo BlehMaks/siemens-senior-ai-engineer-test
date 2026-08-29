@@ -55,18 +55,39 @@ variable "budget_alert_thresholds" {
   description = "Early alert thresholds for the test deployment budget."
   type        = list(number)
   default     = [0.2, 0.5, 0.8, 1.0]
+
+  validation {
+    condition = (
+      length(var.budget_alert_thresholds) == 4 &&
+      try(var.budget_alert_thresholds[0] == 0.2, false) &&
+      try(var.budget_alert_thresholds[1] == 0.5, false) &&
+      try(var.budget_alert_thresholds[2] == 0.8, false) &&
+      try(var.budget_alert_thresholds[3] == 1.0, false)
+    )
+    error_message = "The dev environment requires the 20%, 50%, 80%, and 100% budget alerts."
+  }
 }
 
 variable "api_max_instances" {
   description = "Maximum API replicas in the cost-bounded dev environment."
   type        = number
   default     = 1
+
+  validation {
+    condition     = var.api_max_instances == 1
+    error_message = "The dev API must keep its one-instance cost cap."
+  }
 }
 
 variable "worker_max_instances" {
   description = "Maximum worker replicas in the cost-bounded dev environment."
   type        = number
   default     = 1
+
+  validation {
+    condition     = var.worker_max_instances == 1
+    error_message = "The dev worker must keep its one-instance cost cap."
+  }
 }
 
 variable "api_service_account_email" {
