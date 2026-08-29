@@ -8,6 +8,8 @@ module "managed_services" {
   system_code                    = var.system_code
   labels                         = var.labels
   billing_account_id             = var.billing_account_id
+  budget_amount_units            = var.budget_amount_units
+  budget_alert_thresholds        = var.budget_alert_thresholds
   budget_notification_emails     = var.budget_notification_emails
   api_service_account_email      = var.api_service_account_email
   worker_service_account_email   = var.worker_service_account_email
@@ -41,6 +43,8 @@ module "run_services" {
   firestore_database_name      = module.managed_services.firestore.name
   api_key_pepper_secret_id     = var.secret_ids.api_key_pepper
   task_signing_hmac_secret_id  = var.secret_ids.task_signing_hmac
+  api_max_instances            = var.api_max_instances
+  worker_max_instances         = var.worker_max_instances
 
   depends_on = [module.managed_services]
 }

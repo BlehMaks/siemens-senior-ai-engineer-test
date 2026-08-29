@@ -227,8 +227,6 @@ def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
     assert "datastore.entities" not in locals_tf
 
     expected_custom_permissions = {
-        "billing.resourcebudgets.read",
-        "billing.resourcebudgets.write",
         "datastore.databases.create",
         "datastore.databases.delete",
         "datastore.databases.getMetadata",
@@ -260,6 +258,19 @@ def test_deployer_uses_custom_project_role_without_project_iam_admin() -> None:
         permission.endswith(".setIamPolicy") for permission in permission_lines
     )
     assert "roles/cloudtasks.queueAdmin" not in locals_tf
+
+
+def test_deployer_budget_role_is_scoped_to_the_linked_billing_account() -> None:
+    main_tf = read(BOOTSTRAP / "main.tf")
+    binding = main_tf.split(
+        'resource "google_billing_account_iam_member" "deployer_budget_manager"',
+        maxsplit=1,
+    )[1].split('resource "', maxsplit=1)[0]
+
+    assert 'count = var.billing_account_id == "" ? 0 : 1' in binding
+    assert "billing_account_id = var.billing_account_id" in binding
+    assert 'role               = "roles/billing.costsManager"' in binding
+    assert 'member             = "serviceAccount:${module.deployer_identity.email}"' in binding
 
 
 def test_secrets_and_runtime_access_stay_in_human_bootstrap() -> None:

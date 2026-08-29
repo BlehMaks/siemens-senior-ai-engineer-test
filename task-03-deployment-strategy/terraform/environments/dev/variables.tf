@@ -40,6 +40,35 @@ variable "budget_notification_emails" {
   default     = []
 }
 
+variable "budget_amount_units" {
+  description = "Test deployment budget in whole EUR units."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = floor(var.budget_amount_units) == var.budget_amount_units && var.budget_amount_units >= 1 && var.budget_amount_units <= 5
+    error_message = "The dev budget must be a whole number from 1 through 5 EUR."
+  }
+}
+
+variable "budget_alert_thresholds" {
+  description = "Early alert thresholds for the test deployment budget."
+  type        = list(number)
+  default     = [0.2, 0.5, 0.8, 1.0]
+}
+
+variable "api_max_instances" {
+  description = "Maximum API replicas in the cost-bounded dev environment."
+  type        = number
+  default     = 1
+}
+
+variable "worker_max_instances" {
+  description = "Maximum worker replicas in the cost-bounded dev environment."
+  type        = number
+  default     = 1
+}
+
 variable "api_service_account_email" {
   description = "Bootstrap API runtime identity email."
   type        = string

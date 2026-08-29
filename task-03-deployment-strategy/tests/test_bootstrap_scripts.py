@@ -27,6 +27,13 @@ def test_bootstrap_routes_all_cloud_mutations_through_terraform() -> None:
     assert "-force-copy" in source
     assert "discover_existing_state_buckets" in source
     assert 'for scope in bootstrap application' in source
+    assert "resolve_budget_coordinates" in source
+    assert "gcloud billing projects describe" in source
+    assert "GCP_BUDGET_NOTIFICATION_EMAILS" in source
+    assert "verify_application_cost_controls" in source
+    assert '.budget.amount_units == "5"' in source
+    assert ".api_service.max_instances == 1" in source
+    assert ".worker_service.max_instances == 1" in source
     assert '-f "dispatch_id=$dispatch_id"' in source
     assert 'run_title="sai-deploy-$dispatch_id"' in source
     assert 'gh run watch "$run_id"' in source

@@ -12,8 +12,8 @@ Usage:
   bootstrap.sh deploy PROJECT_ID OWNER/REPOSITORY REVIEWER [REGION]
 
 Optional environment:
-  GCP_BILLING_ACCOUNT_ID
-  GCP_BUDGET_NOTIFICATION_EMAILS   JSON array of email addresses
+  GCP_BILLING_ACCOUNT_ID           Defaults to the project's linked account
+  GCP_BUDGET_NOTIFICATION_EMAILS   Defaults to the active gcloud user as a JSON array
   TERRAFORM_BIN                    Defaults to terraform
 EOF
 }
@@ -25,6 +25,43 @@ fail() {
 
 require_tool() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
+}
+
+resolve_budget_coordinates() {
+  local project_id=$1 billing_name active_account recipients
+
+  if [[ -n ${GCP_BILLING_ACCOUNT_ID:-} ]]; then
+    resolved_billing_account_id=$GCP_BILLING_ACCOUNT_ID
+  else
+    billing_name=$(gcloud billing projects describe "$project_id" \
+      --format='value(billingAccountName)')
+    resolved_billing_account_id=${billing_name#billingAccounts/}
+  fi
+  [[ $resolved_billing_account_id =~ ^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$ ]] ||
+    fail "the project must have a readable linked billing account"
+
+  if [[ -n ${GCP_BUDGET_NOTIFICATION_EMAILS:-} ]]; then
+    recipients=$GCP_BUDGET_NOTIFICATION_EMAILS
+  else
+    active_account=$(gcloud auth list \
+      --filter='status:ACTIVE' \
+      --format='value(account)' \
+      --limit=1)
+    [[ $active_account =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]] ||
+      fail "set GCP_BUDGET_NOTIFICATION_EMAILS to at least one monitored address"
+    [[ $active_account != *.gserviceaccount.com ]] ||
+      fail "a service account cannot receive budget email; set GCP_BUDGET_NOTIFICATION_EMAILS"
+    recipients=$(jq -cn --arg address "$active_account" '[$address]')
+  fi
+
+  resolved_budget_notification_emails=$(jq -cer '
+    if type == "array"
+      and length > 0
+      and all(.[]; type == "string" and test("^[^@[:space:]]+@[^@[:space:]]+$"))
+    then sort | unique
+    else error("expected at least one budget notification email")
+    end
+  ' <<<"$recipients") || fail "GCP_BUDGET_NOTIFICATION_EMAILS is invalid"
 }
 
 cleanup() {
@@ -164,6 +201,34 @@ initialize_bootstrap() {
     -reconfigure \
     -backend-config="bucket=$TF_VAR_bootstrap_state_bucket_name" \
     -backend-config="prefix=assessment/bootstrap"
+}
+
+initialize_application() {
+  "$TERRAFORM_BIN" -chdir="$application_root" init \
+    -input=false \
+    -reconfigure \
+    -backend-config="bucket=$TF_VAR_application_state_bucket_name" \
+    -backend-config="prefix=assessment/dev"
+}
+
+verify_application_cost_controls() {
+  local managed_services execution_plane
+  initialize_application
+  managed_services=$("$TERRAFORM_BIN" -chdir="$application_root" output -json managed_services)
+  execution_plane=$("$TERRAFORM_BIN" -chdir="$application_root" output -json execution_plane)
+
+  jq -e '
+    .budget.enabled == true and
+    .budget.currency_code == "EUR" and
+    .budget.amount_units == "5" and
+    .budget.threshold_rules == [0.2, 0.5, 0.8, 1]
+  ' <<<"$managed_services" >/dev/null || fail "the deployed EUR 5 budget guard is missing"
+  jq -e '
+    .api_service.min_instances == 0 and
+    .api_service.max_instances == 1 and
+    .worker_service.min_instances == 0 and
+    .worker_service.max_instances == 1
+  ' <<<"$execution_plane" >/dev/null || fail "the deployed Cloud Run scale guard is missing"
 }
 
 cloud_run_service_exists() {
@@ -332,6 +397,7 @@ main() {
   )
   [[ $actual_project_number =~ ^[0-9]{6,20}$ ]] || fail "could not resolve the project number"
   gh repo view "$repository" --json nameWithOwner --jq '.nameWithOwner' >/dev/null
+  resolve_budget_coordinates "$project_id"
 
   if [[ -z ${GITHUB_TOKEN:-} ]]; then
     GITHUB_TOKEN=$(gh auth token)
@@ -357,8 +423,8 @@ main() {
   export TF_VAR_enable_runtime_policy=false
   export TF_VAR_api_allow_unauthenticated=true
   export TF_VAR_secret_ids='{"api_key_pepper":"sai-dev-api-key-pepper","task_signing_hmac":"sai-dev-task-signing-hmac"}'
-  export TF_VAR_billing_account_id=${GCP_BILLING_ACCOUNT_ID:-}
-  export TF_VAR_budget_notification_emails=${GCP_BUDGET_NOTIFICATION_EMAILS:-[]}
+  export TF_VAR_billing_account_id=$resolved_billing_account_id
+  export TF_VAR_budget_notification_emails=$resolved_budget_notification_emails
 
   BOOTSTRAP_TEMP_DIR=$(mktemp -d -t sai-bootstrap.XXXXXX)
   trap cleanup EXIT
@@ -410,6 +476,7 @@ main() {
     plan_bootstrap "$post_deploy_plan"
     apply_bootstrap_plan "$post_deploy_plan"
     verify_bootstrap
+    verify_application_cost_controls
   fi
 }
 

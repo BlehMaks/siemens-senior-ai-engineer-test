@@ -52,8 +52,6 @@ locals {
   } : {}
 
   deployer_project_permissions = toset([
-    "billing.resourcebudgets.read",
-    "billing.resourcebudgets.write",
     "datastore.databases.create",
     "datastore.databases.delete",
     "datastore.databases.getMetadata",

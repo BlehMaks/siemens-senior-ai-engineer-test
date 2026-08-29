@@ -153,6 +153,14 @@ resource "google_project_iam_member" "deployer_custom_role" {
   member  = "serviceAccount:${module.deployer_identity.email}"
 }
 
+resource "google_billing_account_iam_member" "deployer_budget_manager" {
+  count = var.billing_account_id == "" ? 0 : 1
+
+  billing_account_id = var.billing_account_id
+  role               = "roles/billing.costsManager"
+  member             = "serviceAccount:${module.deployer_identity.email}"
+}
+
 resource "google_storage_bucket_iam_member" "deployer_state_objects" {
   bucket = var.application_state_bucket_name
   role   = "roles/storage.objectAdmin"
