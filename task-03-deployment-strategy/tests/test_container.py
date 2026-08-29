@@ -333,7 +333,7 @@ async def test_cloud_fake_api_selects_managed_adapters_and_readiness(
 
 
 @pytest.mark.asyncio
-async def test_cloud_fake_worker_accepts_signed_task_delivery_for_retry(
+async def test_cloud_fake_worker_acknowledges_signed_orphan_delivery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _set_cloud_environment(monkeypatch, tmp_path, role="worker")
@@ -378,7 +378,7 @@ async def test_cloud_fake_worker_accepts_signed_task_delivery_for_retry(
         )
         assert app.state.internal_worker is not None
 
-    assert accepted.status_code == 503
+    assert accepted.status_code == 204
     assert rejected.status_code == 401
 
 
