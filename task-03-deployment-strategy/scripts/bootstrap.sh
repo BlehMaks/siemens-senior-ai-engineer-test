@@ -44,6 +44,69 @@ bucket_exists() {
   fail "could not inspect state bucket $bucket_name"
 }
 
+object_exists() {
+  local object_url=$1 error_output
+  if error_output=$(gcloud storage objects describe "$object_url" \
+    --project "$TF_VAR_project_id" 2>&1); then
+    return 0
+  fi
+  if [[ -z $error_output ]] ||
+    grep -Eiq 'not[ -]?found|does not exist|matched no|404' <<<"$error_output"; then
+    return 1
+  fi
+  printf '%s\n' "$error_output" >&2
+  fail "could not inspect remote state object $object_url"
+}
+
+legacy_remote_state_needs_migration() {
+  local prefix legacy_url target_url target_bucket
+  for prefix in assessment/bootstrap assessment/dev; do
+    if [[ $prefix == assessment/bootstrap ]]; then
+      target_bucket=$TF_VAR_bootstrap_state_bucket_name
+    else
+      target_bucket=$TF_VAR_application_state_bucket_name
+    fi
+    legacy_url="gs://$legacy_state_bucket_name/$prefix/default.tfstate"
+    target_url="gs://$target_bucket/$prefix/default.tfstate"
+    if object_exists "$legacy_url" && ! object_exists "$target_url"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+migrate_backend_if_needed() {
+  local terraform_directory=$1 prefix=$2 target_bucket=$3
+  local legacy_url="gs://$legacy_state_bucket_name/$prefix/default.tfstate"
+  local target_url="gs://$target_bucket/$prefix/default.tfstate"
+  object_exists "$legacy_url" || return 0
+  object_exists "$target_url" && return 0
+
+  "$TERRAFORM_BIN" -chdir="$terraform_directory" init \
+    -input=false \
+    -reconfigure \
+    -backend-config="bucket=$legacy_state_bucket_name" \
+    -backend-config="prefix=$prefix"
+  "$TERRAFORM_BIN" -chdir="$terraform_directory" init \
+    -input=false \
+    -migrate-state \
+    -force-copy \
+    -backend-config="bucket=$target_bucket" \
+    -backend-config="prefix=$prefix"
+  object_exists "$target_url" || fail "Terraform did not migrate $prefix state"
+}
+
+migrate_legacy_remote_state() {
+  migrate_backend_if_needed \
+    "$terraform_root" \
+    assessment/bootstrap \
+    "$TF_VAR_bootstrap_state_bucket_name"
+  migrate_backend_if_needed \
+    "$application_root" \
+    assessment/dev \
+    "$TF_VAR_application_state_bucket_name"
+}
+
 discover_existing_state_buckets() {
   local existing='{}' scope bucket_name
   for scope in bootstrap application; do
@@ -211,9 +274,13 @@ apply_bootstrap_plan() {
 }
 
 wait_for_deploy_workflow() {
-  local repository=$1 revision=$2 dispatch_time run_id deadline
-  dispatch_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-  gh workflow run deploy.yml --repo "$repository" --ref master
+  local repository=$1 revision=$2 dispatch_id run_title run_id deadline
+  dispatch_id=$(openssl rand -hex 16)
+  run_title="sai-deploy-$dispatch_id"
+  gh workflow run deploy.yml \
+    --repo "$repository" \
+    --ref master \
+    -f "dispatch_id=$dispatch_id"
   deadline=$((SECONDS + 300))
   while ((SECONDS < deadline)); do
     run_id=$(gh run list \
@@ -222,8 +289,8 @@ wait_for_deploy_workflow() {
       --branch master \
       --event workflow_dispatch \
       --limit 20 \
-      --json databaseId,createdAt,headSha \
-      --jq "map(select(.headSha == \"$revision\" and .createdAt >= \"$dispatch_time\")) | sort_by(.createdAt) | last | .databaseId // empty")
+      --json databaseId,displayTitle,headSha \
+      --jq "map(select(.headSha == \"$revision\" and .displayTitle == \"$run_title\")) | first | .databaseId // empty")
     if [[ -n $run_id ]]; then
       gh run watch "$run_id" --repo "$repository" --exit-status
       printf 'deployment workflow %s completed for %s\n' "$run_id" "$revision"
@@ -255,9 +322,11 @@ main() {
 
   repository_root=$(git rev-parse --show-toplevel)
   terraform_root="$repository_root/task-03-deployment-strategy/terraform/bootstrap"
+  application_root="$repository_root/task-03-deployment-strategy/terraform/environments/dev"
   state_bucket_root="$repository_root/task-03-deployment-strategy/terraform/state_bucket"
   [[ -f $terraform_root/main.tf ]] || fail "run this command from the repository checkout"
   [[ -f $state_bucket_root/main.tf ]] || fail "state bucket Terraform root is missing"
+  [[ -f $application_root/main.tf ]] || fail "application Terraform root is missing"
   actual_project_number=$(
     gcloud projects describe "$project_id" --format='value(projectNumber)'
   )
@@ -278,6 +347,7 @@ main() {
   export TF_VAR_system_code=sai
   export TF_VAR_bootstrap_state_bucket_name="${project_id}-sai-bootstrap-tf-state"
   export TF_VAR_application_state_bucket_name="${project_id}-sai-app-tf-state"
+  legacy_state_bucket_name="${project_id}-sai-tf-state"
   export TF_VAR_enable_github_wif=true
   export TF_VAR_github_repository=$repository
   export TF_VAR_github_branch=master
@@ -294,6 +364,8 @@ main() {
   trap cleanup EXIT
 
   if [[ $command_name == verify ]]; then
+    legacy_remote_state_needs_migration &&
+      fail "legacy remote state still needs migration; run bootstrap.sh apply"
     verify_bootstrap
     exit 0
   fi
@@ -312,6 +384,9 @@ main() {
       -lock-timeout=60s \
       "$state_plan"
     all_state_buckets_exist || fail "Terraform did not create both state buckets"
+    migrate_legacy_remote_state
+  elif legacy_remote_state_needs_migration; then
+    fail "legacy remote state needs migration; run bootstrap.sh apply before planning"
   fi
 
   initialize_bootstrap

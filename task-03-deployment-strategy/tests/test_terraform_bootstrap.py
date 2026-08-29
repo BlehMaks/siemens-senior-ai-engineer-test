@@ -98,15 +98,20 @@ def test_state_bucket_is_private_versioned_and_not_force_destroyed() -> None:
     assert 'resource "google_storage_bucket" "terraform_state"' not in bootstrap_main
 
 
-def test_workload_inventory_and_impersonation_chain_are_explicit() -> None:
+def test_workload_inventory_and_direct_federation_are_explicit() -> None:
     locals_tf = read(BOOTSTRAP / "locals.tf")
     main_tf = read(BOOTSTRAP / "main.tf")
 
-    for name in ("api", "worker", "tasks", "deployer", "ci"):
+    for name in ("api", "worker", "tasks", "deployer"):
         assert f"{name} =" in locals_tf
 
-    assert 'serviceAccount:${module.identity["ci"].email}' in main_tf
-    assert main_tf.count("? { github = local.github_principal }") == 2
+    assert "ci =" not in locals_tf
+    deployer = main_tf.split('module "deployer_identity"', maxsplit=1)[1].split(
+        'resource "', maxsplit=1
+    )[0]
+    assert "workload_identity_members" in deployer
+    assert "{ github = local.github_principal }" in deployer
+    assert "token_creator_members        = {}" in deployer
     assert (
         '"principalSet://iam.googleapis.com/%s/attribute.repository_id/%s"' in locals_tf
     )
@@ -135,9 +140,10 @@ def test_federated_members_use_stable_plan_time_keys() -> None:
     identity_variables = read(IDENTITY / "variables.tf")
 
     assert identity_variables.count("type        = map(string)") >= 4
-    assert "? { github = local.github_principal }" in main_tf
+    assert "{ github = local.github_principal }" in main_tf
     assert "? [local.github_principal]" not in main_tf
-    assert 'ci = "serviceAccount:${module.identity["ci"].email}"' in main_tf
+    assert 'module "deployer_identity"' in main_tf
+    assert 'module.identity["ci"]' not in main_tf
 
 
 def test_no_keys_or_wildcard_principals_are_defined() -> None:
@@ -390,7 +396,6 @@ def test_github_environment_and_delivery_variables_are_terraform_managed() -> No
         "GCP_PROJECT_NUMBER",
         "GCP_TERRAFORM_STATE_BUCKET",
         "GCP_WORKLOAD_IDENTITY_PROVIDER",
-        "GCP_CI_SERVICE_ACCOUNT",
         "GCP_DEPLOYER_SERVICE_ACCOUNT",
         "GCP_API_SERVICE_ACCOUNT",
         "GCP_WORKER_SERVICE_ACCOUNT",

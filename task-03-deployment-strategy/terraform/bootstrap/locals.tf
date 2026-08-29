@@ -40,7 +40,6 @@ locals {
     GCP_API_SERVICE_ACCOUNT        = module.identity["api"].email
     GCP_BILLING_ACCOUNT_ID         = var.billing_account_id
     GCP_BUDGET_NOTIFICATION_EMAILS = jsonencode(sort(tolist(var.budget_notification_emails)))
-    GCP_CI_SERVICE_ACCOUNT         = module.identity["ci"].email
     GCP_DEPLOYER_SERVICE_ACCOUNT   = module.deployer_identity.email
     GCP_PROJECT_ID                 = var.project_id
     GCP_PROJECT_NUMBER             = tostring(data.google_project.current.number)
@@ -104,12 +103,6 @@ locals {
       display_name  = "Terraform deployer"
       description   = "Identity that applies reviewed Terraform for assignment resources."
       project_roles = local.deployer_project_roles
-    }
-    ci = {
-      account_id    = "${var.system_code}-${var.environment}-ci"
-      display_name  = "GitHub Actions federation target"
-      description   = "Identity impersonated by GitHub Actions through workload identity federation."
-      project_roles = []
     }
   }
 }

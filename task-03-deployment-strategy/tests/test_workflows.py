@@ -53,13 +53,15 @@ def test_privileged_jobs_are_master_and_environment_gated() -> None:
         assert "id-token: write" in source
         assert "google-github-actions/auth@" in source
         assert "GCP_WORKLOAD_IDENTITY_PROVIDER" in source
-        assert "delegates: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}" in source
+        assert "delegates:" not in source
         assert "GCP_DEPLOYER_SERVICE_ACCOUNT" in source
 
 
 def test_deploy_promotes_the_tested_artifact_by_digest() -> None:
     source = read(WORKFLOW_ROOT / "deploy.yml")
 
+    assert "run-name: sai-deploy-${{ inputs.dispatch_id }}" in source
+    assert "dispatch_id:" in source
     assert "needs: verify" in source
     assert "docker save --output release-image.tar" in source
     assert "docker load --input release-image.tar" in source

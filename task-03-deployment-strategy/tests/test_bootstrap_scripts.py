@@ -22,8 +22,13 @@ def test_bootstrap_routes_all_cloud_mutations_through_terraform() -> None:
     assert '"$TERRAFORM_BIN" -chdir="$terraform_root" apply' in source
     assert '-backend-config="bucket=$TF_VAR_bootstrap_state_bucket_name"' in source
     assert 'TF_VAR_application_state_bucket_name="${project_id}-sai-app-tf-state"' in source
+    assert 'legacy_state_bucket_name="${project_id}-sai-tf-state"' in source
+    assert "-migrate-state" in source
+    assert "-force-copy" in source
     assert "discover_existing_state_buckets" in source
     assert 'for scope in bootstrap application' in source
+    assert '-f "dispatch_id=$dispatch_id"' in source
+    assert 'run_title="sai-deploy-$dispatch_id"' in source
     assert 'gh run watch "$run_id"' in source
     assert "TF_VAR_enable_runtime_policy=true" in source
     assert "verify_secret_versions" in source
