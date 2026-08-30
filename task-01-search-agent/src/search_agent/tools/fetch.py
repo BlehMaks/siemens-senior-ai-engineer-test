@@ -20,7 +20,9 @@ from ..security import (
     UrlGuard,
 )
 
-_ALLOWED_CONTENT_TYPES = frozenset({"application/xhtml+xml", "text/html", "text/plain"})
+_ALLOWED_CONTENT_TYPES = frozenset(
+    {"application/pdf", "application/xhtml+xml", "text/html", "text/plain"}
+)
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _DECODE_CHUNK_BYTES = 64 * 1024
 _MALFORMED_URL_REASONS = frozenset(
@@ -311,7 +313,7 @@ def _pinned_request(guarded: GuardedUrl, *, user_agent: str) -> httpx.Request:
     default_port = 443 if guarded.scheme == "https" else 80
     host_header = host if guarded.port == default_port else f"{host}:{guarded.port}"
     headers = {
-        "Accept": "text/html, text/plain;q=0.9",
+        "Accept": "text/html, application/pdf;q=0.9, text/plain;q=0.8",
         "Accept-Encoding": "gzip, deflate",
         "Connection": "close",
         "Host": host_header,

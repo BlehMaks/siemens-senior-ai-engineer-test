@@ -222,7 +222,7 @@ async def test_malformed_redirects_are_typed(
             FetchFailureReason.HTTP_STATUS,
         ),
         (
-            httpx.Response(200, headers={"Content-Type": "application/pdf"}),
+            httpx.Response(200, headers={"Content-Type": "image/png"}),
             FetchFailureReason.CONTENT_TYPE,
         ),
         (
@@ -264,6 +264,25 @@ async def test_status_content_type_length_and_empty_failures_are_typed(
     assert error.value.reason is reason
     if reason is FetchFailureReason.HTTP_STATUS:
         assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_pdf_content_type_is_fetched_under_the_existing_byte_limit() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/pdf"},
+            content=b"%PDF-1.4 bounded fixture",
+        )
+
+    guard, _ = _guard({"example.com": [("93.184.216.34",)]})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        document = await GuardedFetcher(client, guard, max_bytes=64).fetch(
+            "https://example.com/report.pdf"
+        )
+
+    assert document.content_type == "application/pdf"
+    assert document.body == b"%PDF-1.4 bounded fixture"
 
 
 @pytest.mark.asyncio

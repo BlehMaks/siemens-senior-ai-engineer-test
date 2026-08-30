@@ -21,7 +21,7 @@ from search_agent.memory import (
     UnresolvedItem,
     reflect_run,
 )
-from search_agent.memory.contracts import contains_sensitive_memory_text
+from search_agent.memory.contracts import RunReflection, contains_sensitive_memory_text
 
 from .helpers import CLAIM, cancelled_result, completed_result, failed_result
 
@@ -30,7 +30,7 @@ def test_completed_reflection_has_a_stable_bounded_snapshot() -> None:
     reflected = reflect_run(completed_result())
 
     assert reflected.model_dump(mode="json") == {
-        "schema_version": 1,
+        "schema_version": 2,
         "tenant_id": "tenant-one",
         "session_id": "session-one",
         "run_id": "run-000001",
@@ -66,6 +66,8 @@ def test_completed_reflection_has_a_stable_bounded_snapshot() -> None:
             "tokens": 512,
             "memory_records": 0,
         },
+        "trace_summary": [],
+        "verified_claims": ["Siemens published its 2025 sustainability report."],
     }
 
 
@@ -78,6 +80,19 @@ def test_reflection_preserves_reviewed_memory_usage() -> None:
     )
 
     assert reflect_run(result).usage.memory_records == 3
+
+
+def test_v1_reflection_payload_remains_read_compatible() -> None:
+    payload = reflect_run(completed_result()).model_dump(mode="python")
+    payload["schema_version"] = 1
+    payload.pop("trace_summary")
+    payload.pop("verified_claims")
+
+    restored = RunReflection.model_validate(payload)
+
+    assert restored.schema_version == 1
+    assert restored.trace_summary == ()
+    assert restored.verified_claims == ()
 
 
 def test_failed_cancelled_and_partial_runs_still_reflect() -> None:

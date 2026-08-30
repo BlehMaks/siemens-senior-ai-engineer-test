@@ -5,7 +5,9 @@ description = "Bounded, citation-first internet research agent"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "ddgs>=9.5,<10",
+    "google-auth>=2.40,<3",
     "httpx>=0.28,<1",
+    "pypdf>=6.1,<7",
     "pydantic>=2.11,<3",
     "trafilatura>=2,<3",
 ]

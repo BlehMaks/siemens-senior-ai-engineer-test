@@ -8,7 +8,13 @@ from typing import Annotated, Literal, Protocol
 
 from pydantic import AnyHttpUrl, Field, StringConstraints, model_validator
 
-from ..contracts import EventType, OpaqueId, StrictModel, TerminalState
+from ..contracts import (
+    ActionTraceRecord,
+    EventType,
+    OpaqueId,
+    StrictModel,
+    TerminalState,
+)
 
 ReflectionText = Annotated[
     str, StringConstraints(min_length=1, max_length=240, strip_whitespace=True)
@@ -140,7 +146,7 @@ class ReflectionUsage(StrictModel):
 
 
 class RunReflection(StrictModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 2
     tenant_id: OpaqueId
     session_id: OpaqueId
     run_id: OpaqueId
@@ -152,11 +158,17 @@ class RunReflection(StrictModel):
     unresolved_items: tuple[UnresolvedItem, ...] = Field(max_length=4)
     outcome: TerminalState
     usage: ReflectionUsage
+    trace_summary: tuple[ActionTraceRecord, ...] = Field(default=(), max_length=64)
+    verified_claims: tuple[ReflectionText, ...] = Field(default=(), max_length=16)
 
     @model_validator(mode="after")
     def validate_outcome_and_text(self) -> RunReflection:
         if contains_sensitive_memory_text(self.requested_outcome):
             raise ValueError("requested outcome contains sensitive material")
+        if self.schema_version == 1 and (self.trace_summary or self.verified_claims):
+            raise ValueError("v1 reflections cannot contain v2 fields")
+        if any(contains_sensitive_memory_text(claim) for claim in self.verified_claims):
+            raise ValueError("verified claims contain sensitive material")
         if self.outcome is TerminalState.COMPLETED:
             evidence_required = EventType.EVIDENCE_READY in self.actions
             if evidence_required != bool(self.completion_evidence):
@@ -167,6 +179,8 @@ class RunReflection(StrictModel):
             raise ValueError(
                 "non-completed reflections cannot claim completion evidence"
             )
+        if self.outcome is not TerminalState.COMPLETED and self.verified_claims:
+            raise ValueError("non-completed reflections cannot contain verified claims")
         if self.outcome is TerminalState.CANCELLED and self.unresolved_items != (
             UnresolvedItem.CANCELLED,
         ):

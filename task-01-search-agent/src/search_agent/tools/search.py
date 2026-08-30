@@ -6,6 +6,8 @@ import asyncio
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
+from time import monotonic_ns
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 
@@ -17,6 +19,10 @@ from search_agent.security.site_policy import SafeSearch, SitePolicy
 _URL_ADAPTER = TypeAdapter(AnyHttpUrl)
 _PERCENT_ESCAPE = re.compile(r"%[0-9A-Fa-f]{2}")
 _ROWS_PER_REQUESTED_HIT = 4
+_MAX_ATTEMPT_DURATION_MS = 600_000
+_MAX_SEARCH_BACKENDS = 2
+_MAX_SEARCH_BACKENDS_TEXT = 64
+_SUPPORTED_SEARCH_BACKENDS = frozenset({"auto", "duckduckgo"})
 _SAFE_SEARCH_ARGUMENT = {
     SafeSearch.STRICT: "on",
     SafeSearch.MODERATE: "moderate",
@@ -32,41 +38,205 @@ class SyncSearchBackend(Protocol):
 class SearchFailure(RuntimeError):
     """A stable public failure that does not expose backend internals."""
 
+    def __init__(
+        self, message: str, *, attempts: tuple[SearchAttempt, ...] = ()
+    ) -> None:
+        super().__init__(message)
+        self.attempts = attempts
+
+
+class SearchAttemptOutcome(StrEnum):
+    """Safe, bounded reason codes for one configured backend attempt."""
+
+    EXCEPTION = "exception"
+    RAW_EMPTY = "raw_empty"
+    INVALID = "invalid"
+    ALL_POLICY_REJECTED = "all_policy_rejected"
+    NORMALIZED_EMPTY = "normalized_empty"
+    SUCCESS = "success"
+
+
+@dataclass(frozen=True, slots=True)
+class SearchAttempt:
+    backend: str
+    outcome: SearchAttemptOutcome
+    raw_rows: int = 0
+    accepted_hits: int = 0
+    rejection_count: int = 0
+    duration_ms: int = 0
+
+    @property
+    def reason_code(self) -> str:
+        """Return the bounded outcome value used by action tracing."""
+
+        return self.outcome.value
+
+
+@dataclass(frozen=True, slots=True)
+class SearchResult:
+    hits: tuple[SearchHit, ...]
+    attempts: tuple[SearchAttempt, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _NormalizationResult:
+    hits: tuple[SearchHit, ...]
+    raw_rows: int
+    invalid_rows: int
+    policy_rejected_rows: int
+    duplicate_rows: int
+
+    @property
+    def rejection_count(self) -> int:
+        return self.invalid_rows + self.policy_rejected_rows + self.duplicate_rows
+
+
+def parse_search_backends(value: str) -> tuple[str, ...]:
+    """Parse the bounded comma-separated CLI and environment contract."""
+
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > _MAX_SEARCH_BACKENDS_TEXT
+        or not value.isascii()
+    ):
+        raise ValueError("search backends must be short non-empty ASCII text")
+    return validate_search_backends(tuple(value.split(",")))
+
+
+def validate_search_backends(values: Sequence[str]) -> tuple[str, ...]:
+    """Validate an ordered backend list without silently normalizing it."""
+
+    if isinstance(values, (str, bytes)):
+        raise ValueError("search backends must be an ordered sequence")
+    backends = tuple(values)
+    if not 1 <= len(backends) <= _MAX_SEARCH_BACKENDS:
+        raise ValueError("search backends must contain one or two entries")
+    if any(
+        not isinstance(backend, str)
+        or not backend
+        or backend.strip() != backend
+        or backend not in _SUPPORTED_SEARCH_BACKENDS
+        for backend in backends
+    ):
+        raise ValueError("search backend is not allowed")
+    if len(set(backends)) != len(backends):
+        raise ValueError("search backends must not contain duplicates")
+    return backends
+
 
 @dataclass(frozen=True, slots=True)
 class SearchAdapter:
     backend: SyncSearchBackend
     site_policy: SitePolicy
     region: str = "wt-wt"
-    backend_name: str = "duckduckgo"
+    backend_names: tuple[str, ...] = ("auto",)
+    backend_name: str | None = None
+
+    def __post_init__(self) -> None:
+        names = self.backend_names
+        if self.backend_name is not None:
+            if names != ("auto",) and names != (self.backend_name,):
+                raise ValueError("backend_name conflicts with backend_names")
+            names = (self.backend_name,)
+        names = validate_search_backends(names)
+        object.__setattr__(self, "backend_names", names)
+        object.__setattr__(self, "backend_name", names[0])
 
     async def search(self, query: SearchQuery) -> tuple[SearchHit, ...]:
         """Run blocking DDGS work off-loop and return bounded, policy-safe hits."""
 
-        try:
-            rows = await asyncio.to_thread(
-                self.backend.text,
-                query.text,
-                region=self.region,
-                safesearch=_SAFE_SEARCH_ARGUMENT[self.site_policy.safe_search],
-                max_results=query.max_results,
-                backend=self.backend_name,
-            )
-        except Exception:
-            raise SearchFailure("search backend failed") from None
+        return (await self.search_with_metadata(query)).hits
 
-        if isinstance(rows, (str, bytes)) or not isinstance(rows, Sequence):
-            raise SearchFailure("search backend returned an invalid result")
-        try:
-            return self._normalize(rows, query.max_results)
-        except Exception:
-            raise SearchFailure("search backend returned an invalid result") from None
+    async def search_with_metadata(self, query: SearchQuery) -> SearchResult:
+        """Try configured backends in order and return safe attempt metadata."""
+
+        attempts: list[SearchAttempt] = []
+        for backend_name in self.backend_names:
+            started_ns = monotonic_ns()
+            try:
+                rows = await asyncio.to_thread(
+                    self.backend.text,
+                    query.text,
+                    region=self.region,
+                    safesearch=_SAFE_SEARCH_ARGUMENT[self.site_policy.safe_search],
+                    max_results=query.max_results,
+                    backend=backend_name,
+                )
+            except Exception:
+                attempts.append(
+                    SearchAttempt(
+                        backend=backend_name,
+                        outcome=SearchAttemptOutcome.EXCEPTION,
+                        duration_ms=_duration_ms(started_ns),
+                    )
+                )
+                continue
+
+            if isinstance(rows, (str, bytes)) or not isinstance(rows, Sequence):
+                attempts.append(
+                    SearchAttempt(
+                        backend=backend_name,
+                        outcome=SearchAttemptOutcome.INVALID,
+                        duration_ms=_duration_ms(started_ns),
+                    )
+                )
+                continue
+            try:
+                normalized = self._normalize(rows, query.max_results)
+            except Exception:
+                attempts.append(
+                    SearchAttempt(
+                        backend=backend_name,
+                        outcome=SearchAttemptOutcome.INVALID,
+                        duration_ms=_duration_ms(started_ns),
+                    )
+                )
+                continue
+
+            outcome = _attempt_outcome(normalized)
+            attempts.append(
+                SearchAttempt(
+                    backend=backend_name,
+                    outcome=outcome,
+                    raw_rows=normalized.raw_rows,
+                    accepted_hits=len(normalized.hits),
+                    rejection_count=normalized.rejection_count,
+                    duration_ms=_duration_ms(started_ns),
+                )
+            )
+            if normalized.hits:
+                return SearchResult(
+                    hits=normalized.hits,
+                    attempts=tuple(attempts),
+                )
+
+        attempt_tuple = tuple(attempts)
+        if attempt_tuple and all(
+            attempt.outcome
+            in {SearchAttemptOutcome.EXCEPTION, SearchAttemptOutcome.INVALID}
+            for attempt in attempt_tuple
+        ):
+            message = (
+                "search backend returned an invalid result"
+                if any(
+                    attempt.outcome is SearchAttemptOutcome.INVALID
+                    for attempt in attempt_tuple
+                )
+                else "search backend failed"
+            )
+            raise SearchFailure(message, attempts=attempt_tuple) from None
+        return SearchResult(hits=(), attempts=attempt_tuple)
 
     def _normalize(
         self, rows: Sequence[object], max_results: int
-    ) -> tuple[SearchHit, ...]:
+    ) -> _NormalizationResult:
         hits: list[SearchHit] = []
         seen_urls: set[str] = set()
+        raw_rows = 0
+        invalid_rows = 0
+        policy_rejected_rows = 0
+        duplicate_rows = 0
 
         # The backend was asked for max_results; a small allowance preserves useful
         # filtering without letting a hostile Sequence create unbounded work.
@@ -76,29 +246,43 @@ class SearchAdapter:
                 row = next(iterator)
             except StopIteration:
                 break
-            normalized = self._normalize_row(row, rank=len(hits) + 1)
+            raw_rows += 1
+            normalized, reason = self._normalize_row(row, rank=len(hits) + 1)
             if normalized is None:
+                if reason == "policy_rejected":
+                    policy_rejected_rows += 1
+                else:
+                    invalid_rows += 1
                 continue
             canonical_url = str(normalized.url)
             if canonical_url in seen_urls:
+                duplicate_rows += 1
                 continue
             seen_urls.add(canonical_url)
             hits.append(normalized)
             if len(hits) == max_results:
                 break
 
-        return tuple(hits)
+        return _NormalizationResult(
+            hits=tuple(hits),
+            raw_rows=raw_rows,
+            invalid_rows=invalid_rows,
+            policy_rejected_rows=policy_rejected_rows,
+            duplicate_rows=duplicate_rows,
+        )
 
-    def _normalize_row(self, row: object, *, rank: int) -> SearchHit | None:
+    def _normalize_row(
+        self, row: object, *, rank: int
+    ) -> tuple[SearchHit | None, str | None]:
         if not isinstance(row, Mapping):
-            return None
+            return None, "invalid"
 
         try:
             title = _normalize_text(row.get("title"))
             raw_href = row.get("href")
             snippet = _normalize_text(row.get("body"))
             if title is None or snippet is None or not isinstance(raw_href, str):
-                return None
+                return None, "invalid"
             href = raw_href.strip()
         except Exception:
             raise SearchFailure("search backend returned an invalid result") from None
@@ -106,22 +290,22 @@ class SearchAdapter:
         try:
             parsed_url = _URL_ADAPTER.validate_python(href)
         except ValidationError:
-            return None
+            return None, "invalid"
         if parsed_url.username is not None or parsed_url.password is not None:
-            return None
+            return None, "policy_rejected"
         if parsed_url.port not in self.site_policy.allowed_ports:
-            return None
+            return None, "policy_rejected"
 
         raw_host = parsed_url.host
         if raw_host is None:
-            return None
+            return None, "invalid"
         host = raw_host.strip("[]").rstrip(".")
         try:
             decision = self.site_policy.evaluate(host)
         except ValueError:
-            return None
+            return None, "invalid"
         if not decision.allowed:
-            return None
+            return None, "policy_rejected"
 
         # DNS root dots and fragments do not identify another source resource.
         parsed_canonical = urlsplit(str(parsed_url))
@@ -142,12 +326,29 @@ class SearchAdapter:
             )
         )
         canonical_url = _URL_ADAPTER.validate_python(canonical_text)
-        return SearchHit(
-            title=title,
-            url=canonical_url,
-            snippet=snippet,
-            rank=rank,
+        return (
+            SearchHit(
+                title=title,
+                url=canonical_url,
+                snippet=snippet,
+                rank=rank,
+            ),
+            None,
         )
+
+
+def _attempt_outcome(result: _NormalizationResult) -> SearchAttemptOutcome:
+    if result.hits:
+        return SearchAttemptOutcome.SUCCESS
+    if result.raw_rows == 0:
+        return SearchAttemptOutcome.RAW_EMPTY
+    if (
+        result.policy_rejected_rows > 0
+        and result.invalid_rows == 0
+        and result.duplicate_rows == 0
+    ):
+        return SearchAttemptOutcome.ALL_POLICY_REJECTED
+    return SearchAttemptOutcome.NORMALIZED_EMPTY
 
 
 def _normalize_text(value: object) -> str | None:
@@ -161,3 +362,10 @@ def _uppercase_percent_escapes(value: str) -> str:
     """Normalize valid escapes only; invalid percent text keeps its identity."""
 
     return _PERCENT_ESCAPE.sub(lambda match: match.group(0).upper(), value)
+
+
+def _duration_ms(started_ns: int) -> int:
+    return min(
+        max((monotonic_ns() - started_ns) // 1_000_000, 0),
+        _MAX_ATTEMPT_DURATION_MS,
+    )

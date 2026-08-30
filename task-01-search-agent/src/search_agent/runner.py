@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
 import inspect
 import json
+import logging
 import math
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -18,14 +21,20 @@ from pydantic import Field, ValidationError, model_validator
 
 from .answering import AnswerAbstained, AnswerValidator
 from .contracts import (
+    ActionTraceRecord,
+    ConversationTurn,
     EventType,
     FailureReason,
     OpaqueId,
     PublicEvent,
+    ResearchTraceSink,
     ScopedAnswer,
     SearchHit,
     SearchQuery,
     StrictModel,
+    TraceOutcome,
+    TraceStage,
+    validate_conversation_context,
 )
 from .evidence import EvidenceRecord, EvidenceValidationError, build_evidence
 from .memory import (
@@ -34,13 +43,13 @@ from .memory import (
     ReviewedMemoryReadPort,
 )
 from .planning import (
-    PLANNING_SYSTEM_PROMPT,
     AnswerScopePolicy,
     AssistancePolicy,
     PlanningDecision,
     PlanningOutcome,
     PlanningPolicyError,
     TaskCategory,
+    planning_messages,
     validate_planning_decision,
 )
 from .providers import (
@@ -51,6 +60,12 @@ from .providers import (
     ProviderResult,
     StructuredChatProvider,
 )
+from .retrieval import (
+    ResearchDocument,
+    RetrievalError,
+    build_research_document,
+    select_context,
+)
 from .state import RunSnapshot, RunStateGraph, RunStatus
 from .tools import (
     ExtractedDocument,
@@ -60,6 +75,7 @@ from .tools import (
     SearchFailure,
 )
 from .tools.fetch import _validated_fetched_document
+from .tools.search import SearchResult
 
 _DEFAULT_FETCH_RESERVATION_BYTES = 2 * 1024 * 1024
 _SYNTHESIS_SYSTEM_PROMPT = (
@@ -79,10 +95,21 @@ _MEMORY_SYNTHESIS_SYSTEM_PROMPT = (
 )
 
 T = TypeVar("T")
+_ACTION_LOGGER = logging.getLogger("search_agent.actions")
+_MAX_TRACE_RECORDS = 96
 
 
 class PlanningPort(Protocol):
     async def plan_with_metadata(self, request: str) -> PlanningOutcome: ...
+
+
+class ContextPlanningPort(Protocol):
+    async def plan_with_context(
+        self,
+        request: str,
+        *,
+        conversation_context: tuple[ConversationTurn, ...],
+    ) -> PlanningOutcome: ...
 
 
 class SearchPort(Protocol):
@@ -133,6 +160,7 @@ class RunResult(StrictModel):
     snapshot: RunSnapshot
     events: tuple[PublicEvent, ...]
     usage: RunUsage
+    trace: tuple[ActionTraceRecord, ...] = Field(default=(), max_length=96)
 
     @model_validator(mode="after")
     def require_one_matching_terminal_event(self) -> RunResult:
@@ -162,6 +190,16 @@ class RunResult(StrictModel):
         ):
             raise ValueError("run result events must keep one run identity")
         return self
+
+
+class StructuredLoggingTraceSink:
+    """Emit one JSON object per safe action record."""
+
+    def record(self, record: ActionTraceRecord) -> None:
+        try:
+            _ACTION_LOGGER.info(record.model_dump_json(exclude_none=True))
+        except Exception:
+            return
 
 
 class _BudgetExceeded(RuntimeError):
@@ -379,6 +417,9 @@ class ResearchRunner:
     cancel_requested: Callable[[], bool] | None = None
     memory_reader: ReviewedMemoryReadPort | None = None
     memory_reads_enabled: bool = False
+    trace_sink: ResearchTraceSink | None = field(
+        default_factory=StructuredLoggingTraceSink
+    )
 
     def __post_init__(self) -> None:
         if type(self.memory_reads_enabled) is not bool:
@@ -410,6 +451,26 @@ class ResearchRunner:
         request: str,
         budget: RunBudget | None = None,
     ) -> RunResult:
+        return await self.run_with_context(
+            tenant_id=tenant_id,
+            session_id=session_id,
+            run_id=run_id,
+            request=request,
+            conversation_context=(),
+            budget=budget,
+        )
+
+    async def run_with_context(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        session_id: OpaqueId,
+        run_id: OpaqueId,
+        request: str,
+        conversation_context: tuple[ConversationTurn, ...],
+        budget: RunBudget | None = None,
+    ) -> RunResult:
+        context = validate_conversation_context(conversation_context)
         checked_budget = budget or RunBudget()
         ledger = _Ledger.create(
             checked_budget,
@@ -427,9 +488,26 @@ class ResearchRunner:
                 message="Created bounded research run",
             )
         ]
+        trace: list[ActionTraceRecord] = []
+        self._record(
+            trace,
+            ActionTraceRecord(
+                stage=TraceStage.RUN,
+                action="run.execute",
+                outcome=TraceOutcome.STARTED,
+                safe_id=run_id,
+                count=len(context),
+            ),
+        )
 
         try:
-            snapshot = await self._execute(snapshot, events, ledger)
+            snapshot = await self._execute(
+                snapshot,
+                events,
+                ledger,
+                conversation_context=context,
+                trace=trace,
+            )
         except _CooperativeCancellation:
             snapshot, event = RunStateGraph.cancel(snapshot)
             events.append(event)
@@ -462,10 +540,30 @@ class ResearchRunner:
             )
             events.append(event)
 
+        self._record(
+            trace,
+            ActionTraceRecord(
+                stage=TraceStage.FINAL,
+                action="run.terminal",
+                outcome=(
+                    TraceOutcome.SUCCEEDED
+                    if snapshot.status is RunStatus.COMPLETED
+                    else TraceOutcome.FAILED
+                ),
+                reason=(
+                    None
+                    if snapshot.failure_reason is None
+                    else snapshot.failure_reason.value
+                ),
+                safe_id=run_id,
+                count=len(events),
+            ),
+        )
         return RunResult(
             snapshot=snapshot,
             events=tuple(events),
             usage=ledger.usage(),
+            trace=tuple(trace),
         )
 
     async def _execute(
@@ -473,9 +571,54 @@ class ResearchRunner:
         snapshot: RunSnapshot,
         events: list[PublicEvent],
         ledger: _Ledger,
+        *,
+        conversation_context: tuple[ConversationTurn, ...],
+        trace: list[ActionTraceRecord],
     ) -> RunSnapshot:
-        decision = await self._plan(snapshot.request, ledger)
+        try:
+            decision = await self._plan(
+                snapshot.request,
+                ledger,
+                conversation_context=conversation_context,
+            )
+        except Exception:
+            self._record(
+                trace,
+                ActionTraceRecord(
+                    stage=TraceStage.PLAN,
+                    action="plan.validate",
+                    outcome=TraceOutcome.FAILED,
+                    reason="rejected",
+                    safe_id=snapshot.run_id,
+                ),
+            )
+            raise
+        self._record(
+            trace,
+            ActionTraceRecord(
+                stage=TraceStage.PLAN,
+                action="plan.validate",
+                outcome=TraceOutcome.SUCCEEDED,
+                reason=decision.task_category.value,
+                safe_id=snapshot.run_id,
+                count=(
+                    0
+                    if decision.query_plan is None
+                    else len(decision.query_plan.searches)
+                ),
+            ),
+        )
         if not decision.requires_search:
+            self._record(
+                trace,
+                ActionTraceRecord(
+                    stage=TraceStage.SEARCH,
+                    action="search.execute",
+                    outcome=TraceOutcome.SKIPPED,
+                    reason="no_search",
+                    safe_id=snapshot.run_id,
+                ),
+            )
             if decision.task_category not in {
                 TaskCategory.DIRECT_REPLY,
                 TaskCategory.CLARIFICATION,
@@ -488,7 +631,7 @@ class ResearchRunner:
             )
             AssistancePolicy.validate(
                 answer_completed=True,
-                request=snapshot.request,
+                request=_conversation_scope(snapshot.request, conversation_context),
                 assistance=answer.assistance,
             )
             snapshot, event = RunStateGraph.draft_direct_answer(snapshot, answer)
@@ -504,7 +647,12 @@ class ResearchRunner:
         snapshot, event = RunStateGraph.start_search(snapshot)
         events.append(event)
 
-        hits, successful_searches = await self._search(decision, ledger)
+        hits, successful_searches = await self._search(
+            decision,
+            ledger,
+            run_id=snapshot.run_id,
+            trace=trace,
+        )
         if not hits:
             reason = (
                 FailureReason.NO_EVIDENCE
@@ -515,7 +663,13 @@ class ResearchRunner:
             events.append(event)
             return snapshot
 
-        records = await self._collect_evidence(hits, decision, ledger)
+        records = await self._collect_evidence(
+            hits,
+            decision,
+            ledger,
+            run_id=snapshot.run_id,
+            trace=trace,
+        )
         if not records:
             snapshot, event = RunStateGraph.fail(snapshot, FailureReason.NO_EVIDENCE)
             events.append(event)
@@ -545,19 +699,45 @@ class ResearchRunner:
             records,
             ledger,
             memory=memory,
+            run_id=snapshot.run_id,
+            trace=trace,
         )
         ledger.start_iteration()
         ledger.check_boundary()
-        answer = self.answer_validator.validate(answer, records, now=self._now())
-        AnswerScopePolicy.validate(
-            request=snapshot.request,
-            answer_focus=decision.answer_focus,
-            answer=answer,
-        )
-        AssistancePolicy.validate(
-            answer_completed=True,
-            request=snapshot.request,
-            assistance=answer.assistance,
+        try:
+            answer = self.answer_validator.validate(answer, records, now=self._now())
+            scoped_request = _conversation_scope(snapshot.request, conversation_context)
+            AnswerScopePolicy.validate(
+                request=scoped_request,
+                answer_focus=decision.answer_focus,
+                answer=answer,
+            )
+            AssistancePolicy.validate(
+                answer_completed=True,
+                request=scoped_request,
+                assistance=answer.assistance,
+            )
+        except Exception:
+            self._record(
+                trace,
+                ActionTraceRecord(
+                    stage=TraceStage.VALIDATE,
+                    action="answer.validate",
+                    outcome=TraceOutcome.FAILED,
+                    reason="rejected",
+                    safe_id=snapshot.run_id,
+                ),
+            )
+            raise
+        self._record(
+            trace,
+            ActionTraceRecord(
+                stage=TraceStage.VALIDATE,
+                action="answer.validate",
+                outcome=TraceOutcome.SUCCEEDED,
+                safe_id=snapshot.run_id,
+                count=len(answer.citations),
+            ),
         )
         ledger.check_boundary()
         snapshot, event = RunStateGraph.draft_answer(snapshot, answer)
@@ -567,21 +747,36 @@ class ResearchRunner:
         events.append(event)
         return snapshot
 
-    async def _plan(self, request: str, ledger: _Ledger) -> PlanningDecision:
+    async def _plan(
+        self,
+        request: str,
+        ledger: _Ledger,
+        *,
+        conversation_context: tuple[ConversationTurn, ...],
+    ) -> PlanningDecision:
         ledger.start_iteration()
-        planning_messages = (
-            ProviderMessage(role="system", content=PLANNING_SYSTEM_PROMPT),
-            ProviderMessage(role="user", content=request),
-        )
-        reserved = ledger.begin_model_call(planning_messages)
-        outcome = await self._await_boundary(
-            lambda: self.planner.plan_with_metadata(request), ledger
-        )
+        messages = planning_messages(request, conversation_context)
+        reserved = ledger.begin_model_call(messages)
+        if conversation_context:
+            plan_with_context = getattr(self.planner, "plan_with_context", None)
+            if not callable(plan_with_context):
+                raise _InvalidAdapter
+            outcome = await self._await_boundary(
+                lambda: plan_with_context(
+                    request, conversation_context=conversation_context
+                ),
+                ledger,
+            )
+        else:
+            outcome = await self._await_boundary(
+                lambda: self.planner.plan_with_metadata(request), ledger
+            )
         if type(outcome) is not PlanningOutcome:
             raise ProviderResponseError("planner returned an invalid decision")
         decision = validate_planning_decision(
             request=request,
             decision=outcome.decision,
+            conversation_context=conversation_context,
         )
         ledger.finish_model_call(
             reserved_tokens=reserved,
@@ -594,6 +789,9 @@ class ResearchRunner:
         self,
         decision: PlanningDecision,
         ledger: _Ledger,
+        *,
+        run_id: OpaqueId,
+        trace: list[ActionTraceRecord],
     ) -> tuple[list[SearchHit], int]:
         assert decision.query_plan is not None
         hits: list[SearchHit] = []
@@ -603,15 +801,95 @@ class ResearchRunner:
             ledger.start_iteration()
             ledger.consume_query()
             try:
-                found = await self._await_boundary(
-                    partial(self.searcher.search, query), ledger
+                search_with_metadata = getattr(
+                    self.searcher, "search_with_metadata", None
                 )
-                normalized = _validated_hits(found, query.max_results)
+                if callable(search_with_metadata):
+                    result = await self._await_boundary(
+                        partial(search_with_metadata, query), ledger
+                    )
+                    if type(result) is not SearchResult:
+                        raise SearchFailure("search adapter returned invalid metadata")
+                    normalized = _validated_hits(result.hits, query.max_results)
+                    for attempt in result.attempts:
+                        self._record(
+                            trace,
+                            ActionTraceRecord(
+                                stage=TraceStage.SEARCH,
+                                action="search.backend",
+                                outcome=(
+                                    TraceOutcome.SUCCEEDED
+                                    if attempt.outcome.value == "success"
+                                    else TraceOutcome.FAILED
+                                ),
+                                reason=attempt.reason_code,
+                                provider=attempt.backend,
+                                safe_id=run_id,
+                                context_hash=_safe_hash(query.text),
+                                count=attempt.accepted_hits,
+                                duration_ms=attempt.duration_ms,
+                            ),
+                        )
+                else:
+                    found = await self._await_boundary(
+                        partial(self.searcher.search, query), ledger
+                    )
+                    normalized = _validated_hits(found, query.max_results)
+                    self._record(
+                        trace,
+                        ActionTraceRecord(
+                            stage=TraceStage.SEARCH,
+                            action="search.backend",
+                            outcome=TraceOutcome.SUCCEEDED,
+                            provider="custom",
+                            safe_id=run_id,
+                            context_hash=_safe_hash(query.text),
+                            count=len(normalized),
+                        ),
+                    )
             except (_BudgetExceeded, _CooperativeCancellation):
                 raise
-            except SearchFailure:
+            except SearchFailure as exc:
+                for attempt in exc.attempts:
+                    self._record(
+                        trace,
+                        ActionTraceRecord(
+                            stage=TraceStage.SEARCH,
+                            action="search.backend",
+                            outcome=TraceOutcome.FAILED,
+                            reason=attempt.reason_code,
+                            provider=attempt.backend,
+                            safe_id=run_id,
+                            context_hash=_safe_hash(query.text),
+                            count=attempt.accepted_hits,
+                            duration_ms=attempt.duration_ms,
+                        ),
+                    )
+                if not exc.attempts:
+                    self._record(
+                        trace,
+                        ActionTraceRecord(
+                            stage=TraceStage.SEARCH,
+                            action="search.backend",
+                            outcome=TraceOutcome.FAILED,
+                            reason="search_failed",
+                            safe_id=run_id,
+                            context_hash=_safe_hash(query.text),
+                        ),
+                    )
                 continue
             except Exception:
+                self._record(
+                    trace,
+                    ActionTraceRecord(
+                        stage=TraceStage.SEARCH,
+                        action="search.backend",
+                        outcome=TraceOutcome.FAILED,
+                        reason="invalid_adapter",
+                        safe_id=run_id,
+                        context_hash=_safe_hash(query.text),
+                    ),
+                )
                 continue
             successful_searches += 1
             for hit in normalized:
@@ -627,13 +905,19 @@ class ResearchRunner:
         hits: Sequence[SearchHit],
         decision: PlanningDecision,
         ledger: _Ledger,
+        *,
+        run_id: OpaqueId,
+        trace: list[ActionTraceRecord],
     ) -> list[EvidenceRecord]:
         assert decision.query_plan is not None
         selected = hits[: decision.query_plan.tool_budget.max_fetches]
-        records: list[EvidenceRecord] = []
+        documents: list[
+            tuple[SearchHit, ExtractedDocument, ResearchDocument, datetime]
+        ] = []
         for hit in selected:
             ledger.start_iteration()
             ledger.reserve_page()
+            source_hash = _safe_hash(str(hit.url))
             try:
                 fetched = await self._await_boundary(
                     partial(self.fetcher.fetch, str(hit.url)), ledger
@@ -641,6 +925,18 @@ class ResearchRunner:
                 fetched = _validated_fetched_document(fetched)
                 ledger.account_page_body(len(fetched.body))
                 ledger.consume_decoded(len(fetched.body))
+                self._record(
+                    trace,
+                    ActionTraceRecord(
+                        stage=TraceStage.FETCH,
+                        action="fetch.document",
+                        outcome=TraceOutcome.SUCCEEDED,
+                        format=fetched.content_type.split(";", 1)[0],
+                        safe_id=run_id,
+                        context_hash=source_hash,
+                        bytes_count=len(fetched.body),
+                    ),
+                )
                 extracted = await self._await_boundary(
                     partial(self._extract, fetched),
                     ledger,
@@ -648,13 +944,24 @@ class ResearchRunner:
                 if not isinstance(extracted, ExtractedDocument):
                     raise TypeError("extraction port returned an invalid document")
                 retrieved_at = self._now()
-                records.append(
-                    build_evidence(
-                        hit,
-                        extracted,
-                        retrieved_at=retrieved_at,
-                        now=retrieved_at,
-                    )
+                research_document = build_research_document(
+                    hit,
+                    extracted,
+                    retrieved_at=retrieved_at,
+                )
+                documents.append((hit, extracted, research_document, retrieved_at))
+                self._record(
+                    trace,
+                    ActionTraceRecord(
+                        stage=TraceStage.EXTRACT,
+                        action="extract.document",
+                        outcome=TraceOutcome.SUCCEEDED,
+                        format=research_document.media_type,
+                        safe_id=run_id,
+                        context_hash=source_hash,
+                        count=len(research_document.blocks),
+                        bytes_count=len(research_document.text.encode("utf-8")),
+                    ),
                 )
             except _BudgetExceeded:
                 raise
@@ -662,9 +969,99 @@ class ResearchRunner:
                 raise
             except _InvalidAdapter:
                 raise
-            except (FetchError, ExtractionError, EvidenceValidationError):
+            except FetchError:
                 ledger.failed_pages += 1
+                self._record(
+                    trace,
+                    ActionTraceRecord(
+                        stage=TraceStage.FETCH,
+                        action="fetch.document",
+                        outcome=TraceOutcome.FAILED,
+                        reason="fetch_failed",
+                        safe_id=run_id,
+                        context_hash=source_hash,
+                    ),
+                )
+            except (ExtractionError, EvidenceValidationError, ValueError):
+                ledger.failed_pages += 1
+                self._record(
+                    trace,
+                    ActionTraceRecord(
+                        stage=TraceStage.EXTRACT,
+                        action="extract.document",
+                        outcome=TraceOutcome.FAILED,
+                        reason="extract_failed",
+                        safe_id=run_id,
+                        context_hash=source_hash,
+                    ),
+                )
             except Exception:
+                ledger.failed_pages += 1
+                self._record(
+                    trace,
+                    ActionTraceRecord(
+                        stage=TraceStage.EXTRACT,
+                        action="extract.document",
+                        outcome=TraceOutcome.FAILED,
+                        reason="invalid_adapter",
+                        safe_id=run_id,
+                        context_hash=source_hash,
+                    ),
+                )
+        if not documents:
+            return []
+
+        try:
+            selected_context = select_context(
+                decision.answer_focus,
+                tuple(item[2] for item in documents),
+                top_k=min(8, max(1, len(documents) * 2)),
+            )
+        except RetrievalError:
+            self._record(
+                trace,
+                ActionTraceRecord(
+                    stage=TraceStage.RANK,
+                    action="rank.context",
+                    outcome=TraceOutcome.FAILED,
+                    reason="no_context",
+                    safe_id=run_id,
+                ),
+            )
+            return []
+        self._record(
+            trace,
+            ActionTraceRecord(
+                stage=TraceStage.RANK,
+                action="rank.context",
+                outcome=TraceOutcome.SUCCEEDED,
+                safe_id=run_id,
+                context_hash=selected_context.context_hash,
+                count=len(selected_context.chunks),
+                bytes_count=selected_context.total_characters,
+            ),
+        )
+
+        records: list[EvidenceRecord] = []
+        for hit, extracted, research_document, retrieved_at in documents:
+            quotes = tuple(
+                chunk.text[:400].rstrip()
+                for chunk in selected_context.chunks
+                if chunk.document_id == research_document.document_id
+            )[:5]
+            if not quotes:
+                continue
+            try:
+                records.append(
+                    build_evidence(
+                        hit,
+                        extracted,
+                        retrieved_at=retrieved_at,
+                        quotes=quotes,
+                        now=retrieved_at,
+                    )
+                )
+            except EvidenceValidationError:
                 ledger.failed_pages += 1
         return records
 
@@ -694,6 +1091,8 @@ class ResearchRunner:
         ledger: _Ledger,
         *,
         memory: ReviewedMemoryContext | None,
+        run_id: OpaqueId,
+        trace: list[ActionTraceRecord],
     ) -> ScopedAnswer:
         ledger.start_iteration()
         evidence_payload = [
@@ -731,14 +1130,28 @@ class ResearchRunner:
             ProviderMessage(role="user", content=user_payload),
         )
         reserved = ledger.begin_model_call(messages)
-        result = await self._await_boundary(
-            lambda: self.provider.generate_structured(
-                messages=messages,
-                response_model=ScopedAnswer,
-                temperature=0.0,
-            ),
-            ledger,
-        )
+        try:
+            result = await self._await_boundary(
+                lambda: self.provider.generate_structured(
+                    messages=messages,
+                    response_model=ScopedAnswer,
+                    temperature=0.0,
+                ),
+                ledger,
+            )
+        except Exception:
+            self._record(
+                trace,
+                ActionTraceRecord(
+                    stage=TraceStage.SYNTHESIZE,
+                    action="synthesize.answer",
+                    outcome=TraceOutcome.FAILED,
+                    reason="provider_failed",
+                    safe_id=run_id,
+                    count=len(records),
+                ),
+            )
+            raise
         try:
             if (
                 type(result) is not ProviderResult
@@ -757,6 +1170,16 @@ class ResearchRunner:
             reserved_tokens=reserved,
             metadata=result.metadata,
             response_text=answer.model_dump_json(),
+        )
+        self._record(
+            trace,
+            ActionTraceRecord(
+                stage=TraceStage.SYNTHESIZE,
+                action="synthesize.answer",
+                outcome=TraceOutcome.SUCCEEDED,
+                safe_id=run_id,
+                count=len(answer.citations),
+            ),
         )
         return answer
 
@@ -828,6 +1251,19 @@ class ResearchRunner:
         ledger.check_boundary()
         return result
 
+    def _record(
+        self,
+        trace: list[ActionTraceRecord],
+        record: ActionTraceRecord,
+    ) -> None:
+        if self.trace_sink is not None:
+            with contextlib.suppress(Exception):
+                self.trace_sink.record(record)
+        if len(trace) < _MAX_TRACE_RECORDS:
+            trace.append(record)
+        elif record.stage is TraceStage.FINAL:
+            trace[-1] = record
+
     def _now(self) -> datetime:
         value = self.now()
         if (
@@ -852,6 +1288,24 @@ def _validated_hits(value: object, limit: int) -> tuple[SearchHit, ...]:
             raise SearchFailure("search adapter returned invalid hits") from None
         hits.append(hit)
     return tuple(hits)
+
+
+def _safe_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _conversation_scope(
+    request: str, conversation_context: tuple[ConversationTurn, ...]
+) -> str:
+    if not conversation_context:
+        return request
+    return " ".join(
+        (
+            request,
+            *(turn.request for turn in conversation_context),
+            *(turn.answer for turn in conversation_context),
+        )
+    )
 
 
 def _consume(current: int, amount: int, maximum: int) -> int:

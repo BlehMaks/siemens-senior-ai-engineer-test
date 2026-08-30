@@ -2,6 +2,7 @@
 
 from .extract import (
     AsyncLocalExtractor,
+    ExtractedBlock,
     ExtractedDocument,
     ExtractionError,
     ExtractionFailureReason,
@@ -14,10 +15,18 @@ from .fetch import (
     GuardedFetcher,
     create_fetch_client,
 )
-from .search import SearchAdapter, SearchFailure, SyncSearchBackend
+from .search import (
+    SearchAdapter,
+    SearchAttempt,
+    SearchAttemptOutcome,
+    SearchFailure,
+    SearchResult,
+    SyncSearchBackend,
+)
 
 __all__ = [
     "AsyncLocalExtractor",
+    "ExtractedBlock",
     "ExtractedDocument",
     "ExtractionError",
     "ExtractionFailureReason",
@@ -27,7 +36,10 @@ __all__ = [
     "GuardedFetcher",
     "LocalExtractor",
     "SearchAdapter",
+    "SearchAttempt",
+    "SearchAttemptOutcome",
     "SearchFailure",
+    "SearchResult",
     "SyncSearchBackend",
     "create_fetch_client",
 ]

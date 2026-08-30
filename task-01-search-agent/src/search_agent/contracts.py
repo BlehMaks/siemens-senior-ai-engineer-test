@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Protocol
 
 from pydantic import (
     AnyHttpUrl,
@@ -28,6 +28,9 @@ QueryText = Annotated[
 AnswerText = Annotated[
     str, StringConstraints(min_length=1, max_length=4000, strip_whitespace=True)
 ]
+ConversationAnswerText = Annotated[
+    str, StringConstraints(min_length=1, max_length=2000, strip_whitespace=True)
+]
 SourceText = Annotated[
     str, StringConstraints(min_length=1, max_length=400, strip_whitespace=True)
 ]
@@ -37,6 +40,30 @@ EvidenceId = Annotated[
         min_length=3,
         max_length=32,
         pattern=r"^ev-[a-z0-9]+(?:-[a-z0-9]+)*$",
+    ),
+]
+TraceName = Annotated[
+    str,
+    StringConstraints(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+    ),
+]
+TraceLabel = Annotated[
+    str,
+    StringConstraints(
+        min_length=1,
+        max_length=40,
+        pattern=r"^[A-Za-z0-9]+(?:[._:/-][A-Za-z0-9]+)*$",
+    ),
+]
+TraceSafeId = Annotated[
+    str,
+    StringConstraints(
+        min_length=1,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9]+(?:[._:-][A-Za-z0-9]+)*$",
     ),
 ]
 
@@ -57,6 +84,27 @@ class TerminalState(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class TraceStage(StrEnum):
+    RUN = "run"
+    PLAN = "plan"
+    SEARCH = "search"
+    FETCH = "fetch"
+    EXTRACT = "extract"
+    RANK = "rank"
+    SYNTHESIZE = "synthesize"
+    VALIDATE = "validate"
+    FINAL = "final"
+    TRACE = "trace"
+
+
+class TraceOutcome(StrEnum):
+    STARTED = "started"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    TRUNCATED = "truncated"
 
 
 class EventType(StrEnum):
@@ -96,6 +144,61 @@ class QueryPlan(StrictModel):
             msg = "search plan exceeds fetch budget"
             raise ValueError(msg)
         return self
+
+
+class ConversationTurn(StrictModel):
+    """One prior completed public turn; identity and internal state stay outside."""
+
+    request: QueryText
+    answer: ConversationAnswerText
+
+
+class ActionTraceRecord(StrictModel):
+    """Privacy-safe action metadata; raw user/model text and URLs are excluded."""
+
+    stage: TraceStage
+    action: TraceName
+    outcome: TraceOutcome
+    reason: TraceName | None = None
+    provider: TraceLabel | None = None
+    format: TraceLabel | None = None
+    profile: TraceLabel | None = None
+    safe_id: TraceSafeId | None = None
+    context_hash: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    count: int | None = Field(default=None, ge=0, le=1_000_000)
+    bytes_count: int | None = Field(default=None, ge=0, le=128 * 1024 * 1024)
+    duration_ms: int | None = Field(default=None, ge=0, le=600_000)
+
+
+class ResearchTraceSink(Protocol):
+    def record(self, record: ActionTraceRecord) -> None: ...
+
+
+def validate_conversation_context(value: object) -> tuple[ConversationTurn, ...]:
+    """Strictly revalidate a small, public, same-session conversation window."""
+
+    if type(value) is not tuple or len(value) > 6:
+        raise ValueError("conversation context must contain at most six turns")
+    checked: list[ConversationTurn] = []
+    total_characters = 0
+    for item in value:
+        if type(item) is not ConversationTurn:
+            raise ValueError("conversation context contains an invalid turn")
+        turn = ConversationTurn.model_validate(
+            item.model_dump(mode="python", warnings="error"), strict=True
+        )
+        if turn != item:
+            raise ValueError("conversation context changed during validation")
+        total_characters += len(turn.request) + len(turn.answer)
+        if total_characters > 12_000:
+            raise ValueError("conversation context exceeds its size bound")
+        checked.append(turn)
+    return tuple(checked)
 
 
 class SearchHit(StrictModel):

@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from search_agent import OllamaResearchExecutor, OllamaRuntimeSettings, RunStatus
+from search_agent.runtime import search_backends_from_environment
 
 
 class _Resolver:
@@ -16,14 +17,25 @@ class _Resolver:
 
 
 class _SearchBackend:
-    def __init__(self, rows: Sequence[object]) -> None:
+    def __init__(
+        self,
+        rows: Sequence[object],
+        *,
+        failed_backends: frozenset[str] = frozenset(),
+    ) -> None:
         self.rows = rows
+        self.failed_backends = failed_backends
         self.calls = 0
+        self.backend_calls: list[str] = []
 
     def text(self, query: str, **kwargs: object) -> Sequence[object]:
         self.calls += 1
+        backend = str(kwargs["backend"])
+        self.backend_calls.append(backend)
         assert query
         assert kwargs["max_results"] == 1
+        if backend in self.failed_backends:
+            raise RuntimeError("private backend failure")
         return self.rows
 
 
@@ -51,6 +63,112 @@ def _ollama_response(content: object) -> httpx.Response:
 def test_runtime_settings_fail_closed(model_name: str, base_url: str) -> None:
     with pytest.raises(ValueError):
         OllamaRuntimeSettings(model_name=model_name, base_url=base_url)
+
+
+def test_runtime_settings_default_to_auto_and_preserve_singular_backend() -> None:
+    defaults = OllamaRuntimeSettings(model_name="model")
+    legacy = OllamaRuntimeSettings(model_name="model", search_backend="duckduckgo")
+
+    assert defaults.search_backends == ("auto",)
+    assert defaults.search_backend == "auto"
+    assert legacy.search_backends == ("duckduckgo",)
+    assert legacy.search_backend == "duckduckgo"
+
+
+@pytest.mark.parametrize(
+    "search_backends",
+    [(), ("bing",), ("auto", "auto"), ("auto", "duckduckgo", "auto")],
+)
+def test_runtime_settings_reject_invalid_search_backend_order(
+    search_backends: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValueError, match="search_backends"):
+        OllamaRuntimeSettings(model_name="model", search_backends=search_backends)
+
+
+def test_runtime_settings_reject_conflicting_legacy_search_backend() -> None:
+    with pytest.raises(ValueError, match="conflicts"):
+        OllamaRuntimeSettings(
+            model_name="model",
+            search_backends=("auto", "duckduckgo"),
+            search_backend="duckduckgo",
+        )
+
+
+def test_runtime_search_backend_environment_prefers_plural_and_supports_legacy() -> (
+    None
+):
+    assert search_backends_from_environment({}) == ("auto",)
+    assert search_backends_from_environment({"AGENT_SEARCH_BACKEND": "duckduckgo"}) == (
+        "duckduckgo",
+    )
+    assert search_backends_from_environment(
+        {
+            "AGENT_SEARCH_BACKENDS": "auto,duckduckgo",
+            "AGENT_SEARCH_BACKEND": "duckduckgo",
+        }
+    ) == ("auto", "duckduckgo")
+
+
+@pytest.mark.parametrize(
+    ("base_url", "audience"),
+    [
+        ("https://127.0.0.1:11434", None),
+        ("http://model.internal:11434", None),
+        ("http://127.0.0.1:11434", "http://127.0.0.1:11434"),
+    ],
+)
+def test_local_transport_profile_requires_loopback_http_without_audience(
+    base_url: str, audience: str | None
+) -> None:
+    with pytest.raises(ValueError):
+        OllamaRuntimeSettings(
+            model_name="model",
+            base_url=base_url,
+            transport_profile="local",
+            google_id_token_audience=audience,
+        )
+
+
+@pytest.mark.parametrize(
+    ("base_url", "audience"),
+    [
+        ("http://model.example", "http://model.example"),
+        ("https://model.example", None),
+        ("https://model.example", "https://other.example"),
+        ("https://localhost:11434", "https://localhost:11434"),
+    ],
+)
+def test_cloud_transport_profile_requires_matching_non_loopback_https_audience(
+    base_url: str, audience: str | None
+) -> None:
+    with pytest.raises(ValueError):
+        OllamaRuntimeSettings(
+            model_name="model",
+            base_url=base_url,
+            transport_profile="cloud",
+            google_id_token_audience=audience,
+        )
+
+
+def test_executor_enforces_auth_for_transport_profile() -> None:
+    local_settings = OllamaRuntimeSettings(model_name="model")
+    cloud_settings = OllamaRuntimeSettings(
+        model_name="model",
+        base_url="https://model.example/",
+        transport_profile="cloud",
+        google_id_token_audience="https://model.example/",
+    )
+    auth = httpx.BasicAuth("unused", "unused")
+
+    with pytest.raises(ValueError, match="forbids cloud authentication"):
+        OllamaResearchExecutor(settings=local_settings, model_auth=auth)
+    with pytest.raises(ValueError, match="requires authentication"):
+        OllamaResearchExecutor(settings=cloud_settings)
+
+    executor = OllamaResearchExecutor(settings=cloud_settings, model_auth=auth)
+    assert executor.settings.base_url == "https://model.example"
+    assert executor.settings.google_id_token_audience == "https://model.example"
 
 
 @pytest.mark.asyncio
@@ -113,7 +231,8 @@ async def test_real_runtime_searches_fetches_extracts_and_synthesizes() -> None:
                 "href": source_url,
                 "body": claim,
             },
-        )
+        ),
+        failed_backends=frozenset({"auto"}),
     )
     model_calls = 0
     fetched_hosts: list[str] = []
@@ -177,7 +296,10 @@ async def test_real_runtime_searches_fetches_extracts_and_synthesizes() -> None:
         )
 
     executor = OllamaResearchExecutor(
-        settings=OllamaRuntimeSettings(model_name="test-model"),
+        settings=OllamaRuntimeSettings(
+            model_name="test-model",
+            search_backends=("auto", "duckduckgo"),
+        ),
         model_transport=httpx.MockTransport(model_handler),
         search_backend_factory=lambda: search,
         fetch_client_factory=lambda: httpx.AsyncClient(
@@ -197,7 +319,9 @@ async def test_real_runtime_searches_fetches_extracts_and_synthesizes() -> None:
     assert result.snapshot.answer is not None
     assert result.snapshot.answer.answer_text == claim
     assert str(result.snapshot.answer.citations[0].source_url) == source_url
-    assert search.calls == 1
+    assert search.calls == 2
+    assert search.backend_calls == ["auto", "duckduckgo"]
+    assert result.usage.search_queries == 1
     assert fetched_hosts == ["93.184.216.34"]
     assert model_calls == 2
 

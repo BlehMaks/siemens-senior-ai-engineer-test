@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from ipaddress import ip_address
 from math import isfinite
-from typing import cast
-from urllib.parse import urlsplit
+from typing import Literal, cast
+from urllib.parse import SplitResult, urlsplit
 
 import httpx
 from ddgs import DDGS
 
-from .contracts import OpaqueId, QueryText
+from .contracts import ConversationTurn, OpaqueId, QueryText
 from .memory import RepositoryReviewedMemoryReader
 from .planning import QueryPlanner
 from .providers import OllamaStructuredChatProvider
@@ -26,6 +26,7 @@ from .tools import (
     SyncSearchBackend,
     create_fetch_client,
 )
+from .tools.search import parse_search_backends, validate_search_backends
 
 _MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
 SearchBackendFactory = Callable[[], SyncSearchBackend]
@@ -37,34 +38,55 @@ def _ddgs_backend() -> SyncSearchBackend:
     return cast(SyncSearchBackend, DDGS())
 
 
+def search_backends_from_environment(
+    environment: Mapping[str, str],
+) -> tuple[str, ...]:
+    """Read the preferred plural env contract, then the legacy singular name."""
+
+    configured = environment.get("AGENT_SEARCH_BACKENDS")
+    if configured is None:
+        configured = environment.get("AGENT_SEARCH_BACKEND", "auto")
+    return parse_search_backends(configured)
+
+
 @dataclass(frozen=True, slots=True)
 class OllamaRuntimeSettings:
     """Validated settings shared by the CLI and Task 3 worker container."""
 
     model_name: str
     base_url: str = "http://127.0.0.1:11434"
+    transport_profile: Literal["local", "cloud"] = "local"
+    google_id_token_audience: str | None = None
     timeout_seconds: float = 120.0
     max_retries: int = 1
     search_region: str = "wt-wt"
-    search_backend: str = "duckduckgo"
+    search_backends: tuple[str, ...] = ("auto",)
+    search_backend: str | None = None
 
     def __post_init__(self) -> None:
         if not _MODEL_NAME.fullmatch(self.model_name):
             raise ValueError("model_name has an invalid format")
-        normalized_url = self.base_url.rstrip("/")
-        parsed = urlsplit(normalized_url)
-        if (
-            parsed.scheme not in {"http", "https"}
-            or parsed.hostname is None
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.query
-            or parsed.fragment
-            or parsed.path not in {"", "/"}
-        ):
-            raise ValueError("base_url must be a clean HTTP(S) origin")
-        if parsed.scheme == "http" and not _is_loopback(parsed.hostname):
-            raise ValueError("unencrypted model transport is allowed only on loopback")
+        normalized_url, parsed = _normalized_origin(self.base_url, name="base_url")
+        audience = None
+        if self.google_id_token_audience is not None:
+            audience, _ = _normalized_origin(
+                self.google_id_token_audience,
+                name="google_id_token_audience",
+            )
+        hostname = parsed.hostname
+        assert hostname is not None
+        if self.transport_profile == "local":
+            if parsed.scheme != "http" or not _is_loopback(hostname):
+                raise ValueError("local model transport requires loopback HTTP")
+            if audience is not None:
+                raise ValueError("local model transport forbids a cloud audience")
+        elif self.transport_profile == "cloud":
+            if parsed.scheme != "https" or _is_loopback(hostname):
+                raise ValueError("cloud model transport requires non-loopback HTTPS")
+            if audience != normalized_url:
+                raise ValueError("cloud model audience must exactly match base_url")
+        else:
+            raise ValueError("transport_profile must be local or cloud")
         if (
             isinstance(self.timeout_seconds, bool)
             or not isinstance(self.timeout_seconds, int | float)
@@ -78,10 +100,7 @@ class OllamaRuntimeSettings:
             or not 0 <= self.max_retries <= 5
         ):
             raise ValueError("max_retries must be between 0 and 5")
-        for name, value in (
-            ("search_region", self.search_region),
-            ("search_backend", self.search_backend),
-        ):
+        for name, value in (("search_region", self.search_region),):
             if (
                 not isinstance(value, str)
                 or not value
@@ -90,8 +109,24 @@ class OllamaRuntimeSettings:
                 or not value.isascii()
             ):
                 raise ValueError(f"{name} must be a short clean ASCII value")
+        backends = self.search_backends
+        if self.search_backend is not None:
+            if backends != ("auto",) and backends != (self.search_backend,):
+                raise ValueError("search_backend conflicts with search_backends")
+            backends = (self.search_backend,)
+        if not isinstance(backends, tuple):
+            raise ValueError("search_backends must be an ordered tuple")
+        try:
+            backends = validate_search_backends(backends)
+        except ValueError:
+            raise ValueError(
+                "search_backends must be an ordered supported backend tuple"
+            ) from None
         object.__setattr__(self, "base_url", normalized_url)
+        object.__setattr__(self, "google_id_token_audience", audience)
         object.__setattr__(self, "timeout_seconds", float(self.timeout_seconds))
+        object.__setattr__(self, "search_backends", backends)
+        object.__setattr__(self, "search_backend", backends[0])
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +141,12 @@ class OllamaResearchExecutor:
     resolver: HostResolver | None = None
     memory_reader_factory: MemoryReaderFactory | None = None
 
+    def __post_init__(self) -> None:
+        if self.settings.transport_profile == "local" and self.model_auth is not None:
+            raise ValueError("local model transport forbids cloud authentication")
+        if self.settings.transport_profile == "cloud" and self.model_auth is None:
+            raise ValueError("cloud model transport requires authentication")
+
     async def run(
         self,
         *,
@@ -115,17 +156,37 @@ class OllamaResearchExecutor:
         request: QueryText | str,
         budget: RunBudget | None = None,
     ) -> RunResult:
+        return await self.run_with_context(
+            tenant_id=tenant_id,
+            session_id=session_id,
+            run_id=run_id,
+            request=request,
+            conversation_context=(),
+            budget=budget,
+        )
+
+    async def run_with_context(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        session_id: OpaqueId,
+        run_id: OpaqueId,
+        request: QueryText | str,
+        conversation_context: tuple[ConversationTurn, ...],
+        budget: RunBudget | None = None,
+    ) -> RunResult:
         memory_reader = (
             None if self.memory_reader_factory is None else self.memory_reader_factory()
         )
         try:
             async with self.fetch_client_factory() as fetch_client:
                 runner = self._runner(fetch_client, memory_reader=memory_reader)
-                return await runner.run(
+                return await runner.run_with_context(
                     tenant_id=tenant_id,
                     session_id=session_id,
                     run_id=run_id,
                     request=str(request),
+                    conversation_context=conversation_context,
                     budget=budget,
                 )
         finally:
@@ -165,7 +226,7 @@ class OllamaResearchExecutor:
                 backend=self.search_backend_factory(),
                 site_policy=policy,
                 region=self.settings.search_region,
-                backend_name=self.settings.search_backend,
+                backend_names=self.settings.search_backends,
             ),
             fetcher=GuardedFetcher(client=fetch_client, guard=guard),
             extractor=AsyncLocalExtractor(),
@@ -182,3 +243,21 @@ def _is_loopback(host: str) -> bool:
         return ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def _normalized_origin(value: str, *, name: str) -> tuple[str, SplitResult]:
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a clean HTTP(S) origin")
+    normalized = value.rstrip("/")
+    parsed = urlsplit(normalized)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError(f"{name} must be a clean HTTP(S) origin")
+    return normalized, parsed

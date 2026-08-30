@@ -20,7 +20,7 @@ Required deliverables are a working agent and documentation of the approach and 
 - Ollama as the portable local inference runtime. The model stays behind a small provider interface so the same agent can use an optimized Apple Silicon runtime or a managed cloud endpoint without changing orchestration logic.
 - A typed state graph for routing, searching, extracting, synthesizing, and verifying. LangGraph is appropriate only if its checkpointing and replay features are used; otherwise a small explicit loop is preferable.
 - Pydantic models for tool arguments, state transitions, citations, and persisted memory records.
-- DuckDuckGo search for discovery, `httpx` for bounded HTTP retrieval, and a dedicated main-content extractor for static pages.
+- DDGS `auto` search with a bounded DuckDuckGo fallback for discovery, `httpx` for bounded HTTP retrieval, and dedicated HTML/text/PDF extraction.
 - Playwright only as a controlled fallback for pages that require a browser. It is not the default fetch path.
 - SQLite for local checkpoints and memory. Repository ports keep Task 1 independent
   of the deployed store: Task 2 retains SQLite locally, Task 3 uses Firestore in the
@@ -35,11 +35,21 @@ The final local model is an evaluation result, not a documentation preference. C
 The production-oriented version adds:
 
 - a bounded research harness that plans only the searches needed for the request;
+- bounded PDF extraction in an isolated subprocess, preserving page/table block
+  provenance and rejecting encrypted, oversized, over-page, image-only, or timed-out
+  documents with typed failures;
+- deterministic structural chunking and lexical/exact-term/authority/freshness
+  ranking before the model sees evidence;
 - source citations and claim-to-source grounding checks;
 - URL and content guardrails, prompt-injection isolation, search/fetch budgets, and explicit refusal reasons;
 - optional browser navigation under the same policy as direct fetching;
 - episodic memory for one research run, semantic memory for verified user-scoped facts, and procedural memory for reviewed playbooks;
 - traceable agent states so Task 2 can expose meaningful progress rather than a generic busy flag.
+- privacy-safe JSON action records for plan, search backend attempts, fetch, extract,
+  rank, synthesis, validation, and terminal outcome; raw requests, URLs, page bodies,
+  credentials, and exception strings are excluded;
+- up to six prior completed same-session public turns as bounded untrusted planning
+  context, with tenant/session isolation enforced by the Task 2 repository.
 
 Memory is external state, so a local model does not prevent its implementation. The
 implemented lifecycle is deliberately model-independent:
@@ -74,6 +84,8 @@ does not establish proposal quality. See the
 - This machine is not a valid target for local-model performance tests. Run model benchmarks on the specified M5/48 GB machine and keep hardware-dependent results separate from functional tests.
 - Search results and fetched pages are untrusted. A page cannot change system policy or tool permissions.
 - Fetching must allow only HTTP(S), resolve and re-check redirects, block private/link-local/metadata endpoints, cap bytes and duration, and reject unsupported content types.
+- PDF parsing must stay outside the async process, enforce byte/page/text/time limits,
+  and never silently claim OCR support for image-only reports.
 - The agent must cite the sources used for factual claims and distinguish unavailable evidence from a confident negative answer.
 - The search router must be evaluated on both search-needed and no-search cases.
 - Tool failures, empty results, conflicting sources, duplicate results, timeouts, and cancellation must produce defined states.
@@ -86,7 +98,7 @@ Run the deterministic 34-case behavior evaluation and the Task 1 tests from the
 repository root:
 
 ```bash
-uv run --locked python task-01-search-agent/evals/run.py --mode fixed
+PYTHONPATH=task-01-search-agent/src uv run --locked python task-01-search-agent/evals/run.py --mode fixed
 uv run --locked pytest -q task-01-search-agent/tests tests
 ```
 

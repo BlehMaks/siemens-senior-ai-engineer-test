@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 from dataclasses import FrozenInstanceError
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import trafilatura
 import trafilatura.downloads
+from pypdf import PdfWriter
 
 from search_agent import AsyncLocalExtractor
 from search_agent.tools import extract as extract_module
 from search_agent.tools.extract import (
+    ExtractedBlock,
     ExtractionError,
     ExtractionFailureReason,
     LocalExtractor,
@@ -38,6 +42,9 @@ class LyingStripString(str):
 class LyingBytes(bytes):
     def __len__(self) -> int:
         return 1
+
+
+_FIXTURES = Path(__file__).parents[1] / "fixtures" / "retrieval"
 
 
 def _document(body: bytes, *, content_type: str = "text/html") -> FetchedDocument:
@@ -85,7 +92,7 @@ def test_html_charset_is_detected_from_fetched_bytes() -> None:
     assert "veröffentlichte" in extracted.text
 
 
-def test_disables_comments_tables_links_and_network_capabilities(
+def test_preserves_tables_while_disabling_links_and_network_capabilities(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -100,10 +107,120 @@ def test_disables_comments_tables_links_and_network_capabilities(
 
     assert captured["url"] == "https://example.com/report"
     assert captured["include_comments"] is False
-    assert captured["include_tables"] is False
+    assert captured["include_tables"] is True
     assert captured["include_links"] is False
     assert captured["include_images"] is False
     assert "download" not in captured
+
+
+def test_html_table_text_and_metadata_are_preserved() -> None:
+    html = (_FIXTURES / "report_table.html").read_bytes()
+
+    extracted = LocalExtractor().extract(_document(html))
+
+    assert "Metric | Value | Unit" in extracted.text
+    assert "Scope 3 | 14.7 | million tonnes CO2e" in extracted.text
+    assert (
+        ExtractedBlock(
+            text=("Metric | Value | Unit\nScope 3 | 14.7 | million tonnes CO2e"),
+            table_index=1,
+        )
+        in extracted.blocks
+    )
+
+
+def test_pdf_extracts_page_and_table_provenance_from_frozen_fixture() -> None:
+    body = base64.b64decode(
+        (_FIXTURES / "late_fact_report.pdf.b64").read_text().strip(),
+        validate=True,
+    )
+
+    extracted = LocalExtractor().extract(
+        _document(body, content_type="application/pdf")
+    )
+
+    assert extracted.title == "Siemens Sustainability Report"
+    assert "The 2025 Scope 3 emissions were 14.7 million tonnes CO2e." in extracted.text
+    assert {block.page_number for block in extracted.blocks} == {1, 2}
+    table_blocks = [
+        block for block in extracted.blocks if block.table_index is not None
+    ]
+    assert table_blocks
+    assert table_blocks[0].page_number == 2
+    assert "Metric" in table_blocks[0].text
+    assert "million tonnes CO2e" in table_blocks[0].text
+
+
+@pytest.mark.parametrize(
+    ("extractor", "fixture_name", "reason"),
+    [
+        (
+            LocalExtractor(max_input_bytes=8),
+            "late_fact_report.pdf.b64",
+            ExtractionFailureReason.INPUT_TOO_LARGE,
+        ),
+        (
+            LocalExtractor(),
+            "malformed.pdf.b64",
+            ExtractionFailureReason.MALFORMED_CONTENT,
+        ),
+    ],
+)
+def test_malformed_and_oversized_pdfs_fail_safely(
+    extractor: LocalExtractor,
+    fixture_name: str,
+    reason: ExtractionFailureReason,
+) -> None:
+    body = base64.b64decode(
+        (_FIXTURES / fixture_name).read_text().strip(),
+        validate=True,
+    )
+    with pytest.raises(ExtractionError) as error:
+        extractor.extract(_document(body, content_type="application/pdf"))
+
+    assert error.value.reason is reason
+    assert error.value.__cause__ is None
+    assert body.decode("latin-1") not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("extractor", "reason"),
+    [
+        (LocalExtractor(max_pdf_pages=1), ExtractionFailureReason.PAGE_LIMIT),
+        (
+            LocalExtractor(max_pdf_content_stream_bytes=16),
+            ExtractionFailureReason.CONTENT_STREAM_TOO_LARGE,
+        ),
+    ],
+)
+def test_pdf_page_and_content_stream_limits_are_typed(
+    extractor: LocalExtractor, reason: ExtractionFailureReason
+) -> None:
+    body = base64.b64decode(
+        (_FIXTURES / "late_fact_report.pdf.b64").read_text().strip(),
+        validate=True,
+    )
+
+    with pytest.raises(ExtractionError) as error:
+        extractor.extract(_document(body, content_type="application/pdf"))
+
+    assert error.value.reason is reason
+
+
+def test_encrypted_pdf_is_rejected_without_attempting_decryption() -> None:
+    output = BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer.encrypt("secret")
+    writer.write(output)
+
+    with pytest.raises(ExtractionError) as error:
+        LocalExtractor().extract(
+            _document(output.getvalue(), content_type="application/pdf")
+        )
+
+    assert error.value.reason is ExtractionFailureReason.ENCRYPTED_DOCUMENT
+    assert "secret" not in str(error.value)
 
 
 def test_extracts_utf8_plain_text_without_html_parser(

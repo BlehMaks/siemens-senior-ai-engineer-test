@@ -14,7 +14,7 @@ from search_agent.evidence import (
     build_evidence,
     validate_record,
 )
-from search_agent.tools import ExtractedDocument
+from search_agent.tools import ExtractedBlock, ExtractedDocument
 
 _URL = TypeAdapter(AnyHttpUrl)
 _NOW = datetime(2026, 8, 27, 12, tzinfo=UTC)
@@ -98,6 +98,41 @@ def test_builds_deterministic_immutable_evidence_from_exact_provenance() -> None
     assert first.public.summary == first.source_text
     assert first.public.quotes == ("Siemens reduced emissions in 2025.",)
     validate_record(first)
+
+
+def test_builds_evidence_quotes_from_relevant_late_document_chunks() -> None:
+    introduction = "This report provides general background and governance details."
+    late_fact = "Siemens Scope 3 emissions were 14.7 million tonnes CO2e in 2025."
+    document = ExtractedDocument(
+        canonical_url="https://example.com/report",
+        title="Siemens sustainability report",
+        text=f"{introduction}\n\n{late_fact}",
+        media_type="application/pdf",
+        blocks=(
+            ExtractedBlock(text=introduction, page_number=1),
+            ExtractedBlock(
+                text=late_fact,
+                page_number=42,
+                section="Scope 3 Emissions",
+                table_index=1,
+            ),
+        ),
+    )
+
+    record = build_evidence(
+        _hit(),
+        document,
+        retrieved_at=_NOW,
+        request_text="What were Siemens Scope 3 emissions in 2025?",
+        now=_NOW,
+    )
+
+    assert record.public.summary.startswith("This report provides general background")
+    assert record.public.quotes[0] == late_fact
+    assert record.selected_context is not None
+    assert record.selected_context.chunks[0].page_number == 42
+    assert record.selected_context.chunks[0].table_index == 1
+    validate_record(record)
 
 
 @pytest.mark.parametrize(

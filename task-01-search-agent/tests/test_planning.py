@@ -9,6 +9,7 @@ from search_agent import (
     AnswerScopePolicy,
     AssistancePolicy,
     Citation,
+    ConversationTurn,
     FakeStructuredChatProvider,
     OptionalAssistance,
     PlanningDecision,
@@ -61,6 +62,47 @@ async def test_query_planner_accepts_scoped_search_plan() -> None:
             SearchQuery(text="siemens sustainability report 2026", max_results=2),
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_query_planner_resolves_follow_up_only_from_bounded_untrusted_context() -> (
+    None
+):
+    response = {
+        "task_category": "company_research",
+        "requires_search": True,
+        "answer_focus": "Find Siemens sustainability report figures for 2026.",
+        "query_plan": {
+            "tool_budget": {"max_search_queries": 1, "max_fetches": 2},
+            "searches": [
+                {
+                    "text": "Siemens sustainability report figures 2026",
+                    "max_results": 2,
+                }
+            ],
+        },
+    }
+    request = "What about its 2026 figures?"
+    context = (
+        ConversationTurn(
+            request="Find the latest Siemens sustainability report.",
+            answer="Siemens published its sustainability report for 2025.",
+        ),
+    )
+    provider = FakeStructuredChatProvider(responses=[response])
+
+    outcome = await QueryPlanner(provider).plan_with_context(
+        request, conversation_context=context
+    )
+
+    assert outcome.decision.requires_search is True
+    assert (
+        "conversation_context_untrusted_data" in provider.calls[0].messages[1].content
+    )
+
+    without_context = FakeStructuredChatProvider(responses=[response])
+    with pytest.raises(PlanningPolicyError, match="stay scoped"):
+        await QueryPlanner(without_context).plan(request)
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,14 @@ from itertools import islice
 from pydantic import AnyHttpUrl, TypeAdapter, ValidationError
 
 from .contracts import ExtractedEvidence, SearchHit
+from .retrieval import (
+    RetrievalError,
+    RetrievalFailureReason,
+    SelectedContext,
+    build_research_document,
+    retrieve_context,
+    validate_selected_context,
+)
 from .tools import ExtractedDocument
 
 _URL_ADAPTER = TypeAdapter(AnyHttpUrl)
@@ -47,6 +55,7 @@ class EvidenceRecord:
     content_hash: str
     source_title: str
     title_provenance_hash: str
+    selected_context: SelectedContext | None = None
 
     @property
     def evidence_id(self) -> str:
@@ -63,6 +72,8 @@ def build_evidence(
     *,
     retrieved_at: datetime,
     quotes: Sequence[str] = (),
+    request_text: str | None = None,
+    selected_context: SelectedContext | None = None,
     now: datetime | None = None,
     max_age: timedelta = _DEFAULT_MAX_AGE,
 ) -> EvidenceRecord:
@@ -97,6 +108,36 @@ def build_evidence(
         field="source text",
         limit=_MAX_SOURCE_CHARS,
     )
+    try:
+        if selected_context is not None:
+            validate_selected_context(selected_context)
+            research_document = build_research_document(
+                hit,
+                document,
+                retrieved_at=checked_retrieved_at,
+            )
+            if any(
+                chunk.document_id != research_document.document_id
+                for chunk in selected_context.chunks
+            ):
+                raise RetrievalError(
+                    reason=RetrievalFailureReason.SOURCE_MISMATCH,
+                    message="selected context belongs to another document",
+                )
+        elif request_text is not None and not quotes:
+            selected_context = retrieve_context(
+                request_text,
+                hit,
+                document,
+                retrieved_at=checked_retrieved_at,
+            )
+    except RetrievalError:
+        raise EvidenceValidationError(
+            EvidenceFailureReason.INVALID_DATA,
+            "retrieved context is invalid",
+        ) from None
+    if selected_context is not None:
+        quotes = selected_context.quotes
     normalized_quotes = _validated_quotes(quotes, source_text)
     content_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
     evidence_id = _evidence_id(hit_url, content_hash)
@@ -116,6 +157,7 @@ def build_evidence(
         content_hash=content_hash,
         source_title=title,
         title_provenance_hash=_title_provenance_hash(hit_url, title),
+        selected_context=selected_context,
     )
 
 
@@ -166,6 +208,10 @@ def validate_record(record: EvidenceRecord) -> None:
             raise ValueError("summary does not match source text")
         if _validated_quotes(public.quotes, source_text) != public.quotes:
             raise ValueError("quotes are not strictly normalized")
+        if record.selected_context is not None:
+            validate_selected_context(record.selected_context)
+            if public.quotes != record.selected_context.quotes:
+                raise ValueError("quotes do not match selected context")
         _utc_time(record.retrieved_at, field="retrieved_at")
     except Exception:
         raise EvidenceValidationError(

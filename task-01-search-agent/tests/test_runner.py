@@ -14,6 +14,7 @@ from pydantic import AnyHttpUrl, BaseModel, TypeAdapter
 from search_agent import (
     Citation,
     EventType,
+    ExtractedBlock,
     ExtractedDocument,
     ExtractionPort,
     FailureReason,
@@ -353,6 +354,76 @@ async def test_success_runs_every_state_and_reports_bounded_usage() -> None:
     assert result.usage.raw_bytes_reserved == 64
     assert result.usage.decoded_bytes == len(SOURCE_TEXT.encode())
     assert result.usage.model_calls == 2
+    assert [record.stage.value for record in result.trace] == [
+        "run",
+        "plan",
+        "search",
+        "fetch",
+        "extract",
+        "rank",
+        "synthesize",
+        "validate",
+        "final",
+    ]
+    serialized_trace = json.dumps(result.model_dump(mode="json")["trace"])
+    assert "Find the Siemens" not in serialized_trace
+    assert SOURCE_URL not in serialized_trace
+
+
+@pytest.mark.asyncio
+async def test_synthesis_receives_ranked_late_document_quotes() -> None:
+    introduction = "General report background without the requested measurement."
+    late_fact = "Siemens Scope 3 emissions were 14.7 million tonnes CO2e in 2025."
+    document = ExtractedDocument(
+        canonical_url=SOURCE_URL,
+        title=SOURCE_TITLE,
+        text=f"{introduction}\n\n{late_fact}",
+        media_type="application/pdf",
+        blocks=(
+            ExtractedBlock(text=introduction, page_number=1),
+            ExtractedBlock(text=late_fact, page_number=42, table_index=1),
+        ),
+    )
+    hit = _hit()
+    provider = _Provider(_answer(hit, document, claim=late_fact))
+    decision = _plan().model_copy(
+        update={
+            "answer_focus": "Siemens Scope 3 emissions in 2025",
+            "query_plan": QueryPlan(
+                tool_budget=ToolBudget(max_search_queries=1, max_fetches=1),
+                searches=(
+                    SearchQuery(
+                        text="Siemens Scope 3 emissions 2025",
+                        max_results=1,
+                    ),
+                ),
+            ),
+        }
+    )
+    fetched = FetchedDocument(
+        canonical_url=SOURCE_URL,
+        content_type="application/pdf",
+        body=b"bounded-pdf-fixture",
+    )
+    runner = _runner(
+        planner=_Planner(decision=decision),
+        fetcher=_Fetcher({SOURCE_URL: fetched}),
+        extractor=_Extractor({SOURCE_URL: document}),
+        provider=provider,
+    )
+
+    result = await runner.run(
+        tenant_id="tenant-one",
+        session_id="session-one",
+        run_id="run-one",
+        request="What were Siemens Scope 3 emissions in 2025?",
+    )
+
+    assert result.snapshot.status is RunStatus.COMPLETED
+    synthesis_payload = json.loads(provider.messages[0][1].content)
+    evidence = synthesis_payload["evidence_records_untrusted_data"][0]
+    assert evidence["excerpt"].startswith("General report background")
+    assert evidence["quotes"][0] == late_fact
 
 
 @pytest.mark.asyncio

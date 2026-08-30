@@ -9,7 +9,12 @@ import pytest
 
 from search_agent.contracts import SearchQuery
 from search_agent.security.site_policy import SafeSearch, SiteCategory, SitePolicy
-from search_agent.tools.search import SearchAdapter, SearchFailure
+from search_agent.tools.search import (
+    SearchAdapter,
+    SearchAttemptOutcome,
+    SearchFailure,
+    parse_search_backends,
+)
 
 
 @dataclass
@@ -25,6 +30,19 @@ class FakeSearchBackend:
         if self.error is not None:
             raise self.error
         return self.rows
+
+
+@dataclass
+class RoutingSearchBackend:
+    responses: dict[str, Sequence[object] | Exception]
+    calls: list[tuple[str, dict[str, object]]] = field(default_factory=list)
+
+    def text(self, query: str, **kwargs: object) -> Sequence[object]:
+        self.calls.append((query, kwargs))
+        response = self.responses[str(kwargs["backend"])]
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 class ExplodingMapping(dict[str, object]):
@@ -361,3 +379,184 @@ async def test_malformed_backend_envelope_becomes_search_failure() -> None:
         await SearchAdapter(backend, SitePolicy()).search(
             SearchQuery(text="siemens annual report", max_results=2)
         )
+
+
+@pytest.mark.asyncio
+async def test_search_uses_auto_by_default() -> None:
+    backend = FakeSearchBackend()
+
+    await SearchAdapter(backend, SitePolicy()).search(
+        SearchQuery(text="siemens annual report", max_results=1)
+    )
+
+    assert backend.calls[0][1]["backend"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_search_falls_back_after_exception_without_amplifying_result_limit() -> (
+    None
+):
+    backend = RoutingSearchBackend(
+        responses={
+            "auto": RuntimeError("private backend failure"),
+            "duckduckgo": tuple(
+                {
+                    "title": f"Result {index}",
+                    "href": f"https://example.com/{index}",
+                    "body": "body",
+                }
+                for index in range(3)
+            ),
+        }
+    )
+    adapter = SearchAdapter(
+        backend,
+        SitePolicy(),
+        backend_names=("auto", "duckduckgo"),
+    )
+
+    result = await adapter.search_with_metadata(
+        SearchQuery(text="siemens annual report", max_results=2)
+    )
+
+    assert len(result.hits) == 2
+    assert [call[1]["max_results"] for call in backend.calls] == [2, 2]
+    assert [attempt.outcome for attempt in result.attempts] == [
+        SearchAttemptOutcome.EXCEPTION,
+        SearchAttemptOutcome.SUCCESS,
+    ]
+    assert result.attempts[0].raw_rows == 0
+    assert result.attempts[1].accepted_hits == 2
+    assert result.attempts[1].rejection_count == 0
+    assert [attempt.reason_code for attempt in result.attempts] == [
+        "exception",
+        "success",
+    ]
+    assert all(0 <= attempt.duration_ms <= 600_000 for attempt in result.attempts)
+
+
+@pytest.mark.asyncio
+async def test_search_fallback_preserves_policy_and_reports_empty_reasons() -> None:
+    backend = RoutingSearchBackend(
+        responses={
+            "auto": (
+                {
+                    "title": "Blocked",
+                    "href": "https://blocked.example/report",
+                    "body": "body",
+                },
+            ),
+            "duckduckgo": (),
+        }
+    )
+    adapter = SearchAdapter(
+        backend,
+        SitePolicy(denied_domains=frozenset({"blocked.example"})),
+        backend_names=("auto", "duckduckgo"),
+    )
+
+    result = await adapter.search_with_metadata(
+        SearchQuery(text="siemens annual report", max_results=2)
+    )
+
+    assert result.hits == ()
+    assert [attempt.outcome for attempt in result.attempts] == [
+        SearchAttemptOutcome.ALL_POLICY_REJECTED,
+        SearchAttemptOutcome.RAW_EMPTY,
+    ]
+    assert result.attempts[0].rejection_count == 1
+    assert result.attempts[1].rejection_count == 0
+
+
+@pytest.mark.asyncio
+async def test_search_reports_normalized_empty_before_successful_fallback() -> None:
+    backend = RoutingSearchBackend(
+        responses={
+            "auto": ("invalid row",),
+            "duckduckgo": (
+                {
+                    "title": "Allowed",
+                    "href": "https://example.com/report",
+                    "body": "body",
+                },
+            ),
+        }
+    )
+
+    result = await SearchAdapter(
+        backend,
+        SitePolicy(),
+        backend_names=("auto", "duckduckgo"),
+    ).search_with_metadata(SearchQuery(text="siemens annual report", max_results=1))
+
+    assert [attempt.outcome for attempt in result.attempts] == [
+        SearchAttemptOutcome.NORMALIZED_EMPTY,
+        SearchAttemptOutcome.SUCCESS,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_failure_carries_only_safe_attempt_metadata() -> None:
+    backend = RoutingSearchBackend(
+        responses={
+            "auto": RuntimeError("credential=secret"),
+            "duckduckgo": "invalid envelope",
+        }
+    )
+
+    with pytest.raises(SearchFailure, match="invalid result") as caught:
+        await SearchAdapter(
+            backend,
+            SitePolicy(),
+            backend_names=("auto", "duckduckgo"),
+        ).search(SearchQuery(text="siemens annual report", max_results=1))
+
+    assert [attempt.outcome for attempt in caught.value.attempts] == [
+        SearchAttemptOutcome.EXCEPTION,
+        SearchAttemptOutcome.INVALID,
+    ]
+    assert "secret" not in str(caught.value)
+    assert "secret" not in repr(caught.value.attempts)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("auto", ("auto",)),
+        ("auto,duckduckgo", ("auto", "duckduckgo")),
+        ("duckduckgo,auto", ("duckduckgo", "auto")),
+    ],
+)
+def test_search_backend_parser_preserves_valid_order(
+    value: str, expected: tuple[str, ...]
+) -> None:
+    assert parse_search_backends(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "auto,",
+        "auto, auto",
+        "auto,auto",
+        "bing",
+        "åuto",
+        "auto,duckduckgo,auto",
+        "a" * 65,
+    ],
+)
+def test_search_backend_parser_rejects_invalid_or_unbounded_values(
+    value: str,
+) -> None:
+    with pytest.raises(ValueError):
+        parse_search_backends(value)
+
+
+def test_search_adapter_rejects_unbounded_or_unsupported_backend_order() -> None:
+    backend = FakeSearchBackend()
+
+    with pytest.raises(ValueError):
+        SearchAdapter(backend, SitePolicy(), backend_names=("auto", "auto"))
+    with pytest.raises(ValueError):
+        SearchAdapter(backend, SitePolicy(), backend_names=("bing",))

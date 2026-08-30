@@ -12,6 +12,7 @@ from urllib.parse import parse_qsl, unquote, unquote_plus, urlsplit
 from pydantic import TypeAdapter, ValidationError
 
 from ..contracts import (
+    ActionTraceRecord,
     Citation,
     ExtractedEvidence,
     FailureReason,
@@ -122,6 +123,7 @@ def reflect_run(result: RunResult) -> RunReflection:
         unresolved_items = (_UNRESOLVED_ITEMS[snapshot.failure_reason],)
 
     return RunReflection(
+        schema_version=2,
         tenant_id=snapshot.tenant_id,
         session_id=snapshot.session_id,
         run_id=snapshot.run_id,
@@ -135,7 +137,23 @@ def reflect_run(result: RunResult) -> RunReflection:
         usage=ReflectionUsage.model_validate(
             checked.usage.model_dump(mode="python", warnings="error"), strict=True
         ),
+        trace_summary=_bounded_trace(checked),
+        verified_claims=(
+            tuple(
+                redact_memory_text(citation.claim)
+                for citation in snapshot.answer.citations[:16]
+            )
+            if snapshot.answer is not None
+            else ()
+        ),
     )
+
+
+def _bounded_trace(result: RunResult) -> tuple[ActionTraceRecord, ...]:
+    trace = result.trace
+    if len(trace) <= 64:
+        return trace
+    return (*trace[:63], trace[-1])
 
 
 class InMemoryReflectionRepository:
@@ -378,6 +396,9 @@ def _validate_run_result(result: RunResult) -> RunResult:
             or type(result.events) is not tuple
             or len(result.events) > 16
             or any(type(event) is not PublicEvent for event in result.events)
+            or type(result.trace) is not tuple
+            or len(result.trace) > 96
+            or any(type(record) is not ActionTraceRecord for record in result.trace)
             or type(result.snapshot.hits) is not tuple
             or len(result.snapshot.hits) > _MAX_RUN_HITS
             or any(type(hit) is not SearchHit for hit in result.snapshot.hits)
@@ -502,6 +523,11 @@ def _validate_reflection(reflection: RunReflection) -> RunReflection:
             )
             or type(reflection.unresolved_items) is not tuple
             or type(reflection.usage) is not ReflectionUsage
+            or type(reflection.trace_summary) is not tuple
+            or any(
+                type(item) is not ActionTraceRecord for item in reflection.trace_summary
+            )
+            or type(reflection.verified_claims) is not tuple
         ):
             raise ValueError("reflection containers are invalid")
         payload = reflection.model_dump(mode="python", warnings="error")
