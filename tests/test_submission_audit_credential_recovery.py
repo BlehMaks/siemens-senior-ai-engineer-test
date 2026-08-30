@@ -1,3 +1,4 @@
+import pytest
 from scripts.audit_submission import _contains_credential_assignment
 
 
@@ -81,3 +82,33 @@ def test_closing_string_line_recovers_following_tuple_assignment() -> None:
     ).encode()
 
     assert _contains_credential_assignment("config.py", source)
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        'documentation = """example"""; ',
+        'documentation = """\nexample\n""".strip(); ',
+    ],
+)
+def test_parser_failure_recovers_tuple_after_string_statement(prefix: str) -> None:
+    predicate = "not " * 10_000 + "False"
+    source = (
+        prefix
+        + 'token, marker = "12345678", runtime_marker\n'
+        + f"probe = {predicate}\n"
+    ).encode()
+
+    assert _contains_credential_assignment("config.py", source)
+
+
+def test_fstring_expression_delimiter_does_not_expose_string_body() -> None:
+    predicate = "not " * 10_000 + "False"
+    source = (
+        'documentation = f"""{\'"""\'}\n'
+        'token, marker = "12345678", runtime_marker\n'
+        '"""\n'
+        f"probe = {predicate}\n"
+    ).encode()
+
+    assert not _contains_credential_assignment("config.py", source)
