@@ -290,26 +290,13 @@ def _quarantine_owned_output(
                 dir_fd=descriptor,
             )
         except OSError:
-            _restore_quarantined_entry(
-                descriptor,
-                source=quarantine,
-                destination=name,
-            )
             return
         try:
             quarantined = os.fstat(quarantine_descriptor)
             if (quarantined.st_dev, quarantined.st_ino) == expected:
+                _fchmod_resilient(quarantine_descriptor, 0o600)
                 os.ftruncate(quarantine_descriptor, 0)
                 os.fsync(quarantine_descriptor)
-            else:
-                with suppress(OSError):
-                    if _rename_noreplace(
-                        descriptor,
-                        quarantine,
-                        descriptor,
-                        name,
-                    ):
-                        _create_empty_quarantine_marker(descriptor, quarantine)
         except OSError:
             pass
         finally:
@@ -320,22 +307,6 @@ def _quarantine_owned_output(
         with suppress(OSError):
             os.fsync(descriptor)
         return
-
-
-def _restore_quarantined_entry(
-    descriptor: int,
-    *,
-    source: str,
-    destination: str,
-) -> None:
-    with suppress(OSError):
-        if _rename_noreplace(
-            descriptor,
-            source,
-            descriptor,
-            destination,
-        ):
-            _create_empty_quarantine_marker(descriptor, source)
 
 
 def _create_empty_quarantine_marker(descriptor: int, name: str) -> None:

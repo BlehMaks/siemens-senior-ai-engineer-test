@@ -343,11 +343,11 @@ def test_source_replacement_after_reservation_is_preserved(
         key_admin._write_plaintext_file(output, "temporary-key")
 
     assert replaced
-    assert output.read_bytes() == foreign_content
+    assert not output.exists()
     assert displaced.read_bytes() == b""
     cleanup = _cleanup_entries(tmp_path)
     assert len(cleanup) == 1
-    assert _cleanup_payload(cleanup[0]) == b""
+    assert _cleanup_payload(cleanup[0]) == foreign_content
 
 
 def test_cleanup_collision_is_not_overwritten(
@@ -644,11 +644,11 @@ def test_unsupported_linux_renameat2_symbol_fails_closed(
     assert not destination.exists()
 
 
-def test_failed_nonblocking_quarantine_open_restores_source(
+def test_failed_nonblocking_quarantine_open_does_not_relocate_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     output = tmp_path / "generated.key"
-    output.write_bytes(b"owned")
+    output.write_bytes(b"")
     real_open = os.open
     observed_flags = 0
 
@@ -685,10 +685,36 @@ def test_failed_nonblocking_quarantine_open_restores_source(
         os.close(descriptor)
 
     assert observed_flags & getattr(os, "O_NONBLOCK", 0)
-    assert output.read_bytes() == b"owned"
+    assert not output.exists()
     cleanup = _cleanup_entries(tmp_path)
     assert len(cleanup) == 1
     assert _cleanup_payload(cleanup[0]) == b""
+
+
+def test_cleanup_repairs_mode_through_the_owned_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "generated.key"
+    real_fsync = os.fsync
+    changed = False
+
+    def relax_mode_before_directory_failure(descriptor: int) -> None:
+        nonlocal changed
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            output.chmod(0o644)
+            changed = True
+            raise OSError(errno.EIO, "injected directory fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", relax_mode_before_directory_failure)
+
+    with pytest.raises(SystemExit, match="protected output file"):
+        key_admin._write_plaintext_file(output, "temporary-key")
+
+    cleanup = _cleanup_entries(tmp_path)
+    assert changed and not output.exists() and len(cleanup) == 1
+    assert stat.S_IMODE(cleanup[0].stat().st_mode) == 0o600
+    assert cleanup[0].read_bytes() == b""
 
 
 def test_symlink_race_during_move_is_restored(
@@ -736,6 +762,8 @@ def test_symlink_race_during_move_is_restored(
     with pytest.raises(SystemExit, match="protected output file"):
         key_admin._write_plaintext_file(output, "temporary-key")
 
-    assert raced and output.is_symlink()
+    cleanup = _cleanup_entries(tmp_path)
+    assert raced and not output.exists() and len(cleanup) == 1
+    assert cleanup[0].is_symlink()
     assert displaced.read_bytes() == b""
-    assert output.read_bytes() == b"foreign-owner\n"
+    assert cleanup[0].read_bytes() == b"foreign-owner\n"
