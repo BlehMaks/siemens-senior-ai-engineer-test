@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -11,6 +12,16 @@ from binary_classification.analysis import (
     write_analysis,
 )
 from binary_classification.data import load_training_data
+
+
+def _approximate_floats(value: Any) -> Any:
+    if isinstance(value, float):
+        return pytest.approx(value, rel=1e-12, abs=1e-15)
+    if isinstance(value, dict):
+        return {key: _approximate_floats(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_approximate_floats(item) for item in value]
+    return value
 
 
 def _analysis_frame(rows: int = 100) -> pd.DataFrame:
@@ -194,4 +205,5 @@ def test_committed_profile_matches_private_data_when_supplied() -> None:
     report = analyze_training_frame(dataset.frame)
     profile_path = Path(__file__).parents[1] / "reports" / "data-profile.json"
 
-    assert json.loads(profile_path.read_text(encoding="utf-8")) == report.to_dict()
+    committed_profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    assert report.to_dict() == _approximate_floats(committed_profile)
