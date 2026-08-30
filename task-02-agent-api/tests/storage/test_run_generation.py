@@ -29,6 +29,7 @@ from agent_api.security import (
 )
 from agent_api.storage import (
     CloudTask,
+    CloudTaskAlreadyExistsError,
     CloudTasksWorkQueue,
     FirestoreRunRepository,
     SignedWorkItemCodec,
@@ -68,6 +69,38 @@ class PausedDeleteTaskClient(FakeCloudTaskClient):
             self.delete_started.set()
             await self.resume_delete.wait()
         return deleted
+
+
+class TombstoningTaskClient(FakeCloudTaskClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tombstones: set[str] = set()
+
+    async def create(self, task: CloudTask) -> CloudTask:
+        if task.name in self.tombstones:
+            raise CloudTaskAlreadyExistsError("task name is tombstoned")
+        return await super().create(task)
+
+    async def delete(self, *, name: str) -> bool:
+        deleted = await super().delete(name=name)
+        if deleted:
+            self.tombstones.add(name)
+        return deleted
+
+
+class FailNextTransactionStore(FakeDocumentStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_next_transaction = False
+
+    async def transaction(
+        self,
+        operation: Callable[[Any], Awaitable[Any]],
+    ) -> Any:
+        if self.fail_next_transaction:
+            self.fail_next_transaction = False
+            raise RuntimeError("injected transaction failure")
+        return await super().transaction(operation)
 
 
 class RetryingIdentityStore(FakeDocumentStore):
@@ -253,13 +286,87 @@ async def test_late_cancel_preserves_an_identical_reenqueue_index() -> None:
     )
     await client.delete_started.wait()
 
-    assert await work_queue.cancel(tenant_id="tenant-one", run_id="run-one") == 1
+    assert await work_queue.cancel(tenant_id="tenant-one", run_id="run-one") == 0
     assert (await work_queue.enqueue(work)).created
     client.resume_delete.set()
 
     assert await first_cancel == 0
     assert len(client._tasks) == 1
     assert len(await store.list(collection="work_items")) == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_indexed_task_is_repaired_with_a_fresh_name() -> None:
+    store = FakeDocumentStore()
+    await _seed_session(store, tenant_id="tenant-one", session_id="session-one")
+    run = (await FirestoreRunRepository(store).create(submission())).run
+    client = TombstoningTaskClient()
+    work_queue = queue(store, client)
+    work = item(generation_id=run.generation_id)
+    delivered = (await work_queue.enqueue(work)).item
+    before = await store.get(collection="work_items", document_id=work.work_id)
+    assert before is not None
+    old_task_name = str(before["task_name"])
+    assert await client.delete(name=old_task_name)
+
+    repaired = await work_queue.enqueue(delivered)
+
+    after = await store.get(collection="work_items", document_id=work.work_id)
+    assert after is not None
+    new_task_name = str(after["task_name"])
+    assert repaired.created is False
+    assert new_task_name != old_task_name
+    assert await client.get(name=new_task_name) is not None
+
+
+@pytest.mark.asyncio
+async def test_discard_transaction_failure_keeps_indexed_delivery() -> None:
+    store = FailNextTransactionStore()
+    await _seed_session(store, tenant_id="tenant-one", session_id="session-one")
+    run = (await FirestoreRunRepository(store).create(submission())).run
+    client = FakeCloudTaskClient()
+    work_queue = queue(store, client)
+    delivered = (await work_queue.enqueue(item(generation_id=run.generation_id))).item
+    before = await store.get(collection="work_items", document_id=delivered.work_id)
+    assert before is not None
+    task_name = str(before["task_name"])
+    store.fail_next_transaction = True
+
+    with pytest.raises(RuntimeError, match="injected transaction failure"):
+        await work_queue.discard(delivered)
+
+    assert (
+        await store.get(collection="work_items", document_id=delivered.work_id)
+        == before
+    )
+    assert await client.get(name=task_name) is not None
+
+
+@pytest.mark.asyncio
+async def test_late_discard_deletes_only_its_unique_delivery() -> None:
+    store = FakeDocumentStore()
+    await _seed_session(store, tenant_id="tenant-one", session_id="session-one")
+    run = (await FirestoreRunRepository(store).create(submission())).run
+    client = PausedDeleteTaskClient()
+    work_queue = queue(store, client)
+    work = item(generation_id=run.generation_id)
+    delivered = (await work_queue.enqueue(work)).item
+    before = await store.get(collection="work_items", document_id=work.work_id)
+    assert before is not None
+    old_task_name = str(before["task_name"])
+    pending = asyncio.create_task(work_queue.discard(delivered))
+    await client.delete_started.wait()
+
+    assert (await work_queue.enqueue(delivered)).created
+    current = await store.get(collection="work_items", document_id=work.work_id)
+    assert current is not None
+    new_task_name = str(current["task_name"])
+    assert new_task_name != old_task_name
+
+    client.resume_delete.set()
+    assert await pending
+    assert await client.get(name=old_task_name) is None
+    assert await client.get(name=new_task_name) is not None
 
 
 @pytest.mark.asyncio

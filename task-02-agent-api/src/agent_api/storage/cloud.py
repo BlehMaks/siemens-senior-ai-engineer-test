@@ -7,7 +7,6 @@ import hmac
 import json
 import secrets
 from collections.abc import Awaitable, Callable, Mapping
-from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import partial
@@ -1117,178 +1116,126 @@ class CloudTasksWorkQueue:
 
     async def enqueue(self, item: WorkItem) -> EnqueueResult:
         checked = _checked_item(item)
-        existing = await self._store.get(
-            collection=_WORK_ITEMS,
-            document_id=_document_id(checked.work_id),
-        )
-        if existing is not None:
-            stored = _decode_work_document(existing)
-            if (stored.tenant_id, stored.run_id) != (
+        repaired_existing = False
+        for _ in range(8):
+            existing = await self._store.get(
+                collection=_WORK_ITEMS,
+                document_id=_document_id(checked.work_id),
+            )
+            stored = None if existing is None else _decode_work_document(existing)
+            if stored is not None and (stored.tenant_id, stored.run_id) != (
                 checked.tenant_id,
                 checked.run_id,
             ):
                 raise QueueConflictError("work id already identifies another run")
-        observed_parent = _decode_run_document(
-            await self._store.get(
-                collection=_RUNS,
-                document_id=_document_id(checked.tenant_id, checked.run_id),
-            )
-        )
-        if observed_parent is None:
-            raise RunParentNotFoundError("work item run does not exist")
-        if (
-            checked.generation_id is not None
-            and checked.generation_id != observed_parent.generation_id
-        ):
-            raise QueueConflictError("work item belongs to another run generation")
-        bound = _checked_item(
-            checked.model_copy(update={"generation_id": observed_parent.generation_id})
-        )
-        if existing is not None:
-            if (
-                stored.tenant_id,
-                stored.run_id,
-                stored.generation_id,
-            ) != (bound.tenant_id, bound.run_id, bound.generation_id):
-                raise QueueConflictError("work id already identifies another run")
-            task_name = _require_text(existing, "task_name")
-            if task_name != self._task_name(stored.work_id, stored.generation_id):
-                raise StorageError("work index task name is invalid")
-            remote = await self._tasks.get(name=task_name)
-            if remote is None:
-                body, headers = self._codec.encode(
-                    stored, task_name=task_name, queue_name=self._queue_name
-                )
-                with suppress(CloudTaskAlreadyExistsError):
-                    await self._tasks.create(
-                        CloudTask(
-                            name=task_name,
-                            schedule_at=stored.not_before,
-                            body=body,
-                            headers=headers,
-                        )
-                    )
-            refreshed_token = secrets.token_hex(16)
-
-            async def refresh_index(tx: DocumentStoreTransaction) -> bool:
-                current = await tx.get(
-                    collection=_WORK_ITEMS,
-                    document_id=_document_id(stored.work_id),
-                )
-                if current is None:
-                    return False
-                current_item = _decode_work_document(current)
-                if (
-                    current_item.tenant_id,
-                    current_item.run_id,
-                    current_item.generation_id,
-                ) != (bound.tenant_id, bound.run_id, bound.generation_id):
-                    raise QueueConflictError("work id already identifies another run")
-                if _require_text(current, "task_name") != task_name:
-                    raise StorageError("work index task name changed unexpectedly")
-                await tx.set(
-                    collection=_WORK_ITEMS,
-                    document_id=_document_id(stored.work_id),
-                    document=_work_document(
-                        current_item,
-                        task_name=task_name,
-                        index_token=refreshed_token,
-                    ),
-                )
-                return True
-
-            if await self._store.transaction(refresh_index):
-                return EnqueueResult(item=stored, created=False)
-        task_name = self._task_name(bound.work_id, bound.generation_id)
-        body, headers = self._codec.encode(
-            bound, task_name=task_name, queue_name=self._queue_name
-        )
-        try:
-            await self._tasks.create(
-                CloudTask(
-                    name=task_name,
-                    schedule_at=bound.not_before,
-                    body=body,
-                    headers=headers,
-                )
-            )
-            indexed = bound
-            created = True
-        except CloudTaskAlreadyExistsError as err:
-            remote = await self._tasks.get(name=task_name)
-            if remote is None:
-                raise StorageError("remote task disappeared during enqueue") from err
-            decoded = self._codec.decode(
-                body=remote.body,
-                signature=_header_value(remote.headers, _SIGNATURE_HEADER),
-                task_name=remote.name,
-                queue_name=self._queue_name,
-            )
-            if (
-                decoded.tenant_id,
-                decoded.run_id,
-                decoded.generation_id,
-            ) != (bound.tenant_id, bound.run_id, bound.generation_id):
-                if (decoded.tenant_id, decoded.run_id) == (
-                    bound.tenant_id,
-                    bound.run_id,
-                ):
-                    await self._tasks.delete(name=task_name)
-                raise QueueConflictError(
-                    "work id already identifies another run"
-                ) from err
-            indexed = decoded
-            created = False
-        index_token = secrets.token_hex(16)
-
-        async def persist_index(
-            tx: DocumentStoreTransaction,
-        ) -> tuple[WorkItem, bool]:
-            parent = _decode_run_document(
-                await tx.get(
+            observed_parent = _decode_run_document(
+                await self._store.get(
                     collection=_RUNS,
-                    document_id=_document_id(indexed.tenant_id, indexed.run_id),
+                    document_id=_document_id(checked.tenant_id, checked.run_id),
                 )
             )
-            existing_index = await tx.get(
-                collection=_WORK_ITEMS,
-                document_id=_document_id(indexed.work_id),
-            )
+            if observed_parent is None:
+                raise RunParentNotFoundError("work item run does not exist")
             if (
-                parent is None
-                or parent.generation_id != observed_parent.generation_id
-                or indexed.generation_id != observed_parent.generation_id
+                checked.generation_id is not None
+                and checked.generation_id != observed_parent.generation_id
             ):
-                return indexed, False
-            if existing_index is not None:
-                stored = _decode_work_document(existing_index)
+                raise QueueConflictError("work item belongs to another run generation")
+            bound = _checked_item(
+                checked.model_copy(
+                    update={"generation_id": observed_parent.generation_id}
+                )
+            )
+            if stored is not None:
                 if (
                     stored.tenant_id,
                     stored.run_id,
                     stored.generation_id,
-                ) != (
-                    indexed.tenant_id,
-                    indexed.run_id,
-                    indexed.generation_id,
-                ):
+                ) != (bound.tenant_id, bound.run_id, bound.generation_id):
                     raise QueueConflictError("work id already identifies another run")
-                return stored, True
-            await tx.set(
-                collection=_WORK_ITEMS,
-                document_id=_document_id(indexed.work_id),
-                document=_work_document(
-                    indexed,
-                    task_name=task_name,
-                    index_token=index_token,
-                ),
-            )
-            return indexed, True
+                assert existing is not None
+                task_name = _require_text(existing, "task_name")
+                index_token = _optional_text(existing, "index_token")
+                if not self._is_task_name(
+                    task_name, stored.work_id, stored.generation_id
+                ):
+                    raise StorageError("work index task name is invalid")
+                remote = await self._tasks.get(name=task_name)
+                if remote is not None:
+                    self._validate_remote_task(remote, stored)
+                    refreshed_token = secrets.token_hex(16)
+                    if await self._store.transaction(
+                        partial(
+                            _refresh_work_index,
+                            document_id=_document_id(stored.work_id),
+                            expected=stored,
+                            task_name=task_name,
+                            index_token=index_token,
+                            refreshed_token=refreshed_token,
+                        )
+                    ):
+                        return EnqueueResult(item=stored, created=False)
+                    continue
+                if not await self._store.transaction(
+                    partial(
+                        _delete_matching_work,
+                        document_id=_document_id(stored.work_id),
+                        expected=stored,
+                        task_name=task_name,
+                        index_token=index_token,
+                    )
+                ):
+                    continue
+                repaired_existing = True
 
-        stored, parent_exists = await self._store.transaction(persist_index)
-        if not parent_exists:
-            await self._tasks.delete(name=task_name)
-            raise RunParentNotFoundError("work item run does not exist")
-        return EnqueueResult(item=stored, created=created)
+            index_token = secrets.token_hex(16)
+            task_name = self._task_name(
+                bound.work_id, bound.generation_id, index_token=index_token
+            )
+            body, headers = self._codec.encode(
+                bound, task_name=task_name, queue_name=self._queue_name
+            )
+            physical_created = True
+            try:
+                await self._tasks.create(
+                    CloudTask(
+                        name=task_name,
+                        schedule_at=bound.not_before,
+                        body=body,
+                        headers=headers,
+                    )
+                )
+            except CloudTaskAlreadyExistsError:
+                remote = await self._tasks.get(name=task_name)
+                if remote is None:
+                    continue
+                self._validate_remote_task(remote, bound)
+                physical_created = False
+
+            try:
+                indexed, parent_exists, indexed_by_us = await self._store.transaction(
+                    partial(
+                        _persist_work_index,
+                        item=bound,
+                        observed_generation=observed_parent.generation_id,
+                        task_name=task_name,
+                        index_token=index_token,
+                    )
+                )
+            except BaseException:
+                if physical_created:
+                    await self._tasks.delete(name=task_name)
+                raise
+            if not parent_exists:
+                if physical_created:
+                    await self._tasks.delete(name=task_name)
+                raise RunParentNotFoundError("work item run does not exist")
+            if not indexed_by_us:
+                if physical_created:
+                    await self._tasks.delete(name=task_name)
+                return EnqueueResult(item=indexed, created=False)
+            return EnqueueResult(item=indexed, created=not repaired_existing)
+        raise StorageError("work enqueue contention exceeded retry limit")
 
     async def discard(self, item: WorkItem) -> bool:
         checked = _checked_item(item)
@@ -1307,7 +1254,7 @@ class CloudTasksWorkQueue:
             or _require_text(row, "run_id") != checked.run_id
         ):
             return False
-        if task_name != self._task_name(checked.work_id, checked.generation_id):
+        if not self._is_task_name(task_name, checked.work_id, checked.generation_id):
             return await self._store.transaction(
                 partial(
                     _delete_matching_work,
@@ -1317,52 +1264,19 @@ class CloudTasksWorkQueue:
                     index_token=index_token,
                 )
             )
-        remote = await self._tasks.get(name=task_name)
-        deleted = await self._tasks.delete(name=task_name)
-        if not deleted and await self._tasks.get(name=task_name) is not None:
-            await self._store.transaction(
-                partial(
-                    _delete_matching_work,
-                    document_id=document_id,
-                    expected=checked,
-                    task_name=task_name,
-                    index_token=index_token,
-                )
+        removed = await self._store.transaction(
+            partial(
+                _delete_matching_work,
+                document_id=document_id,
+                expected=checked,
+                task_name=task_name,
+                index_token=index_token,
             )
-            return False
-        try:
-            removed = await self._store.transaction(
-                partial(
-                    _delete_matching_work,
-                    document_id=document_id,
-                    expected=checked,
-                    task_name=task_name,
-                    index_token=index_token,
-                )
-            )
-        except BaseException:
-            if remote is not None:
-                await self._restore_indexed_task(checked, task_name, remote)
-            raise
-        if not removed and remote is not None:
-            return await self._restore_indexed_task(checked, task_name, remote)
-        return removed
-
-    async def _restore_indexed_task(
-        self, item: WorkItem, task_name: str, task: CloudTask
-    ) -> bool:
-        current = await self._store.get(
-            collection=_WORK_ITEMS, document_id=_document_id(item.work_id)
         )
-        if (
-            current is None
-            or _decode_work_document(current) != item
-            or _require_text(current, "task_name") != task_name
-        ):
+        if not removed:
             return False
-        with suppress(CloudTaskAlreadyExistsError):
-            await self._tasks.create(task)
-        return True
+        deleted = await self._tasks.delete(name=task_name)
+        return deleted or await self._tasks.get(name=task_name) is None
 
     async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int:
         checked_tenant = _scope_id(tenant_id)
@@ -1385,7 +1299,9 @@ class CloudTasksWorkQueue:
             )
             if not index_identity_is_valid:
                 continue
-            if task_name != self._task_name(expected.work_id, expected.generation_id):
+            if not self._is_task_name(
+                task_name, expected.work_id, expected.generation_id
+            ):
                 if await self._store.transaction(
                     partial(
                         _delete_matching_work,
@@ -1397,11 +1313,7 @@ class CloudTasksWorkQueue:
                 ):
                     removed += 1
                 continue
-            deleted = await self._tasks.delete(name=task_name)
-            if not deleted and await self._tasks.get(name=task_name) is not None:
-                continue
-
-            if await self._store.transaction(
+            if not await self._store.transaction(
                 partial(
                     _delete_matching_work,
                     document_id=document_id,
@@ -1410,6 +1322,12 @@ class CloudTasksWorkQueue:
                     index_token=index_token,
                 )
             ):
+                continue
+            await self._tasks.delete(name=task_name)
+            current = await self._store.get(
+                collection=_WORK_ITEMS, document_id=document_id
+            )
+            if current is None:
                 removed += 1
         return removed
 
@@ -1432,14 +1350,45 @@ class CloudTasksWorkQueue:
             task_name=canonical_task,
             queue_name=canonical_queue,
         )
-        if canonical_task != self._task_name(item.work_id, item.generation_id):
+        if not self._is_task_name(canonical_task, item.work_id, item.generation_id):
             raise TaskDeliveryAuthError("task delivery name is invalid")
         return item
 
-    def _task_name(self, work_id: str, generation_id: str | None = None) -> str:
+    def _task_name(
+        self,
+        work_id: str,
+        generation_id: str | None = None,
+        *,
+        index_token: str | None = None,
+    ) -> str:
         identity = work_id if generation_id is None else f"{work_id}\x00{generation_id}"
         suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
-        return f"{self._queue_name}/tasks/work-{suffix}"
+        base = f"{self._queue_name}/tasks/work-{suffix}"
+        return base if index_token is None else f"{base}-{index_token}"
+
+    def _is_task_name(
+        self, task_name: str, work_id: str, generation_id: str | None
+    ) -> bool:
+        base = self._task_name(work_id, generation_id)
+        if task_name == base:
+            return True
+        prefix = f"{base}-"
+        token = task_name.removeprefix(prefix)
+        return (
+            task_name.startswith(prefix)
+            and len(token) == 32
+            and all(character in "0123456789abcdef" for character in token)
+        )
+
+    def _validate_remote_task(self, task: CloudTask, expected: WorkItem) -> None:
+        decoded = self.decode_delivery(
+            body=task.body,
+            signature=_header_value(task.headers, _SIGNATURE_HEADER),
+            task_name=task.name,
+            queue_name=self._queue_name,
+        )
+        if decoded != expected:
+            raise StorageError("remote task payload disagrees with the work index")
 
 
 def _document_id(*parts: str) -> str:
@@ -1703,6 +1652,80 @@ def _decode_work_document(document: Mapping[str, object]) -> WorkItem:
         return WorkItem.model_validate_json(_require_text(document, "payload"))
     except ValueError as exc:
         raise StorageError("stored work item failed validation") from exc
+
+
+async def _refresh_work_index(
+    tx: DocumentStoreTransaction,
+    *,
+    document_id: str,
+    expected: WorkItem,
+    task_name: str,
+    index_token: str | None,
+    refreshed_token: str,
+) -> bool:
+    current = await tx.get(collection=_WORK_ITEMS, document_id=document_id)
+    if (
+        current is None
+        or _decode_work_document(current) != expected
+        or _require_text(current, "task_name") != task_name
+        or _optional_text(current, "index_token") != index_token
+    ):
+        return False
+    await tx.set(
+        collection=_WORK_ITEMS,
+        document_id=document_id,
+        document=_work_document(
+            expected,
+            task_name=task_name,
+            index_token=refreshed_token,
+        ),
+    )
+    return True
+
+
+async def _persist_work_index(
+    tx: DocumentStoreTransaction,
+    *,
+    item: WorkItem,
+    observed_generation: str,
+    task_name: str,
+    index_token: str,
+) -> tuple[WorkItem, bool, bool]:
+    parent = _decode_run_document(
+        await tx.get(
+            collection=_RUNS,
+            document_id=_document_id(item.tenant_id, item.run_id),
+        )
+    )
+    existing = await tx.get(
+        collection=_WORK_ITEMS,
+        document_id=_document_id(item.work_id),
+    )
+    if (
+        parent is None
+        or parent.generation_id != observed_generation
+        or item.generation_id != observed_generation
+    ):
+        return item, False, False
+    if existing is not None:
+        winner = _decode_work_document(existing)
+        if (
+            winner.tenant_id,
+            winner.run_id,
+            winner.generation_id,
+        ) != (item.tenant_id, item.run_id, item.generation_id):
+            raise QueueConflictError("work id already identifies another run")
+        return winner, True, False
+    await tx.set(
+        collection=_WORK_ITEMS,
+        document_id=_document_id(item.work_id),
+        document=_work_document(
+            item,
+            task_name=task_name,
+            index_token=index_token,
+        ),
+    )
+    return item, True, True
 
 
 async def _delete_matching_work(
