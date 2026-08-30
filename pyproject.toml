@@ -3,6 +3,7 @@ members = ["task-*"]
 
 [dependency-groups]
 dev = [
+    "coverage[toml]>=7.10,<8",
     "hypothesis>=6.136,<7",
     "mypy>=1.17,<2",
     "pytest>=8.4,<10",
@@ -45,3 +46,20 @@ select = ["E4", "E7", "E9", "F", "I", "B", "SIM", "UP", "RUF"]
 python_version = "3.12"
 strict = true
 warn_unused_configs = true
+
+[tool.coverage.run]
+branch = true
+source = [
+    "task-01-search-agent/src",
+    "task-02-agent-api/src",
+    "task-03-deployment-strategy/src",
+    "task-04-binary-classification/src",
+    "task-05-material-similarity/src",
+    "task-06-category-consolidation/src",
+    "scripts",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import runpy
 import subprocess
 from pathlib import Path
 
+import pytest
 from scripts.audit_language import audit_language, main
 
 
@@ -42,9 +44,48 @@ def test_skips_binary_content(tmp_path: Path) -> None:
     assert audit_language(repo) == []
 
 
-def test_cli_passes_for_english_repository(tmp_path: Path, capsys: object) -> None:
+def test_skips_invalid_utf_encodings(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    _track(repo, "broken-utf16.txt", b"\xff\xfe\x00")
+    _track(repo, "broken-utf8.txt", b"\xff")
+
+    assert audit_language(repo) == []
+
+
+def test_skips_tracked_file_removed_from_worktree(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    _track(repo, "removed.txt", b"English\n")
+    (repo / "removed.txt").unlink()
+
+    assert audit_language(repo) == []
+
+
+def test_cli_passes_for_english_repository(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     repo = _repository(tmp_path)
     _track(repo, "README.md", b"English only\n")
 
     assert main(["--repo", str(repo)]) == 0
-    assert "Language audit passed." in capsys.readouterr().out  # type: ignore[attr-defined]
+    assert "Language audit passed." in capsys.readouterr().out
+
+
+def test_cli_reports_cyrillic_repository(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repository(tmp_path)
+    _track(repo, "notes.md", chr(0x410).encode())
+
+    assert main(["--repo", str(repo)]) == 1
+    assert "notes.md:1" in capsys.readouterr().out
+
+
+def test_script_entry_point_exits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repository(tmp_path)
+    _track(repo, "README.md", b"English\n")
+    monkeypatch.setattr("sys.argv", ["audit_language.py", "--repo", str(repo)])
+
+    with pytest.raises(SystemExit, match="0"):
+        runpy.run_path("scripts/audit_language.py", run_name="__main__")

@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: sync lock-check format-check lint type test local-acceptance local-submission audit-language audit-submission check
+.PHONY: sync lock-check format-check lint type test coverage-report local-acceptance local-submission audit-language audit-links audit-submission check
 
 sync:
 	$(UV) sync --locked --all-packages --dev
@@ -20,6 +20,11 @@ type:
 test:
 	$(UV) run pytest
 
+coverage-report:
+	$(UV) run coverage erase
+	$(UV) run coverage run -m pytest
+	$(UV) run coverage report
+
 local-acceptance:
 	UV_BIN="$(UV)" ./task-03-deployment-strategy/scripts/local_acceptance.sh
 
@@ -32,4 +37,7 @@ audit-submission:
 audit-language:
 	$(UV) run python scripts/audit_language.py
 
-check: lock-check format-check lint type test audit-language audit-submission
+audit-links:
+	$(UV) run python scripts/audit_links.py
+
+check: lock-check format-check lint type test audit-language audit-links audit-submission

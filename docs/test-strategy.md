@@ -23,10 +23,13 @@ rejected. Accepted tests become ordinary regression coverage with the remediatio
 | Lint | `make lint` | change author | Blocking |
 | Strict production typing | `make type` | change author | Blocking |
 | Unit and integration tests | `make test` | change author | Blocking; flaky retries are not accepted |
+| Diagnostic line and branch coverage | `make coverage-report` | change author | Non-blocking until the complete inventory is closed |
 | Complete local gate | `make check` | change author | Blocking |
 | Clean-machine Tasks 1 to 6 check | `make local-submission` | release owner | Blocking before delivery |
 | Running Tasks 1 to 3 API smoke | `make local-acceptance` | release owner | Blocking before cloud deployment |
 | Submission boundary | `make audit-submission` | release owner | Blocking |
+| English-only repository text | `make audit-language` | change author | Blocking |
+| Local Markdown links | `make audit-links` | change author | Blocking |
 
 Task packages add focused unit, integration, security, and evaluation markers only
 when those layers exist. The mandatory fixture suites require neither internet
@@ -48,7 +51,15 @@ findings block release; lower-severity findings need an explicit disposition.
 
 ## Coverage standard
 
-Coverage is requirement based rather than percentage driven. Tests must exercise
-legal behavior, each documented boundary, error paths that protect data or security,
-and concurrency or model failure where applicable. A green suite is meaningful only
-when it uses production entry points and asserts externally observable outcomes.
+Coverage combines a numeric backstop with requirement-based review. Tests must
+exercise legal behavior, each documented boundary, error paths that protect data or
+security, and concurrency or model failure where applicable. `make coverage-report`
+measures lines and branches in every `task-*/src` tree and `scripts` without blocking
+intermediate commits. The checked-in inventory records current misses by package.
+
+No production path is excluded merely because it is difficult to test. Generated
+code and import-only files may be excluded only through a documented, independently
+reviewed rule; every `pragma: no cover` needs the same justification. The strict
+100% line-and-branch gate is wired into `make check` only after the inventory is
+closed. A green suite remains meaningful only when it uses production entry points
+and asserts externally observable outcomes.
