@@ -1172,12 +1172,16 @@ name = "siemens-deployment-strategy"
 version = "0.1.0"
 source = { editable = "task-03-deployment-strategy" }
 dependencies = [
+    { name = "google-auth" },
+    { name = "requests" },
     { name = "siemens-agent-api" },
     { name = "siemens-search-agent" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "google-auth", specifier = ">=2.40,<3" },
+    { name = "requests", specifier = ">=2.32,<3" },
     { name = "siemens-agent-api", editable = "task-02-agent-api" },
     { name = "siemens-search-agent", editable = "task-01-search-agent" },
 ]
