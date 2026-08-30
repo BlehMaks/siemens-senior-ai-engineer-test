@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import json
+import runpy
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from binary_classification.evaluate import _error_slices
+import binary_classification.evaluate as evaluate_module
+from binary_classification.evaluate import _error_slices, render_comparison_markdown
 
 
 @pytest.mark.parametrize(
@@ -47,3 +55,79 @@ def test_error_slice_buckets_do_not_collide_with_literal_categories(
         other_bucket,
     }
     assert [item.rows for item in category_slices] == [1, 1]
+
+
+def test_cli_requires_explicit_scenario_selection_for_extension(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run(
+        part1: Path,
+        part2: Path,
+        output: Path,
+        *,
+        seed: int,
+        cost_scenarios: tuple[Any, ...],
+    ) -> SimpleNamespace:
+        captured.update(
+            {
+                "part1": part1,
+                "part2": part2,
+                "output": output,
+                "seed": seed,
+                "cost_scenarios": cost_scenarios,
+            }
+        )
+        return SimpleNamespace(
+            selected_model="weighted_logistic",
+            selected_threshold=0.5,
+            holdout_at_selected_threshold=SimpleNamespace(pr_auc=0.75),
+        )
+
+    monkeypatch.setattr(evaluate_module, "run_experiment", fake_run)
+
+    status = evaluate_module.main(
+        [
+            "--part1",
+            "part1.csv",
+            "--part2",
+            "part2.csv",
+            "--output-dir",
+            "output",
+            "--seed",
+            "7",
+            "--cost-scenario",
+            "balanced-review",
+        ]
+    )
+
+    assert status == 0
+    assert captured["seed"] == 7
+    assert [scenario.name for scenario in captured["cost_scenarios"]] == [
+        "balanced-review"
+    ]
+    assert "selected=weighted_logistic" in capsys.readouterr().out
+
+
+def test_module_entrypoint_exposes_help(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["binary_classification.evaluate", "--help"])
+
+    with (
+        pytest.warns(RuntimeWarning, match="found in sys.modules"),
+        pytest.raises(SystemExit) as exit_info,
+    ):
+        runpy.run_module("binary_classification.evaluate", run_name="__main__")
+
+    assert exit_info.value.code == 0
+
+
+def test_committed_markdown_is_rendered_from_committed_json() -> None:
+    reports = Path(__file__).parents[1] / "reports"
+    report = json.loads(
+        (reports / "baseline-vs-extension.json").read_text(encoding="utf-8")
+    )
+
+    assert (reports / "baseline-vs-extension.md").read_text(
+        encoding="utf-8"
+    ) == render_comparison_markdown(report)

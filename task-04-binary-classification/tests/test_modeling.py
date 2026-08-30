@@ -11,14 +11,19 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import binary_classification.modeling as modeling_module
 from binary_classification.analysis import analyze_training_frame, feature_group_ids
-from binary_classification.evaluate import run_experiment
+from binary_classification.calibration import SigmoidCalibrator
+from binary_classification.decision import EXAMPLE_SCENARIOS, DecisionScenario
+from binary_classification.evaluate import render_comparison_markdown, run_experiment
 from binary_classification.modeling import (
     CANDIDATE_NAMES,
     FeatureSchema,
+    _validate_grouped_folds,
     build_pipeline,
     choose_threshold,
     cross_validate_candidates,
+    grouped_fold_assignments,
     infer_feature_schema,
     metrics_at_threshold,
     prepare_features,
@@ -114,6 +119,61 @@ def test_schema_excludes_quarantined_columns_and_normalizes_types() -> None:
     assert "UIN" not in schema.columns
     assert features["BIB"].dtype == np.dtype("float64")
     assert features.columns.tolist() == list(schema.columns)
+
+
+def test_modeling_boundaries_reject_invalid_schema_candidate_and_metrics() -> None:
+    with pytest.raises(ValueError, match="No modeling features"):
+        infer_feature_schema(pd.DataFrame({"id": [1], "Class": ["n"]}))
+    with pytest.raises(ValueError, match="Missing model features"):
+        prepare_features(
+            pd.DataFrame({"numeric": [1]}),
+            FeatureSchema(numeric=("numeric",), categorical=("missing",)),
+        )
+    with pytest.raises(ValueError, match="Unknown candidate"):
+        build_pipeline("unknown", FeatureSchema(numeric=("numeric",), categorical=()))
+    empty_target: Any = pd.Series([], dtype="bool")
+    with pytest.raises(ValueError, match="cannot be empty"):
+        choose_threshold(empty_target, np.array([]), false_negative_cost=1)
+    with pytest.raises(ValueError, match="both target classes"):
+        metrics_at_threshold(pd.Series([True, True]), np.array([0.2, 0.8]), 0.5)
+
+
+def test_grouped_fold_validation_rejects_each_invalid_boundary() -> None:
+    target = pd.Series([False, True])
+    groups = pd.Series([0, 1], dtype="int64")
+    with pytest.raises(ValueError, match="at least 2"):
+        _validate_grouped_folds(target, groups, 1)
+    with pytest.raises(ValueError, match="equal length"):
+        _validate_grouped_folds(target, groups.iloc[:1], 2)
+    missing = groups.astype("float64")
+    missing.iloc[0] = np.nan
+    with pytest.raises(ValueError, match="missing"):
+        _validate_grouped_folds(target, missing, 2)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="distinct feature groups"):
+        _validate_grouped_folds(target, groups, 2)
+
+    frame = _joined_frame(20)
+    with pytest.raises(ValueError, match="equal length"):
+        grouped_fold_assignments(
+            frame, feature_group_ids(frame).iloc[:-1], seed=1, folds=2
+        )
+
+
+def test_grouped_fold_assignment_detects_incomplete_splitter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class IncompleteSplitter:
+        def __init__(self, **_: Any) -> None:
+            pass
+
+        def split(self, *_: Any) -> list[tuple[np.ndarray, np.ndarray]]:
+            return [(np.arange(1, 20), np.array([0]))]
+
+    frame = _joined_frame(20)
+    monkeypatch.setattr(modeling_module, "StratifiedGroupKFold", IncompleteSplitter)
+
+    with pytest.raises(RuntimeError, match="did not assign every row"):
+        grouped_fold_assignments(frame, feature_group_ids(frame), seed=1, folds=5)
 
 
 def test_preprocessing_is_fitted_only_on_training_categories() -> None:
@@ -332,6 +392,140 @@ def test_end_to_end_run_serializes_pipeline_metrics_and_is_reproducible(
     with (tmp_path / "first" / "selected-model.pkl").open("rb") as model_file:
         restored: Any = pickle.load(model_file)
     assert set(restored) == {"pipeline", "schema"}
+
+
+def test_extension_run_calibrates_serializes_and_writes_one_source_report(
+    tmp_path: Path,
+) -> None:
+    part1, part2 = _synthetic_tables()
+    part1_path = tmp_path / "part1.csv"
+    part2_path = tmp_path / "part2.csv"
+    part1.to_csv(part1_path, sep=";", index=False)
+    part2.to_csv(part2_path, sep=";", index=False)
+    output = tmp_path / "extension"
+
+    result = run_experiment(
+        part1_path,
+        part2_path,
+        output,
+        seed=23,
+        cost_scenarios=tuple(EXAMPLE_SCENARIOS.values()),
+    )
+
+    report = json.loads(
+        (output / "baseline-vs-extension.json").read_text(encoding="utf-8")
+    )
+    markdown = (output / "baseline-vs-extension.md").read_text(encoding="utf-8")
+    with (output / "selected-model.pkl").open("rb") as model_file:
+        artifact: Any = pickle.load(model_file)
+
+    assert report["schema_version"] == "1.0"
+    assert report["assignment_baseline"]["selected_model"] == result.selected_model
+    assert report["business_extension"]["mode_status"] == "evaluated"
+    assert report["business_extension"]["calibration"]["artifact_round_trip_parity"]
+    assert len(report["business_extension"]["decision_scenarios"]) == 2
+    assert report["metadata"]["row_counts"] == {
+        "training": result.training_rows,
+        "holdout": result.holdout_rows,
+    }
+    assert markdown == render_comparison_markdown(report)
+    assert "risk" not in json.dumps(report)
+    assert set(artifact) == {
+        "artifact_schema_version",
+        "calibrator",
+        "decision_scenarios",
+        "pipeline",
+        "schema",
+        "selected_model",
+    }
+
+
+def test_extension_rejects_duplicate_names_and_wrong_label_mapping() -> None:
+    duplicate = EXAMPLE_SCENARIOS["balanced-review"]
+    with pytest.raises(ValueError, match="names must be unique"):
+        run_experiment(
+            "missing-part1",
+            "missing-part2",
+            "unused",
+            cost_scenarios=(duplicate, duplicate),
+        )
+    reversed_labels = DecisionScenario(
+        name="reversed",
+        false_positive_cost=1.0,
+        false_negative_cost=1.0,
+        review_cost=1.0,
+        negative_label="n",
+        positive_label="y",
+    )
+    with pytest.raises(ValueError, match="labels must map"):
+        run_experiment(
+            "missing-part1",
+            "missing-part2",
+            "unused",
+            cost_scenarios=(reversed_labels,),
+        )
+
+
+def test_run_rejects_raw_artifact_parity_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    part1, part2 = _synthetic_tables()
+    part1_path = tmp_path / "part1.csv"
+    part2_path = tmp_path / "part2.csv"
+    part1.to_csv(part1_path, sep=";", index=False)
+    part2.to_csv(part2_path, sep=";", index=False)
+    original_load = pickle.load
+
+    class ChangedPipeline:
+        def __init__(self, pipeline: Any) -> None:
+            self.pipeline = pipeline
+
+        def predict_proba(self, features: pd.DataFrame) -> np.ndarray:
+            probabilities = np.asarray(
+                self.pipeline.predict_proba(features), dtype="float64"
+            ).copy()
+            probabilities[0, 1] = np.nextafter(probabilities[0, 1], 1.0)
+            return probabilities
+
+    def changed_load(model_file: Any) -> dict[str, Any]:
+        artifact: dict[str, Any] = original_load(model_file)
+        artifact["pipeline"] = ChangedPipeline(artifact["pipeline"])
+        return artifact
+
+    monkeypatch.setattr(pickle, "load", changed_load)
+
+    with pytest.raises(RuntimeError, match="model predictions differ"):
+        run_experiment(part1_path, part2_path, tmp_path / "output")
+
+
+def test_run_rejects_calibrator_artifact_parity_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    part1, part2 = _synthetic_tables()
+    part1_path = tmp_path / "part1.csv"
+    part2_path = tmp_path / "part2.csv"
+    part1.to_csv(part1_path, sep=";", index=False)
+    part2.to_csv(part2_path, sep=";", index=False)
+    original_predict = SigmoidCalibrator.predict
+    calls = 0
+
+    def unstable_predict(
+        self: SigmoidCalibrator, probabilities: np.ndarray
+    ) -> np.ndarray:
+        nonlocal calls
+        calls += 1
+        result = np.asarray(original_predict(self, probabilities), dtype="float64")
+        return result if calls == 1 else np.clip(result + 1e-4, 0.0, 1.0)
+
+    monkeypatch.setattr(SigmoidCalibrator, "predict", unstable_predict)
+
+    with pytest.raises(RuntimeError, match="calibrator predictions differ"):
+        run_experiment(
+            part1_path,
+            part2_path,
+            tmp_path / "output",
+            cost_scenarios=(EXAMPLE_SCENARIOS["balanced-review"],),
+        )
 
 
 def test_committed_metrics_match_private_data_when_supplied(tmp_path: Path) -> None:

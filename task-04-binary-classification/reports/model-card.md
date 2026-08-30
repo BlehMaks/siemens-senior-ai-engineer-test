@@ -64,7 +64,7 @@ The untouched holdout was evaluated once:
 Accuracy is included for context only. A majority-only rule would already appear
 strong on this target, so PR-AUC and minority errors drive the decision.
 
-## Calibration and reliability slices
+## Assignment baseline calibration and reliability slices
 
 The selected model's holdout Brier score is `0.1194`. It is overconfident: the
 highest probability bin averages `0.9856`, while its observed minority rate is only
@@ -76,6 +76,27 @@ false negatives and all 64 false positives. The `VOL=f` slice has 48 false posit
 and no false negatives; `VOL=t` has 16 false positives and all 8 false negatives.
 `KAT=ccc` has 16 false positives and 2 false negatives, while `KAT=ddd` has 48 and 6.
 These are reliability slices over anonymized fields, not fairness claims.
+
+## Opt-in calibrated decision layer
+
+The business extension does not replace the baseline probabilities or threshold
+metrics. After candidate selection, it fits a sigmoid on the selected model's
+grouped out-of-fold training probabilities. Complete duplicate feature groups stay
+inside one validation fold, and holdout labels are not used to fit the mapping.
+
+Calibrated probabilities feed an explicit three-way expected-cost policy: predict
+class `y`, request manual review, or predict class `n`. False-positive,
+false-negative, and review costs come from an explicitly selected example scenario
+or an owner-confirmed versioned local configuration. Ties list all minimum-cost
+actions and prefer visible manual review when review is tied. Reported costs are
+relative scenario units, not financial estimates.
+
+An extension run writes machine-readable JSON and Markdown from the same result
+object. It separately reports raw baseline quality, calibrated probability quality,
+automatic-decision coverage, review rate, automatic error rate, confusion counts,
+and expected versus realized scenario cost. The saved trusted artifact includes the
+pipeline, schema, sigmoid parameters, selected model, and scenarios; immediate reload
+checks probability parity to `1e-12` absolute tolerance.
 
 ## CatBoost decision
 
@@ -111,6 +132,7 @@ contain no source rows.
 - The holdout is one grouped split, and only 55 minority rows appear in it.
 - The 5:1 cost ratio is illustrative and must be replaced by an owner-approved loss
   model before deployment.
-- Calibration is inadequate for decisions that require probability meaning.
+- Assignment-baseline probabilities are uncalibrated; the opt-in sigmoid remains
+  subject to owner confirmation and external validation.
 - Drift, temporal ordering, external validation, and live monitoring are not
   available in the assignment data.

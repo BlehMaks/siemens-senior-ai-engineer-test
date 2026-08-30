@@ -40,6 +40,13 @@ def test_loads_semicolon_tables_and_joins_one_row_per_entity(tmp_path: Path) -> 
     assert dataset.audit.entity_rows == 2
 
 
+def test_unreadable_input_is_a_data_contract_error(tmp_path: Path) -> None:
+    _, part2 = _valid_files(tmp_path)
+
+    with pytest.raises(DataContractError, match="Could not read"):
+        load_training_data(tmp_path / "missing.csv", part2)
+
+
 def test_exact_duplicates_are_removed_and_join_trap_is_reported(tmp_path: Path) -> None:
     part1 = _write(tmp_path / "part1.csv", PART1_HEADER, [*PART1_ROWS, PART1_ROWS[0]])
     part2 = _write(tmp_path / "part2.csv", PART2_HEADER, [*PART2_ROWS, PART2_ROWS[0]])

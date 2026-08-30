@@ -8,6 +8,7 @@ import pytest
 
 from binary_classification.analysis import (
     analyze_training_frame,
+    binary_target,
     feature_group_ids,
     write_analysis,
 )
@@ -35,6 +36,11 @@ def _analysis_frame(rows: int = 100) -> pd.DataFrame:
             "Class": target,
         }
     )
+
+
+def test_binary_target_requires_the_declared_column() -> None:
+    with pytest.raises(ValueError, match="must contain"):
+        binary_target(pd.DataFrame({"not-Class": ["n", "y"]}))
 
 
 def test_profile_captures_class_missingness_cardinality_and_duplicates() -> None:

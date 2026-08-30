@@ -195,6 +195,28 @@ def _validate_feature_groups(frame: pd.DataFrame, groups: pd.Series[int]) -> Non
         raise ValueError("supplied groups must match complete feature groups")
 
 
+def grouped_fold_assignments(
+    frame: pd.DataFrame,
+    groups: pd.Series[int],
+    *,
+    seed: int = 42,
+    folds: int = 5,
+) -> NDArray[np.int64]:
+    """Return one deterministic validation-fold ID per complete feature group."""
+
+    target = binary_target(frame).reset_index(drop=True)
+    groups = groups.reset_index(drop=True)
+    _validate_feature_groups(frame, groups)
+    _validate_grouped_folds(target, groups, folds)
+    splitter = StratifiedGroupKFold(n_splits=folds, shuffle=True, random_state=seed)
+    assignments = np.full(len(frame), -1, dtype="int64")
+    for fold, (_, validation_index) in enumerate(splitter.split(frame, target, groups)):
+        assignments[validation_index] = fold
+    if (assignments < 0).any():
+        raise RuntimeError("Grouped cross-validation did not assign every row")
+    return assignments
+
+
 def _validate_probabilities(
     target: pd.Series[bool] | NDArray[np.bool_],
     probabilities: NDArray[np.float64],
@@ -268,16 +290,15 @@ def cross_validate_candidates(
     features = prepare_features(frame, schema)
     target = binary_target(frame).reset_index(drop=True)
     groups = groups.reset_index(drop=True)
-    _validate_feature_groups(frame, groups)
-    _validate_grouped_folds(target, groups, folds)
-    splitter = StratifiedGroupKFold(n_splits=folds, shuffle=True, random_state=seed)
-    split_indices = list(splitter.split(features, target, groups))
+    fold_assignments = grouped_fold_assignments(frame, groups, seed=seed, folds=folds)
     results: list[CandidateMetrics] = []
     probabilities_by_name: dict[str, NDArray[np.float64]] = {}
     for name in CANDIDATE_NAMES:
         probabilities = np.empty(len(frame), dtype="float64")
         fold_scores: list[float] = []
-        for train_index, validation_index in split_indices:
+        for fold in range(folds):
+            validation_index = np.flatnonzero(fold_assignments == fold)
+            train_index = np.flatnonzero(fold_assignments != fold)
             pipeline = build_pipeline(name, schema, seed=seed)
             pipeline.fit(features.iloc[train_index], target.iloc[train_index])
             fold_probabilities = pipeline.predict_proba(
