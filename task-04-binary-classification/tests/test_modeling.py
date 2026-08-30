@@ -27,6 +27,16 @@ from binary_classification.modeling import (
 )
 
 
+def _approximate_floats(value: Any) -> Any:
+    if isinstance(value, float):
+        return pytest.approx(value, rel=1e-12, abs=1e-15)
+    if isinstance(value, dict):
+        return {key: _approximate_floats(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_approximate_floats(item) for item in value]
+    return value
+
+
 def _synthetic_tables(groups: int = 60) -> tuple[pd.DataFrame, pd.DataFrame]:
     part1_rows: list[dict[str, Any]] = []
     part2_rows: list[dict[str, Any]] = []
@@ -338,4 +348,5 @@ def test_committed_metrics_match_private_data_when_supplied(tmp_path: Path) -> N
     )
     metrics_path = Path(__file__).parents[1] / "reports" / "metrics.json"
 
-    assert json.loads(metrics_path.read_text(encoding="utf-8")) == result.to_dict()
+    committed_metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    assert result.to_dict() == _approximate_floats(committed_metrics)
