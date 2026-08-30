@@ -341,3 +341,28 @@ def test_incomplete_integer_literals_use_magnitude(number: str, expected: bool) 
     content = _seed("tok", f"en = {number}\nif (\n")
 
     assert _contains_credential_assignment("config.py", content) is expected
+
+
+def test_nested_static_starred_conditionals_are_inspected() -> None:
+    source = _seed(
+        "tok",
+        'en, tail = *(["12345678"] if first else ',
+        '([runtime_token] if second else [other_token])), "tail"\n',
+    ).decode()
+
+    assert _contains_credential_assignment("config.py", source.encode())
+
+
+def test_correlated_starred_conditionals_keep_branch_pairing() -> None:
+    source = _seed(
+        "tok",
+        "en, harmless = *([runtime_token] if enabled else []), ",
+        '*(["12345678"] if enabled else [runtime_token, "12345678"])\n',
+    ).decode()
+    for enabled in (True, False):
+        namespace = {"enabled": enabled, "runtime_token": "r"}
+        exec(source, namespace)
+        assert namespace["token"] == "r"
+        assert namespace["harmless"] == "12345678"
+
+    assert not _contains_credential_assignment("config.py", source.encode())

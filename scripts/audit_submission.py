@@ -535,7 +535,7 @@ def _python_sequence_assignment_contains_literal(
         _python_expanded_sequence_assignment_contains_literal(
             targets, expanded_values, source
         )
-        for expanded_values in _python_expand_static_starred_values(values)
+        for expanded_values, _ in _python_expand_static_starred_values(values)
     )
 
 
@@ -588,38 +588,63 @@ def _python_expanded_sequence_assignment_contains_literal(
 
 def _python_expand_static_starred_values(
     values: list[ast.expr],
-) -> list[list[ast.expr]]:
+) -> list[tuple[list[ast.expr], dict[str, bool]]]:
     """Return exact alternatives while preserving unknown starred segments."""
 
-    expanded: list[list[ast.expr]] = [[]]
+    expanded: list[tuple[list[ast.expr], dict[str, bool]]] = [([], {})]
     for value in values:
         alternatives = _python_static_starred_value_alternatives(value)
-        expanded = [
-            [*prefix, *alternative]
-            for prefix in expanded
-            for alternative in alternatives
-        ]
+        combined: list[tuple[list[ast.expr], dict[str, bool]]] = []
+        for prefix, prefix_conditions in expanded:
+            for alternative, alternative_conditions in alternatives:
+                if any(
+                    key in prefix_conditions and prefix_conditions[key] != expected
+                    for key, expected in alternative_conditions.items()
+                ):
+                    continue
+                combined.append(
+                    (
+                        [*prefix, *alternative],
+                        {**prefix_conditions, **alternative_conditions},
+                    )
+                )
+        expanded = combined
     return expanded
 
 
 def _python_static_starred_value_alternatives(
     value: ast.expr,
-) -> list[list[ast.expr]]:
+) -> list[tuple[list[ast.expr], dict[str, bool]]]:
     if not isinstance(value, ast.Starred):
-        return [[value]]
-    operand = value.value
-    if isinstance(operand, (ast.List, ast.Tuple)):
-        return _python_expand_static_starred_values(operand.elts)
-    if (
-        isinstance(operand, ast.IfExp)
-        and isinstance(operand.body, (ast.List, ast.Tuple))
-        and isinstance(operand.orelse, (ast.List, ast.Tuple))
-    ):
-        return [
-            *_python_expand_static_starred_values(operand.body.elts),
-            *_python_expand_static_starred_values(operand.orelse.elts),
-        ]
-    return [[value]]
+        return [([value], {})]
+    alternatives = _python_sequence_expression_alternatives(value.value)
+    return alternatives if alternatives is not None else [([value], {})]
+
+
+def _python_sequence_expression_alternatives(
+    value: ast.expr,
+) -> list[tuple[list[ast.expr], dict[str, bool]]] | None:
+    if isinstance(value, (ast.List, ast.Tuple)):
+        return _python_expand_static_starred_values(value.elts)
+    if not isinstance(value, ast.IfExp):
+        return None
+
+    body = _python_sequence_expression_alternatives(value.body)
+    orelse = _python_sequence_expression_alternatives(value.orelse)
+    if body is None or orelse is None:
+        return None
+    condition = (
+        f"name:{value.test.id}"
+        if isinstance(value.test, ast.Name)
+        else f"node:{id(value.test)}"
+    )
+    alternatives: list[tuple[list[ast.expr], dict[str, bool]]] = []
+    for branch, expected in ((body, True), (orelse, False)):
+        for expressions, conditions in branch:
+            if condition in conditions and conditions[condition] != expected:
+                continue
+            alternatives.append((expressions, {**conditions, condition: expected}))
+    return alternatives
 
 
 def _python_value_contains_literal(value: ast.expr, source: str) -> bool:
