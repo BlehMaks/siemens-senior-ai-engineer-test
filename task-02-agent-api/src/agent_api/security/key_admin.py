@@ -297,10 +297,17 @@ def _quarantine_owned_output(
         try:
             quarantine_descriptor = os.open(
                 quarantined_name,
-                os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
+                os.O_WRONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
                 dir_fd=descriptor,
             )
         except OSError:
+            _restore_quarantined_entry(
+                descriptor,
+                source=quarantined_name,
+                destination=name,
+            )
             return
         try:
             quarantined = os.fstat(quarantine_descriptor)
@@ -326,6 +333,22 @@ def _quarantine_owned_output(
         with suppress(OSError):
             os.fsync(descriptor)
         return
+
+
+def _restore_quarantined_entry(
+    descriptor: int,
+    *,
+    source: str,
+    destination: str,
+) -> None:
+    with suppress(OSError):
+        if _rename_noreplace(
+            descriptor,
+            source,
+            descriptor,
+            destination,
+        ):
+            _create_empty_quarantine_marker(descriptor, source)
 
 
 def _create_empty_quarantine_marker(descriptor: int, name: str) -> None:
@@ -362,6 +385,14 @@ def _rename_noreplace(
     elif sys.platform.startswith("linux"):
         rename = getattr(libc, "renameat2", None)
         flag = 1
+        if rename is None:
+            return _linux_syscall_rename_noreplace(
+                libc,
+                source_descriptor,
+                source,
+                destination_descriptor,
+                destination,
+            )
     else:
         rename = None
         flag = 0
@@ -389,6 +420,89 @@ def _rename_noreplace(
     if error == errno.EEXIST:
         return False
     raise OSError(error, os.strerror(error))
+
+
+def _linux_syscall_rename_noreplace(
+    libc: ctypes.CDLL,
+    source_descriptor: int,
+    source: str,
+    destination_descriptor: int,
+    destination: str,
+) -> bool:
+    syscall = getattr(libc, "syscall", None)
+    machine = os.uname().machine.lower()
+    syscall_number = {
+        "aarch64": 276,
+        "arm64": 276,
+        "armv7l": 382,
+        "i386": 353,
+        "i686": 353,
+        "loongarch64": 276,
+        "ppc64": 357,
+        "ppc64le": 357,
+        "riscv64": 276,
+        "s390x": 347,
+        "x86_64": 316,
+    }.get(machine)
+    if syscall is None or syscall_number is None:
+        return _link_noreplace_move(
+            source_descriptor,
+            source,
+            destination_descriptor,
+            destination,
+        )
+
+    syscall.restype = ctypes.c_long
+    result = syscall(
+        syscall_number,
+        source_descriptor,
+        ctypes.c_char_p(os.fsencode(source)),
+        destination_descriptor,
+        ctypes.c_char_p(os.fsencode(destination)),
+        1,
+    )
+    if result == 0:
+        return True
+    error = ctypes.get_errno()
+    if error == errno.EEXIST:
+        return False
+    raise OSError(error, os.strerror(error))
+
+
+def _link_noreplace_move(
+    source_descriptor: int,
+    source: str,
+    destination_descriptor: int,
+    destination: str,
+) -> bool:
+    try:
+        before = os.stat(source, dir_fd=source_descriptor, follow_symlinks=False)
+        os.link(
+            source,
+            destination,
+            src_dir_fd=source_descriptor,
+            dst_dir_fd=destination_descriptor,
+            follow_symlinks=False,
+        )
+    except FileExistsError:
+        return False
+    except OSError as exc:
+        raise OSError(errno.ENOTSUP, "no no-replace rename primitive") from exc
+
+    source_after = os.stat(source, dir_fd=source_descriptor, follow_symlinks=False)
+    destination_after = os.stat(
+        destination,
+        dir_fd=destination_descriptor,
+        follow_symlinks=False,
+    )
+    identity = (before.st_dev, before.st_ino)
+    if (source_after.st_dev, source_after.st_ino) != identity or (
+        destination_after.st_dev,
+        destination_after.st_ino,
+    ) != identity:
+        raise OSError(errno.ESTALE, "source changed during no-replace move")
+    os.unlink(source, dir_fd=source_descriptor)
+    return True
 
 
 def _chmod_at_resilient(descriptor: int, name: str, mode: int) -> None:

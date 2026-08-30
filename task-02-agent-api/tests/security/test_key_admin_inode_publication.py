@@ -598,3 +598,123 @@ def test_marker_fchmod_wrapper_failure_keeps_documented_mode(
     assert moved and marker_descriptor >= 0 and len(cleanup) == 1
     assert stat.S_IMODE(cleanup[0].stat().st_mode) == 0o700
     assert stat.S_IMODE((cleanup[0] / "owned").stat().st_mode) == 0o600
+
+
+def test_linux_without_renameat2_symbol_uses_noreplace_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.write_bytes(b"source")
+    monkeypatch.setattr(key_admin.sys, "platform", "linux")
+    monkeypatch.setattr(key_admin.ctypes, "CDLL", lambda *args, **kwargs: object())
+    descriptor = os.open(tmp_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        assert key_admin._rename_noreplace(
+            descriptor,
+            source.name,
+            descriptor,
+            destination.name,
+        )
+    finally:
+        os.close(descriptor)
+
+    assert not source.exists()
+    assert destination.read_bytes() == b"source"
+
+
+def test_failed_nonblocking_quarantine_open_restores_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "generated.key"
+    output.write_bytes(b"owned")
+    real_open = os.open
+    observed_flags = 0
+
+    def fail_quarantine_open(
+        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal observed_flags
+        if (
+            isinstance(target, str)
+            and target.endswith("/owned")
+            and observed_flags == 0
+        ):
+            observed_flags = flags
+            raise OSError(errno.ENXIO, "injected special-file open failure")
+        return real_open(target, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(key_admin.os, "open", fail_quarantine_open)
+    descriptor = real_open(
+        tmp_path,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        current = os.stat(output.name, dir_fd=descriptor, follow_symlinks=False)
+        key_admin._quarantine_owned_output(
+            descriptor,
+            name=output.name,
+            expected=(current.st_dev, current.st_ino),
+        )
+    finally:
+        os.close(descriptor)
+
+    assert observed_flags & getattr(os, "O_NONBLOCK", 0)
+    assert output.read_bytes() == b"owned"
+    cleanup = _cleanup_entries(tmp_path)
+    assert len(cleanup) == 1
+    assert _cleanup_payload(cleanup[0]) == b""
+
+
+def test_symlink_race_during_move_is_restored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "generated.key"
+    displaced = tmp_path / "created.key"
+    foreign_target = tmp_path / "foreign-target"
+    foreign_target.write_bytes(b"foreign-owner\n")
+    real_fsync = os.fsync
+    real_rename = key_admin._rename_noreplace
+    raced = False
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError(errno.EIO, "injected directory fsync failure")
+        real_fsync(descriptor)
+
+    def replace_source_during_move(
+        source_descriptor: int,
+        source: str,
+        destination_descriptor: int,
+        destination: str,
+    ) -> bool:
+        nonlocal raced
+        if not raced and destination.endswith("/owned"):
+            os.rename(
+                source,
+                displaced.name,
+                src_dir_fd=source_descriptor,
+                dst_dir_fd=source_descriptor,
+            )
+            os.symlink(foreign_target, source, dir_fd=source_descriptor)
+            raced = True
+        return real_rename(
+            source_descriptor,
+            source,
+            destination_descriptor,
+            destination,
+        )
+
+    monkeypatch.setattr(os, "fsync", fail_directory_fsync)
+    monkeypatch.setattr(key_admin, "_rename_noreplace", replace_source_during_move)
+
+    with pytest.raises(SystemExit, match="protected output file"):
+        key_admin._write_plaintext_file(output, "temporary-key")
+
+    assert raced and output.is_symlink()
+    assert displaced.read_bytes() == b""
+    assert output.read_bytes() == b"foreign-owner\n"
