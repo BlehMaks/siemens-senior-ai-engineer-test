@@ -376,6 +376,22 @@ class FirestoreRunRepository:
         )
         return tuple(_decode_required_run(row) for row in rows)
 
+    async def list_session_recent(
+        self, *, tenant_id: OpaqueId, session_id: OpaqueId, limit: int = 100
+    ) -> tuple[RunRecord, ...]:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        rows = await self._store.list(
+            collection=_RUNS,
+            filters={
+                "tenant_id": _scope_id(tenant_id),
+                "session_id": _scope_id(session_id),
+            },
+            order_by=("-created_at", "-run_id"),
+            limit=limit,
+        )
+        return tuple(reversed(tuple(_decode_required_run(row) for row in rows)))
+
     async def claim(self, request: ClaimRequest) -> ClaimResult:
         checked = _checked_claim(request)
 

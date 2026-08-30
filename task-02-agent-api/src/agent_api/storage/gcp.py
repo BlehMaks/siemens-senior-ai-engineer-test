@@ -230,7 +230,10 @@ def _build_query(
         for key, value in filters.items():
             built = built.where(key, "==", value)
     for field in order_by:
-        built = built.order_by(field)
+        if field.startswith("-"):
+            built = built.order_by(field[1:], direction="DESCENDING")
+        else:
+            built = built.order_by(field)
     if start_after is not None:
         built = built.start_after(dict(start_after))
     if limit is not None:

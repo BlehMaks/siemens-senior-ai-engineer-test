@@ -397,11 +397,19 @@ class LocalWorker:
                 run_id=run.run_id,
                 request=run.query,
             )
-        history = await self._repository.list_session(
-            tenant_id=run.tenant_id,
-            session_id=run.session_id,
-            limit=7,
-        )
+        list_recent = getattr(self._repository, "list_session_recent", None)
+        if callable(list_recent):
+            history = await list_recent(
+                tenant_id=run.tenant_id,
+                session_id=run.session_id,
+                limit=7,
+            )
+        else:
+            history = await self._repository.list_session(
+                tenant_id=run.tenant_id,
+                session_id=run.session_id,
+                limit=100,
+            )
         completed = [
             item
             for item in history

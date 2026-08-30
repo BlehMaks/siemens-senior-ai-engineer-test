@@ -233,6 +233,7 @@ class OllamaResearchExecutor:
             provider=provider,
             memory_reader=memory_reader,
             memory_reads_enabled=memory_reader is not None,
+            model_transport_profile=self.settings.transport_profile,
         )
 
 

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from numbers import Real
-from typing import Protocol, TypeVar, cast
+from typing import Literal, Protocol, TypeVar, cast
 
 from pydantic import Field, ValidationError, model_validator
 
@@ -417,6 +417,7 @@ class ResearchRunner:
     cancel_requested: Callable[[], bool] | None = None
     memory_reader: ReviewedMemoryReadPort | None = None
     memory_reads_enabled: bool = False
+    model_transport_profile: Literal["local", "cloud"] | None = None
     trace_sink: ResearchTraceSink | None = field(
         default_factory=StructuredLoggingTraceSink
     )
@@ -426,6 +427,8 @@ class ResearchRunner:
             raise ValueError("memory_reads_enabled must be a boolean")
         if self.memory_reads_enabled and self.memory_reader is None:
             raise ValueError("enabled memory reads require a reader")
+        if self.model_transport_profile not in {None, "local", "cloud"}:
+            raise ValueError("model_transport_profile must be local or cloud")
         if (
             isinstance(self.fetch_reservation_bytes, bool)
             or not isinstance(self.fetch_reservation_bytes, int)
@@ -499,6 +502,17 @@ class ResearchRunner:
                 count=len(context),
             ),
         )
+        if self.model_transport_profile is not None:
+            self._record(
+                trace,
+                ActionTraceRecord(
+                    stage=TraceStage.RUN,
+                    action="model.transport",
+                    outcome=TraceOutcome.SUCCEEDED,
+                    profile=self.model_transport_profile,
+                    safe_id=run_id,
+                ),
+            )
 
         try:
             snapshot = await self._execute(
@@ -1049,6 +1063,11 @@ class ResearchRunner:
                 for chunk in selected_context.chunks
                 if chunk.document_id == research_document.document_id
             )[:5]
+            selected_chunks = tuple(
+                chunk
+                for chunk in selected_context.chunks
+                if chunk.document_id == research_document.document_id
+            )[:5]
             if not quotes:
                 continue
             try:
@@ -1058,6 +1077,7 @@ class ResearchRunner:
                         extracted,
                         retrieved_at=retrieved_at,
                         quotes=quotes,
+                        selected_chunks=selected_chunks,
                         now=retrieved_at,
                     )
                 )
@@ -1102,6 +1122,15 @@ class ResearchRunner:
                 "source_title": record.source_title,
                 "excerpt": record.public.summary,
                 "quotes": list(record.public.quotes),
+                "locations": [
+                    {
+                        "chunk_id": chunk.chunk_id,
+                        "page_number": chunk.page_number,
+                        "section": chunk.section,
+                        "table_index": chunk.table_index,
+                    }
+                    for chunk in record.selected_chunks
+                ],
             }
             for record in records
         ]
@@ -1256,6 +1285,12 @@ class ResearchRunner:
         trace: list[ActionTraceRecord],
         record: ActionTraceRecord,
     ) -> None:
+        if record.safe_id is not None:
+            record = record.model_copy(
+                update={
+                    "safe_id": hashlib.sha256(record.safe_id.encode()).hexdigest()[:24]
+                }
+            )
         if self.trace_sink is not None:
             with contextlib.suppress(Exception):
                 self.trace_sink.record(record)

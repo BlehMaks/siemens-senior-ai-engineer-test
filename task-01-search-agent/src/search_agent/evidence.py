@@ -13,6 +13,7 @@ from itertools import islice
 from pydantic import AnyHttpUrl, TypeAdapter, ValidationError
 
 from .contracts import ExtractedEvidence, SearchHit
+from .documents import ResearchChunk
 from .retrieval import (
     RetrievalError,
     RetrievalFailureReason,
@@ -56,6 +57,7 @@ class EvidenceRecord:
     source_title: str
     title_provenance_hash: str
     selected_context: SelectedContext | None = None
+    selected_chunks: tuple[ResearchChunk, ...] = ()
 
     @property
     def evidence_id(self) -> str:
@@ -74,6 +76,7 @@ def build_evidence(
     quotes: Sequence[str] = (),
     request_text: str | None = None,
     selected_context: SelectedContext | None = None,
+    selected_chunks: Sequence[ResearchChunk] = (),
     now: datetime | None = None,
     max_age: timedelta = _DEFAULT_MAX_AGE,
 ) -> EvidenceRecord:
@@ -139,6 +142,16 @@ def build_evidence(
     if selected_context is not None:
         quotes = selected_context.quotes
     normalized_quotes = _validated_quotes(quotes, source_text)
+    checked_chunks = tuple(selected_chunks)
+    if any(
+        chunk.canonical_url != hit_url
+        or chunk.text[:400].rstrip() not in normalized_quotes
+        for chunk in checked_chunks
+    ):
+        raise EvidenceValidationError(
+            EvidenceFailureReason.INVALID_DATA,
+            "selected chunk provenance does not match evidence",
+        )
     content_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
     evidence_id = _evidence_id(hit_url, content_hash)
     public = ExtractedEvidence(
@@ -158,6 +171,7 @@ def build_evidence(
         source_title=title,
         title_provenance_hash=_title_provenance_hash(hit_url, title),
         selected_context=selected_context,
+        selected_chunks=checked_chunks,
     )
 
 
