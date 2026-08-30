@@ -1,0 +1,15 @@
+project_id                     = "replace-with-production-cell-project"
+region                         = "europe-west1"
+environment                    = "prod"
+system_code                    = "sai"
+model_plane_profile            = "cloud_run_gpu"
+model_image                    = "europe-west1-docker.pkg.dev/replace-with-production-cell-project/models/ollama-qwen@sha256:replace-with-reviewed-64-character-digest"
+model_name                     = "qwen3:8b-reviewed-version"
+worker_service_account_email   = "sai-prod-worker@replace-with-production-cell-project.iam.gserviceaccount.com"
+deployer_service_account_email = "sai-prod-deploy@replace-with-production-cell-project.iam.gserviceaccount.com"
+model_min_instances            = 0
+model_max_instances            = 1
+gpu_zonal_redundancy_disabled  = false
+labels = {
+  owner = "ml-platform"
+}

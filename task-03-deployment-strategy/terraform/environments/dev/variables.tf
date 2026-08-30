@@ -90,6 +90,17 @@ variable "worker_max_instances" {
   }
 }
 
+variable "model_plane_profile" {
+  description = "The assessment deploy cannot create paid model-serving capacity."
+  type        = string
+  default     = "assessment"
+
+  validation {
+    condition     = var.model_plane_profile == "assessment"
+    error_message = "Use the separate production-model-plane root for model serving."
+  }
+}
+
 variable "api_service_account_email" {
   description = "Bootstrap API runtime identity email."
   type        = string

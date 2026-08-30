@@ -134,6 +134,7 @@ jobs:
       TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
       BUDGET_NOTIFICATION_EMAILS: ${{ vars.GCP_BUDGET_NOTIFICATION_EMAILS }}
       TF_VAR_ingress_mode: baseline
+      TF_VAR_model_plane_profile: assessment
     steps:
       - name: Check out the tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

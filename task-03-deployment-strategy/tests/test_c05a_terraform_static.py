@@ -28,6 +28,9 @@ BOOTSTRAP_TEST = TERRAFORM_ROOT / "bootstrap" / "tests" / "c03_wif_contract.tfte
 DEV_MAIN = TERRAFORM_ROOT / "environments" / "dev" / "main.tf"
 DEV_README = TERRAFORM_ROOT / "environments" / "dev" / "README.md"
 ATTACK_PATH = TERRAFORM_ROOT / "environments" / "dev" / "c05a-attack-path.md"
+MODEL_PLANE_MAIN = TERRAFORM_ROOT / "modules" / "model_plane" / "main.tf"
+MODEL_PLANE_VARIABLES = TERRAFORM_ROOT / "modules" / "model_plane" / "variables.tf"
+MODEL_PLANE_SCRIPT = TASK_ROOT / "scripts" / "model_plane.sh"
 
 
 def read(path: Path) -> str:
@@ -150,3 +153,28 @@ def test_dev_environment_keeps_tasks_and_deployer_identities_distinct() -> None:
         "var.tasks_service_account_email != var.deployer_service_account_email"
         in variables
     )
+    assert 'var.model_plane_profile == "assessment"' in variables
+
+
+def test_production_model_plane_is_explicit_private_and_bounded() -> None:
+    source = read(MODEL_PLANE_MAIN)
+    variables = read(MODEL_PLANE_VARIABLES)
+
+    assert 'default     = "assessment"' in variables
+    assert 'contains(["assessment", "cloud_run_gpu"]' in variables
+    assert '"nvidia.com/gpu" = "1"' in source
+    assert 'accelerator = "nvidia-l4"' in source
+    assert "min_instance_count = var.model_min_instances" in source
+    assert "max_instance_count = var.model_max_instances" in source
+    assert 'ingress              = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"' in source
+    assert 'role     = "roles/run.invoker"' in source
+    assert 'member   = "allUsers"' not in source
+    assert "deletion_protection  = true" in source
+
+
+def test_model_plane_script_requires_cost_ack_and_never_calls_gcloud() -> None:
+    source = read(MODEL_PLANE_SCRIPT)
+
+    assert "MODEL_PLANE_COST_ACKNOWLEDGEMENT=I_ACCEPT_GPU_COSTS" in source
+    assert '"$TERRAFORM_BIN" -chdir="$terraform_root" apply' in source
+    assert "gcloud " not in source

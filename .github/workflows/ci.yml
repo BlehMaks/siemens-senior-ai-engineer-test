@@ -68,9 +68,11 @@ jobs:
             bootstrap \
             modules/identity \
             modules/managed_services \
+            modules/model_plane \
             modules/ingress_policy \
             modules/run_services \
-            environments/dev
+            environments/dev \
+            environments/production-model-plane
           do
             terraform -chdir="task-03-deployment-strategy/terraform/$directory" init -backend=false
             terraform -chdir="task-03-deployment-strategy/terraform/$directory" validate
@@ -78,7 +80,7 @@ jobs:
 
       - name: Run Terraform resource contracts
         run: |
-          for directory in bootstrap modules/identity modules/managed_services modules/ingress_policy modules/run_services environments/dev
+          for directory in bootstrap modules/identity modules/managed_services modules/model_plane modules/ingress_policy modules/run_services environments/dev environments/production-model-plane
           do
             terraform -chdir="task-03-deployment-strategy/terraform/$directory" test
           done
