@@ -468,3 +468,21 @@ def test_deep_conditional_credential_expression_does_not_recurse() -> None:
     compile(source, "config.py", "exec")
 
     assert not _contains_credential_assignment("config.py", source.encode())
+
+
+def test_short_circuited_rebound_preserves_branch_pairing() -> None:
+    source = _seed(
+        "tok",
+        "en, harmless = *([runtime_token] if enabled else []), ",
+        "*((",
+        '["12345678"] if enabled else [runtime_token, "12345678"]',
+        ") if (False and (enabled := False)) else (",
+        '["12345678"] if enabled else [runtime_token, "12345678"]',
+        "))\n",
+    ).decode()
+    for enabled in (True, False):
+        namespace = {"enabled": enabled, "runtime_token": "runtime"}
+        exec(source, namespace)
+        assert namespace["token"] == "runtime"
+
+    assert not _contains_credential_assignment("config.py", source.encode())

@@ -562,8 +562,40 @@ def _python_rebound_names(values: list[ast.expr]) -> set[str]:
                 default for default in node.args.kw_defaults if default is not None
             )
             continue
+        if isinstance(node, ast.BoolOp):
+            for operand in node.values:
+                pending.append(operand)
+                truth = _python_static_truth(operand)
+                if isinstance(node.op, ast.And) and truth is False:
+                    break
+                if isinstance(node.op, ast.Or) and truth is True:
+                    break
+            continue
+        if isinstance(node, ast.IfExp):
+            pending.append(node.test)
+            truth = _python_static_truth(node.test)
+            if truth is True:
+                pending.append(node.body)
+            elif truth is False:
+                pending.append(node.orelse)
+            else:
+                pending.extend((node.body, node.orelse))
+            continue
+        if isinstance(node, ast.GeneratorExp):
+            if node.generators:
+                pending.append(node.generators[0].iter)
+            continue
         pending.extend(ast.iter_child_nodes(node))
     return names
+
+
+def _python_static_truth(value: ast.expr) -> bool | None:
+    if isinstance(value, ast.Constant):
+        return bool(value.value)
+    if isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.Not):
+        operand = _python_static_truth(value.operand)
+        return None if operand is None else not operand
+    return None
 
 
 def _python_expanded_sequence_assignment_contains_literal(
