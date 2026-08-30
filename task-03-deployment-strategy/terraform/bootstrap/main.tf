@@ -209,6 +209,12 @@ resource "google_service_account_iam_member" "deployer_runtime_user" {
   member             = "serviceAccount:${module.deployer_identity.email}"
 }
 
+resource "google_service_account_iam_member" "api_tasks_service_account_user" {
+  service_account_id = module.identity["tasks"].name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${module.identity["api"].email}"
+}
+
 resource "google_service_account_iam_member" "tasks_service_agent_token_creator" {
   service_account_id = module.identity["tasks"].name
   role               = "roles/iam.serviceAccountTokenCreator"

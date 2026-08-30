@@ -48,6 +48,8 @@ output "iam_contract" {
   value = {
     api_queue_enqueuer_role        = "roles/cloudtasks.enqueuer"
     api_queue_enqueuer_member      = "serviceAccount:${var.api_service_account_email}"
+    api_tasks_identity_role        = "roles/iam.serviceAccountUser"
+    api_tasks_identity_member      = "serviceAccount:${var.api_service_account_email}"
     task_viewer_members            = sort(["serviceAccount:${var.api_service_account_email}", "serviceAccount:${var.worker_service_account_email}"])
     task_viewer_role               = "roles/cloudtasks.viewer"
     task_deleter_members           = sort(["serviceAccount:${var.api_service_account_email}", "serviceAccount:${var.worker_service_account_email}"])

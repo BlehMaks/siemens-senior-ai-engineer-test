@@ -93,6 +93,11 @@ run "github_wif_plans_in_one_pass" {
   }
 
   assert {
+    condition     = output.runtime_policy.api_tasks_identity_role == "roles/iam.serviceAccountUser"
+    error_message = "The API must be able to attach only the dedicated Tasks identity to authenticated tasks."
+  }
+
+  assert {
     condition     = output.runtime_policy.dispatch_queue_count == 1 && output.runtime_policy.queue_binding_count == 5
     error_message = "The queue and its five runtime bindings must be ready before the first application deployment."
   }

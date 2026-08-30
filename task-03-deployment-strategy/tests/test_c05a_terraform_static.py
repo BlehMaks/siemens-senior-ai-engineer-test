@@ -60,9 +60,14 @@ def test_run_services_keeps_worker_private_and_oidc_bound() -> None:
     assert "google_service_account_iam_" not in source
     assert 'worker_invoker_role            = "roles/run.invoker"' in outputs
     assert 'api_queue_enqueuer_role        = "roles/cloudtasks.enqueuer"' in outputs
+    assert 'api_tasks_identity_role        = "roles/iam.serviceAccountUser"' in outputs
     assert (
         'tasks_service_agent_token_role = "roles/iam.serviceAccountTokenCreator"'
         in outputs
+    )
+    assert (
+        'resource "google_service_account_iam_member" '
+        '"api_tasks_service_account_user"' in bootstrap
     )
     assert 'resource "google_cloud_tasks_queue"' not in source
     assert 'service_account_email = module.identity["tasks"].email' in bootstrap

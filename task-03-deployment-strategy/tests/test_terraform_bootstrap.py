@@ -337,6 +337,21 @@ def test_deployer_can_attach_only_the_two_cloud_run_identities() -> None:
     )
 
 
+def test_api_can_attach_only_the_dedicated_tasks_identity() -> None:
+    main_tf = read(BOOTSTRAP / "main.tf")
+
+    resource = main_tf.split(
+        'resource "google_service_account_iam_member" "api_tasks_service_account_user"',
+        maxsplit=1,
+    )[1].split("resource ", maxsplit=1)[0]
+    assert 'service_account_id = module.identity["tasks"].name' in resource
+    assert 'role               = "roles/iam.serviceAccountUser"' in resource
+    assert (
+        'member             = "serviceAccount:${module.identity["api"].email}"'
+        in resource
+    )
+
+
 def test_queue_and_service_iam_are_owned_by_human_bootstrap() -> None:
     main_tf = read(BOOTSTRAP / "main.tf")
     run_services_tf = read(RUN_SERVICES / "main.tf")

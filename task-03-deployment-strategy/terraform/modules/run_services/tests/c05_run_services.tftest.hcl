@@ -75,6 +75,14 @@ run "default_contract_is_bounded_and_digest_pinned" {
   }
 
   assert {
+    condition = (
+      output.iam_contract.api_tasks_identity_role == "roles/iam.serviceAccountUser" &&
+      output.iam_contract.api_tasks_identity_member == output.iam_contract.api_queue_enqueuer_member
+    )
+    error_message = "The API task creator must be allowed to attach the dedicated OIDC identity."
+  }
+
+  assert {
     condition = toset(output.iam_contract.task_viewer_members) == toset([
       "serviceAccount:sai-dev-api@contract-assignment-dev.iam.gserviceaccount.com",
       "serviceAccount:sai-dev-worker@contract-assignment-dev.iam.gserviceaccount.com",

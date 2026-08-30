@@ -109,6 +109,7 @@ applied Terraform state.
 | API and worker service accounts | Project | `roles/serviceusage.serviceUsageConsumer` |
 | API and worker service accounts | Each of the two secrets | `roles/secretmanager.secretAccessor` |
 | API service account | Dispatch queue | `roles/cloudtasks.enqueuer`, `roles/cloudtasks.taskDeleter`, `roles/cloudtasks.viewer` |
+| API service account | `sai-dev-tasks` service account | `roles/iam.serviceAccountUser` so task creation may attach the dedicated OIDC identity |
 | Worker service account | Dispatch queue | `roles/cloudtasks.taskDeleter`, `roles/cloudtasks.viewer` |
 | Tasks service account | Worker Cloud Run service | `roles/run.invoker` |
 | Cloud Tasks service agent | Tasks service account | `roles/iam.serviceAccountTokenCreator` |
