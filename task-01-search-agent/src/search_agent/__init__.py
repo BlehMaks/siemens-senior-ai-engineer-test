@@ -55,6 +55,7 @@ from .runner import (
     RunUsage,
     SearchPort,
 )
+from .runtime import OllamaResearchExecutor, OllamaRuntimeSettings
 from .security import (
     GuardedUrl,
     HostResolver,
@@ -112,6 +113,8 @@ __all__ = [
     "HostResolver",
     "IllegalTransitionError",
     "LocalExtractor",
+    "OllamaResearchExecutor",
+    "OllamaRuntimeSettings",
     "OllamaStructuredChatProvider",
     "OptionalAssistance",
     "PlanningDecision",

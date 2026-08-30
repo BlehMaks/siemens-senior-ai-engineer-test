@@ -1,10 +1,11 @@
-"""Minimal offline demonstration entry point for the bounded runner."""
+"""Command-line entry point for demo or real Ollama-backed research."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
+import os
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -16,6 +17,7 @@ from .evidence import build_evidence
 from .planning import QueryPlanner
 from .providers import FakeStructuredChatProvider
 from .runner import ResearchRunner, RunBudget
+from .runtime import OllamaResearchExecutor, OllamaRuntimeSettings
 from .state import RunStatus
 from .tools import ExtractedDocument, FetchedDocument
 
@@ -110,12 +112,28 @@ def _demo_runner(request: str) -> ResearchRunner:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="siemens-search-agent",
-        description="Run the deterministic offline research-agent demonstration.",
+        description="Run the bounded research agent in demo or Ollama mode.",
     )
     parser.add_argument("request", help="research request (3-400 characters)")
     parser.add_argument("--tenant-id", default="tenant-demo")
     parser.add_argument("--session-id", default="session-demo")
     parser.add_argument("--run-id", default="run-demo")
+    parser.add_argument(
+        "--mode",
+        choices=("demo", "ollama"),
+        default=os.environ.get("AGENT_INFERENCE_MODE", "demo"),
+        help="demo is deterministic; ollama uses live model and web adapters",
+    )
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("AGENT_MODEL_NAME"),
+        help="Ollama model name (or AGENT_MODEL_NAME)",
+    )
+    parser.add_argument(
+        "--ollama-base-url",
+        default=os.environ.get("AGENT_MODEL_BASE_URL", "http://127.0.0.1:11434"),
+        help="clean Ollama origin (or AGENT_MODEL_BASE_URL)",
+    )
     return parser
 
 
@@ -128,7 +146,21 @@ async def async_main(
     if not 3 <= len(args.request.strip()) <= 400:
         print("request rejected by input policy", file=sys.stderr)
         return 2
-    selected_runner = runner or _demo_runner(args.request.strip())
+    if runner is not None:
+        selected_runner: ResearchRunner | OllamaResearchExecutor = runner
+    elif args.mode == "demo":
+        selected_runner = _demo_runner(args.request.strip())
+    else:
+        try:
+            selected_runner = OllamaResearchExecutor(
+                OllamaRuntimeSettings(
+                    model_name=args.model or "",
+                    base_url=args.ollama_base_url,
+                )
+            )
+        except ValueError:
+            print("invalid Ollama runtime configuration", file=sys.stderr)
+            return 2
     try:
         result = await selected_runner.run(
             tenant_id=args.tenant_id,

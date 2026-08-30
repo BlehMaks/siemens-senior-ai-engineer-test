@@ -27,6 +27,7 @@ class OllamaStructuredChatProvider:
     think: ThinkMode = False
     keep_alive: str | None = None
     transport: httpx.AsyncBaseTransport | None = None
+    auth: httpx.Auth | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -101,6 +102,7 @@ class OllamaStructuredChatProvider:
             base_url=self.base_url,
             timeout=self.timeout_seconds,
             transport=self.transport,
+            auth=self.auth,
         ) as client:
             response = await client.post("/api/chat", json=payload)
 
