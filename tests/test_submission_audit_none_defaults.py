@@ -287,3 +287,57 @@ def test_conditional_sequence_preserves_target_value_pairing() -> None:
         assert namespace["token"] == expected_token
 
     assert not _contains_credential_assignment("config.py", source.encode())
+
+
+@pytest.mark.parametrize(
+    ("source", "runtime_values"),
+    [
+        (
+            _seed("head, tok", 'en = *runtime_values, *["12345678"]\n').decode(),
+            ["head"],
+        ),
+        (
+            _seed("tok", 'en, tail = *["12345678"], *runtime_values\n').decode(),
+            ["tail"],
+        ),
+        (
+            _seed(
+                "((head, tok",
+                'en), tail) = ((*runtime_values, *["12345678"]), "tail")\n',
+            ).decode(),
+            ["head"],
+        ),
+    ],
+)
+def test_known_star_next_to_unknown_star_keeps_exact_pairing(
+    source: str, runtime_values: list[str]
+) -> None:
+    namespace: dict[str, object] = {"runtime_values": runtime_values}
+    exec(source, namespace)
+    assert namespace["token"] == "12345678"
+
+    assert _contains_credential_assignment("config.py", source.encode())
+
+
+def test_conditional_static_starred_values_are_inspected() -> None:
+    source = _seed(
+        "tok",
+        'en, tail = *(["12345678"] if enabled else [runtime_token]), "tail"\n',
+    ).decode()
+
+    assert _contains_credential_assignment("config.py", source.encode())
+
+
+@pytest.mark.parametrize(
+    ("number", "expected"),
+    [
+        (f"-{10**15 - 1}", False),
+        (hex(10**15), True),
+        (oct(10**15 - 1), False),
+        (bin(10**15 - 1), False),
+    ],
+)
+def test_incomplete_integer_literals_use_magnitude(number: str, expected: bool) -> None:
+    content = _seed("tok", f"en = {number}\nif (\n")
+
+    assert _contains_credential_assignment("config.py", content) is expected

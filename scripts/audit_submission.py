@@ -383,6 +383,12 @@ def _contains_credential_assignment_linewise(path: str, content: bytes) -> bool:
                 or PYTHON_NONE_DEFAULT.match(unquoted)
             ):
                 continue
+            if python_context:
+                integer_literal = _python_integer_literal_contains_credential(unquoted)
+                if integer_literal is not None:
+                    if integer_literal:
+                        return True
+                    continue
             if python_context and _python_tuple_contains_literal(value):
                 return True
             if _is_literal(
@@ -525,9 +531,17 @@ def _python_assignment_contains_literal(
 def _python_sequence_assignment_contains_literal(
     targets: list[ast.expr], values: list[ast.expr], source: str
 ) -> bool:
-    expanded_values = _python_expand_static_starred_values(values)
-    if expanded_values is not None:
-        values = expanded_values
+    return any(
+        _python_expanded_sequence_assignment_contains_literal(
+            targets, expanded_values, source
+        )
+        for expanded_values in _python_expand_static_starred_values(values)
+    )
+
+
+def _python_expanded_sequence_assignment_contains_literal(
+    targets: list[ast.expr], values: list[ast.expr], source: str
+) -> bool:
 
     target_stars = [
         index for index, target in enumerate(targets) if isinstance(target, ast.Starred)
@@ -574,21 +588,38 @@ def _python_sequence_assignment_contains_literal(
 
 def _python_expand_static_starred_values(
     values: list[ast.expr],
-) -> list[ast.expr] | None:
-    """Expand starred list and tuple displays whose length is statically known."""
+) -> list[list[ast.expr]]:
+    """Return exact alternatives while preserving unknown starred segments."""
 
-    expanded: list[ast.expr] = []
+    expanded: list[list[ast.expr]] = [[]]
     for value in values:
-        if not isinstance(value, ast.Starred):
-            expanded.append(value)
-            continue
-        if not isinstance(value.value, (ast.List, ast.Tuple)):
-            return None
-        nested = _python_expand_static_starred_values(value.value.elts)
-        if nested is None:
-            return None
-        expanded.extend(nested)
+        alternatives = _python_static_starred_value_alternatives(value)
+        expanded = [
+            [*prefix, *alternative]
+            for prefix in expanded
+            for alternative in alternatives
+        ]
     return expanded
+
+
+def _python_static_starred_value_alternatives(
+    value: ast.expr,
+) -> list[list[ast.expr]]:
+    if not isinstance(value, ast.Starred):
+        return [[value]]
+    operand = value.value
+    if isinstance(operand, (ast.List, ast.Tuple)):
+        return _python_expand_static_starred_values(operand.elts)
+    if (
+        isinstance(operand, ast.IfExp)
+        and isinstance(operand.body, (ast.List, ast.Tuple))
+        and isinstance(operand.orelse, (ast.List, ast.Tuple))
+    ):
+        return [
+            *_python_expand_static_starred_values(operand.body.elts),
+            *_python_expand_static_starred_values(operand.orelse.elts),
+        ]
+    return [[value]]
 
 
 def _python_value_contains_literal(value: ast.expr, source: str) -> bool:
@@ -645,6 +676,30 @@ def _python_tuple_contains_literal(value: str) -> bool:
         and len(node.value) >= 8
         for node in ast.walk(expression)
     )
+
+
+def _python_integer_literal_contains_credential(value: str) -> bool | None:
+    try:
+        expression = ast.parse(value, mode="eval").body
+    except (SyntaxError, ValueError):
+        normalized = value.replace("_", "").lstrip("+-")
+        if not re.fullmatch(r"(?:0|[1-9][0-9]*)", normalized):
+            return None
+        threshold = "1000000000000000"
+        return len(normalized) > len(threshold) or (
+            len(normalized) == len(threshold) and normalized >= threshold
+        )
+
+    if isinstance(expression, ast.Constant) and type(expression.value) is int:
+        return abs(expression.value) >= 10**15
+    if (
+        isinstance(expression, ast.UnaryOp)
+        and isinstance(expression.op, (ast.UAdd, ast.USub))
+        and isinstance(expression.operand, ast.Constant)
+        and type(expression.operand.value) is int
+    ):
+        return abs(expression.operand.value) >= 10**15
+    return None
 
 
 def audit_repository(repo: Path) -> list[str]:
