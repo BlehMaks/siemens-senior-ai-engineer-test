@@ -269,10 +269,19 @@ def _quarantine_owned_output(
         except OSError:
             return
         try:
-            _chmod_at_resilient(descriptor, quarantine, 0o700)
+            reserved = os.stat(
+                quarantine,
+                dir_fd=descriptor,
+                follow_symlinks=False,
+            )
+            reservation = (reserved.st_dev, reserved.st_ino)
+            _chmod_at_resilient(
+                descriptor,
+                quarantine,
+                0o700,
+                expected=reservation,
+            )
         except OSError:
-            with suppress(OSError):
-                os.rmdir(quarantine, dir_fd=descriptor)
             return
         quarantined_name = f"{quarantine}/owned"
         try:
@@ -505,11 +514,18 @@ def _link_noreplace_move(
     return True
 
 
-def _chmod_at_resilient(descriptor: int, name: str, mode: int) -> None:
+def _chmod_at_resilient(
+    descriptor: int,
+    name: str,
+    mode: int,
+    *,
+    expected: tuple[int, int],
+) -> None:
     try:
         os.chmod(name, mode, dir_fd=descriptor, follow_symlinks=False)
-        return
-    except OSError as original:
+    except (NotImplementedError, OSError) as original:
+        if not _directory_entry_matches(descriptor, name, expected):
+            raise OSError(errno.ESTALE, "cleanup reservation changed") from original
         try:
             libc = ctypes.CDLL(None, use_errno=True)
             chmod_at = libc.fchmodat
@@ -523,23 +539,46 @@ def _chmod_at_resilient(descriptor: int, name: str, mode: int) -> None:
             nofollow = 0x0020 if sys.platform == "darwin" else 0x0100
             if chmod_at(descriptor, os.fsencode(name), mode, nofollow) != 0:
                 raise OSError(ctypes.get_errno(), "fchmodat failed")
-        except OSError:
-            raise original from None
+        except (AttributeError, OSError) as repair:
+            raise OSError(errno.ENOTSUP, "could not repair cleanup mode") from repair
+    if not _directory_entry_matches(descriptor, name, expected, mode=mode):
+        raise OSError(errno.ESTALE, "cleanup reservation changed")
+
+
+def _directory_entry_matches(
+    descriptor: int,
+    name: str,
+    expected: tuple[int, int],
+    *,
+    mode: int | None = None,
+) -> bool:
+    try:
+        current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+    except OSError:
+        return False
+    return (
+        stat.S_ISDIR(current.st_mode)
+        and (current.st_dev, current.st_ino) == expected
+        and (mode is None or stat.S_IMODE(current.st_mode) == mode)
+    )
 
 
 def _fchmod_resilient(descriptor: int, mode: int) -> None:
     try:
         os.fchmod(descriptor, mode)
         return
-    except OSError as original:
-        libc = ctypes.CDLL(None, use_errno=True)
-        chmod = getattr(libc, "fchmod", None)
-        if chmod is None:
-            raise original
-        chmod.argtypes = [ctypes.c_int, ctypes.c_uint]
-        chmod.restype = ctypes.c_int
-        if chmod(descriptor, mode) != 0:
-            raise original
+    except (NotImplementedError, OSError):
+        try:
+            libc = ctypes.CDLL(None, use_errno=True)
+            chmod = getattr(libc, "fchmod", None)
+            if chmod is None:
+                raise OSError(errno.ENOTSUP, "fchmod is unavailable")
+            chmod.argtypes = [ctypes.c_int, ctypes.c_uint]
+            chmod.restype = ctypes.c_int
+            if chmod(descriptor, mode) != 0:
+                raise OSError(ctypes.get_errno(), "fchmod failed")
+        except OSError as repair:
+            raise OSError(errno.ENOTSUP, "could not repair file mode") from repair
 
 
 if __name__ == "__main__":

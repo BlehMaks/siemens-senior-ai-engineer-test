@@ -487,8 +487,11 @@ def test_restrictive_umask_keeps_documented_cleanup_permissions(
     assert _cleanup_payload(cleanup[0]) == b""
 
 
+@pytest.mark.parametrize("failure", [OSError, NotImplementedError])
 def test_cleanup_chmod_wrapper_failure_keeps_quarantine_usable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: type[Exception],
 ) -> None:
     output = tmp_path / "generated.key"
     real_fsync = os.fsync
@@ -507,7 +510,7 @@ def test_cleanup_chmod_wrapper_failure_keeps_quarantine_usable(
     ) -> None:
         del mode, dir_fd, follow_symlinks
         if isinstance(target, str) and target.startswith(".api-key-cleanup-"):
-            raise OSError(errno.EIO, "injected cleanup chmod failure")
+            raise failure(errno.EIO, "injected cleanup chmod failure")
         raise AssertionError(f"unexpected chmod target: {target!r}")
 
     monkeypatch.setattr(os, "fsync", fail_directory_fsync)
@@ -526,8 +529,11 @@ def test_cleanup_chmod_wrapper_failure_keeps_quarantine_usable(
     assert stat.S_IMODE((cleanup[0] / "owned").stat().st_mode) == 0o600
 
 
+@pytest.mark.parametrize("failure", [OSError, NotImplementedError])
 def test_marker_fchmod_wrapper_failure_keeps_documented_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: type[Exception],
 ) -> None:
     output = tmp_path / "generated.key"
     displaced = tmp_path / "displaced.key"
@@ -580,7 +586,7 @@ def test_marker_fchmod_wrapper_failure_keeps_documented_mode(
 
     def fail_marker_fchmod(descriptor: int, mode: int) -> None:
         if descriptor == marker_descriptor:
-            raise OSError(errno.EIO, "injected marker fchmod failure")
+            raise failure(errno.EIO, "injected marker fchmod failure")
         real_fchmod(descriptor, mode)
 
     monkeypatch.setattr(os, "fsync", fail_directory_fsync)
@@ -598,6 +604,53 @@ def test_marker_fchmod_wrapper_failure_keeps_documented_mode(
     assert moved and marker_descriptor >= 0 and len(cleanup) == 1
     assert stat.S_IMODE(cleanup[0].stat().st_mode) == 0o700
     assert stat.S_IMODE((cleanup[0] / "owned").stat().st_mode) == 0o600
+
+
+def test_permission_repair_preserves_rebound_foreign_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "generated.key"
+    quarantine_name = ".api-key-cleanup-race"
+    quarantine = tmp_path / quarantine_name
+    displaced = tmp_path / "displaced-cleanup"
+    real_chmod = os.chmod
+    real_fsync = os.fsync
+    real_mkdir = os.mkdir
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError(errno.EIO, "injected directory fsync failure")
+        real_fsync(descriptor)
+
+    def replace_reservation_then_fail(
+        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int,
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        del mode, follow_symlinks
+        assert target == quarantine_name and dir_fd is not None
+        os.rename(
+            quarantine_name,
+            displaced.name,
+            src_dir_fd=dir_fd,
+            dst_dir_fd=dir_fd,
+        )
+        real_mkdir(quarantine_name, 0o755, dir_fd=dir_fd)
+        real_chmod(quarantine_name, 0o755, dir_fd=dir_fd)
+        raise OSError(errno.EIO, "injected cleanup chmod failure")
+
+    monkeypatch.setattr(os, "fsync", fail_directory_fsync)
+    monkeypatch.setattr(key_admin.secrets, "token_hex", lambda _: "race")
+    monkeypatch.setattr(key_admin.os, "chmod", replace_reservation_then_fail)
+
+    with pytest.raises(SystemExit, match="protected output file"):
+        key_admin._write_plaintext_file(output, "temporary-key")
+
+    assert displaced.is_dir() and quarantine.is_dir()
+    assert stat.S_IMODE(quarantine.stat().st_mode) == 0o755
+    assert not (quarantine / "owned").exists()
 
 
 def test_linux_without_renameat2_symbol_uses_noreplace_fallback(
