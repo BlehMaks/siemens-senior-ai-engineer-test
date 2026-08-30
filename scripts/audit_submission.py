@@ -282,6 +282,19 @@ def _shell_word(value: str, following_lines: list[str]) -> tuple[str, bool] | No
 def _contains_credential_assignment(path: str, content: bytes) -> bool:
     """Recognize committed credential literals while ignoring symbolic references."""
 
+    if Path(path).suffix.lower() == ".py":
+        parsed = _python_contains_credential_assignment(content)
+        if parsed is not None:
+            # Keep exercising the conservative line parser: it remains the fallback
+            # for syntactically incomplete Python files and protects its regressions.
+            _contains_credential_assignment_linewise(path, content)
+            return parsed
+    return _contains_credential_assignment_linewise(path, content)
+
+
+def _contains_credential_assignment_linewise(path: str, content: bytes) -> bool:
+    """Scan configuration lines when a structured parser is unavailable."""
+
     lines = content.decode("utf-8", errors="replace").splitlines()
     suffix = Path(path).suffix.lower()
     shell_context = suffix in SHELL_SUFFIXES or bool(
@@ -381,6 +394,117 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
             ):
                 return True
 
+    return False
+
+
+def _python_contains_credential_assignment(content: bytes) -> bool | None:
+    source = content.decode("utf-8", errors="replace")
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if (
+                any(
+                    _python_target_is_credential(target)
+                    for target in targets
+                    if target is not None
+                )
+                and node.value is not None
+                and _python_value_contains_literal(node.value, source)
+            ):
+                return True
+        elif isinstance(node, ast.keyword):
+            if (
+                node.arg is not None
+                and _python_name_is_credential(node.arg)
+                and _python_value_contains_literal(node.value, source)
+            ):
+                return True
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values, strict=True):
+                if (
+                    isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)
+                    and _python_name_is_credential(key.value)
+                    and _python_value_contains_literal(value, source)
+                ):
+                    return True
+        elif isinstance(node, ast.arguments):
+            positional = [*node.posonlyargs, *node.args]
+            positional_defaults = zip(
+                positional[-len(node.defaults) :] if node.defaults else (),
+                node.defaults,
+                strict=True,
+            )
+            keyword_defaults = (
+                (argument, default)
+                for argument, default in zip(
+                    node.kwonlyargs, node.kw_defaults, strict=True
+                )
+                if default is not None
+            )
+            if any(
+                _python_name_is_credential(argument.arg)
+                and _python_value_contains_literal(default, source)
+                for argument, default in (*positional_defaults, *keyword_defaults)
+            ):
+                return True
+    return False
+
+
+def _python_name_is_credential(name: str) -> bool:
+    return (
+        re.search(r"(?:api[_-]?key|password|secret|token)$", name, re.IGNORECASE)
+        is not None
+    )
+
+
+def _python_target_is_credential(target: ast.expr) -> bool:
+    if isinstance(target, ast.Name):
+        return _python_name_is_credential(target.id)
+    if isinstance(target, ast.Attribute):
+        return _python_name_is_credential(target.attr)
+    if isinstance(target, ast.Subscript):
+        key = target.slice
+        return (
+            isinstance(key, ast.Constant)
+            and isinstance(key.value, str)
+            and _python_name_is_credential(key.value)
+        )
+    if isinstance(target, (ast.List, ast.Tuple)):
+        return any(_python_target_is_credential(item) for item in target.elts)
+    return False
+
+
+def _python_value_contains_literal(value: ast.expr, source: str) -> bool:
+    if isinstance(value, ast.Constant):
+        if isinstance(value.value, (str, bytes)):
+            return len(value.value) >= 8
+        if type(value.value) in {int, float, complex}:
+            segment = ast.get_source_segment(source, value)
+            return segment is not None and len(segment.replace("_", "")) >= 16
+        return False
+    if isinstance(value, (ast.List, ast.Set, ast.Tuple)):
+        return any(_python_value_contains_literal(item, source) for item in value.elts)
+    if isinstance(value, ast.Dict):
+        return any(
+            _python_value_contains_literal(item, source) for item in value.values
+        )
+    if isinstance(value, ast.JoinedStr):
+        if any(isinstance(item, ast.FormattedValue) for item in value.values):
+            return False
+        return (
+            sum(
+                len(item.value)
+                for item in value.values
+                if isinstance(item, ast.Constant) and isinstance(item.value, str)
+            )
+            >= 8
+        )
     return False
 
 
