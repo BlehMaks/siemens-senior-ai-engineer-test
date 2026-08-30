@@ -64,6 +64,21 @@ resolve_script_directory() {
   canonical_directory "$script_path"
 }
 
+same_open_file() {
+  local path=$1 descriptor=$2 path_inode descriptor_inode
+  [[ $path -ef $descriptor ]] && return 0
+
+  # BSD exposes an open descriptor through a synthetic device, so Bash's -ef
+  # reports a false mismatch on macOS. The followed inode still identifies the
+  # underlying file and changes when the checkout entry is replaced.
+  if path_inode=$(stat -Lf '%i' "$path" 2>/dev/null) &&
+    descriptor_inode=$(stat -Lf '%i' "$descriptor" 2>/dev/null); then
+    [[ $path_inode == "$descriptor_inode" ]]
+    return
+  fi
+  return 1
+}
+
 revoke_key() {
   local key=$1
   [[ -n $key ]] || return 0
@@ -135,12 +150,16 @@ main() {
   script_dir=$(resolve_script_directory "$invocation_path")
   repository_root=$(cd "$script_dir/../.." && pwd -P)
   [[ -x $script_dir/api_smoke.sh ]] || fail "reviewed API smoke script is missing"
+  exec 8<"$invocation_path" || fail "could not pin the reviewed smoke wrapper"
+  exec 9<"$script_dir/api_smoke.sh" || fail "could not pin the reviewed API smoke script"
   cd "$repository_root"
 
   actual_number=$(gcloud projects describe "$project" --format='value(projectNumber)')
   [[ $actual_number == "$project_number" ]] || fail "project number does not match"
   verified_dir=$(resolve_script_directory "$invocation_path")
   [[ $verified_dir == "$script_dir" ]] || fail "smoke script path changed during startup"
+  same_open_file "$invocation_path" /dev/fd/8 || fail "smoke wrapper changed during startup"
+  same_open_file "$script_dir/api_smoke.sh" /dev/fd/9 || fail "API smoke script changed during startup"
 
   api_url=$(gcloud run services describe "sai-$environment-api" \
     --project "$project" \
@@ -196,7 +215,7 @@ main() {
 
   SMOKE_API_KEY_A="$CLOUD_SMOKE_API_KEY_A" \
   SMOKE_API_KEY_B="$CLOUD_SMOKE_API_KEY_B" \
-    "$repository_root/task-03-deployment-strategy/scripts/api_smoke.sh" \
+    "$BASH" /dev/fd/9 \
     "$api_url" "$smoke_id"
 
   revoke_key "$CLOUD_SMOKE_API_KEY_A"
