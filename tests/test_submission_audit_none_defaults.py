@@ -433,9 +433,9 @@ def test_late_lambda_default_rebound_preserves_earlier_pairing() -> None:
         "(lambda value=(enabled := False): value)\n",
     ).decode()
     for enabled in (True, False):
-        namespace = {"enabled": enabled, "runtime_token": "runtime-token"}
+        namespace = {"enabled": enabled, "runtime_token": "rt"}
         exec(source, namespace)
-        assert namespace["token"] == "runtime-token"
+        assert namespace["token"] == "rt"
 
     assert not _contains_credential_assignment("config.py", source.encode())
 
@@ -454,7 +454,7 @@ def test_rebound_in_conditional_test_applies_before_selected_branch() -> None:
         "runtime_b": "b",
         "runtime_c": "c",
         "runtime_d": "d",
-        "runtime_token": "runtime-token",
+        "runtime_token": "rt",
     }
     exec(source, namespace)
     assert namespace["token"] == "12345678"

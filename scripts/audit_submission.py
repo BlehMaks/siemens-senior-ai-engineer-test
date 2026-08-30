@@ -414,7 +414,7 @@ def _python_contains_credential_assignment(content: bytes) -> bool | None:
     source = _decode_python_source(content)
     try:
         tree = ast.parse(content)
-    except SyntaxError:
+    except (MemoryError, RecursionError, SyntaxError, ValueError):
         return None
 
     for node in ast.walk(tree):
@@ -590,19 +590,48 @@ def _python_rebound_names(values: list[ast.expr]) -> set[str]:
 
 
 def _python_static_truth(value: ast.expr) -> bool | None:
-    negated = False
-    while True:
-        if isinstance(value, ast.Constant):
-            truth = bool(value.value)
-            return not truth if negated else truth
-        if isinstance(value, ast.NamedExpr):
-            value = value.value
+    results: dict[int, bool | None] = {}
+    pending: list[tuple[ast.expr, bool]] = [(value, False)]
+    while pending:
+        node, visited = pending.pop()
+        if not visited:
+            pending.append((node, True))
+            if isinstance(node, ast.NamedExpr):
+                pending.append((node.value, False))
+            elif isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+                pending.append((node.operand, False))
+            elif isinstance(node, ast.BoolOp):
+                pending.extend((operand, False) for operand in node.values)
             continue
-        if isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.Not):
-            negated = not negated
-            value = value.operand
-            continue
-        return None
+
+        if isinstance(node, ast.Constant):
+            results[id(node)] = bool(node.value)
+        elif isinstance(node, ast.NamedExpr):
+            results[id(node)] = results[id(node.value)]
+        elif isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            operand = results[id(node.operand)]
+            results[id(node)] = None if operand is None else not operand
+        elif isinstance(node, ast.BoolOp):
+            operands = [results[id(operand)] for operand in node.values]
+            if isinstance(node.op, ast.And):
+                results[id(node)] = (
+                    False
+                    if False in operands
+                    else True
+                    if all(item is True for item in operands)
+                    else None
+                )
+            else:
+                results[id(node)] = (
+                    True
+                    if True in operands
+                    else False
+                    if all(item is False for item in operands)
+                    else None
+                )
+        else:
+            results[id(node)] = None
+    return results[id(value)]
 
 
 def _python_expanded_sequence_assignment_contains_literal(
@@ -774,7 +803,7 @@ def _python_value_contains_literal(value: ast.expr, source: str) -> bool:
 def _python_tuple_contains_literal(value: str) -> bool:
     try:
         expression = ast.parse(value, mode="eval").body
-    except SyntaxError:
+    except (MemoryError, RecursionError, SyntaxError, ValueError):
         return False
     if not isinstance(expression, ast.Tuple):
         return False
@@ -789,7 +818,7 @@ def _python_tuple_contains_literal(value: str) -> bool:
 def _python_integer_literal_contains_credential(value: str) -> bool | None:
     try:
         expression = ast.parse(value, mode="eval").body
-    except (SyntaxError, ValueError):
+    except (MemoryError, RecursionError, SyntaxError, ValueError):
         normalized = value.replace("_", "").lstrip("+-")
         if not re.fullmatch(r"(?:0|[1-9][0-9]*)", normalized):
             return None
