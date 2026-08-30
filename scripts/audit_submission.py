@@ -350,6 +350,8 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
                 continue
 
             unquoted = _strip_inline_comment(value).split(";", 1)[0].strip()
+            if python_context and unquoted.endswith(","):
+                unquoted = unquoted[:-1].rstrip()
             if _is_literal(
                 unquoted,
                 minimum_length=16,
