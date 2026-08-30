@@ -13,6 +13,10 @@ clone, run the complete local submission check:
 make local-submission
 ```
 
+For a copyable installation path, expected outputs, offline boundaries, and
+platform notes, start with [getting started](docs/getting-started.md). Common
+failures are collected in [troubleshooting](docs/troubleshooting.md).
+
 That command creates a temporary environment, installs every workspace package,
 runs formatting, lint, typing, tests, and the submission audit, then starts the
 Tasks 1 to 3 API with deterministic fake inference and exercises its public
@@ -111,6 +115,10 @@ IAM change list is in the [cloud manifest](docs/cloud-resource-manifest.md).
 ## Review map
 
 - [Architecture](docs/architecture.md) explains how Tasks 1 to 3 work together.
+- [Requirements traceability](docs/requirements-traceability.md) separates the
+  original Tasks 4–6 assignment evidence from optional business extensions.
+- [Extension report contract](docs/extension-report-contract.md) defines the small
+  versioned comparison envelope implemented independently by Tasks 4–6.
 - [Reviewer guide](docs/reviewer-guide.md) maps claims to code, tests, and reports.
 - [Cloud resource and IAM manifest](docs/cloud-resource-manifest.md) lists every
   default entity, role, and GitHub variable before the first apply.

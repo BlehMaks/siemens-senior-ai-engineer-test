@@ -1,0 +1,10 @@
+flowchart TD
+    A[Validated joined data] --> B[Grouped train and untouched holdout]
+    B --> C[Candidate selection on grouped CV]
+    C --> D[Selected model configuration]
+    D --> E[Grouped out-of-fold probabilities]
+    E --> F[Sigmoid calibrator]
+    F --> G[Expected-cost policy]
+    G --> H[Class 0]
+    G --> I[Manual review]
+    G --> J[Class 1]

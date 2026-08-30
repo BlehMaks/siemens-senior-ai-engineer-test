@@ -1,0 +1,7 @@
+flowchart LR
+    Tooling[Root development tooling] -. test and quality gates .-> T4[Task 4 package]
+    Tooling -. test and quality gates .-> T5[Task 5 package]
+    Tooling -. test and quality gates .-> T6[Task 6 package]
+    T4 --> R4[Task-local comparison report]
+    T5 --> R5[Task-local comparison report]
+    T6 --> R6[Task-local comparison report]

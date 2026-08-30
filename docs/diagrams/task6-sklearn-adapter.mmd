@@ -1,0 +1,7 @@
+flowchart TD
+    A[Training DataFrame] --> B[Selected columns]
+    B --> C[One core consolidator per column]
+    C --> D[Frozen mapping and fingerprint]
+    D --> E[Validation or inference DataFrame]
+    E --> F[Transformed values]
+    E --> G[Unseen diagnostics]

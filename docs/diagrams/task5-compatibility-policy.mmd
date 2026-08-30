@@ -1,0 +1,10 @@
+flowchart TD
+    A[Catalog row] --> B[Lexical ranker]
+    A --> C[Explicit field parsers]
+    C --> D[Hard compatibility gates]
+    D --> E[Soft evidence score]
+    B --> F[Evidence merge]
+    E --> F
+    F --> G[Accepted for review]
+    F --> H[Review required]
+    F --> I[Insufficient evidence]
