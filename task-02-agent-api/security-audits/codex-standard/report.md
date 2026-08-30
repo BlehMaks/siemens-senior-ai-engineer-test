@@ -17,13 +17,9 @@ image/SBOM/provenance, exported-log retention, and backups are intentionally ass
 to Task 3 and the release security gates. No live network, cloud deployment, DAST,
 or paid GCP action was performed.
 
-Canonical generated artifacts were sealed at:
-
-```text
-/private/var/folders/hq/7bmfmh192x14ygrqbczc768r0000gn/T/
-codex-security-scans-2M2FqS/siemens-api09-security/
-8db299708d5b59e785bcf1b2151cf053b89cdc5e_20260827T072640Z_8hbqjljy/
-```
+Generated scan artifacts were stored outside the repository and are not part of
+the submission. The scan ID and target revision above are the portable audit
+references.
 
 The generated coverage matrix marked seven local security surfaces
 `no_issue_found` and production-only deployment controls `not_applicable` to Task 2.
