@@ -210,18 +210,15 @@ RESEARCH_UI_HTML = """<!doctype html>
 
     function renderAnswer(run) {
       const answer = run.answer;
-      if (!answer) {
-        const failure = run.failure?.message || "The run ended without a public answer.";
-        addMessage("Agent", failure, "agent");
-        return;
-      }
-      const wrapper = addMessage("Agent", answer.answer_text, "agent");
+      const text = answer?.answer_text || run.failure?.message || "The run ended without a public answer.";
+      const wrapper = addMessage("Agent", text, "agent");
       if (run.memory_used === true) {
         const memoryNote = document.createElement("div");
         memoryNote.className = "memory-note";
-        memoryNote.textContent = "Reviewed memory informed this answer.";
+        memoryNote.textContent = "Reviewed memory was used during this run.";
         wrapper.appendChild(memoryNote);
       }
+      if (!answer) return;
       if (!answer.citations?.length) return;
       const citations = document.createElement("div");
       citations.className = "citations";

@@ -33,7 +33,7 @@ Required deliverables are the API source code and API documentation with endpoin
 
 The same FastAPI process also serves a small reviewer UI at `/`. The page keeps the
 API key only in the open tab, uses the versioned API for session creation and polling,
-and shows “Reviewed memory informed this answer” only when the persisted terminal
+and shows “Reviewed memory was used during this run” only when the persisted terminal
 run reports `memory_used: true`.
 
 The exact contract remains subject to implementation review. A synchronous convenience endpoint can be added for short requests, but it must not be the only interface to a long-running agent.
