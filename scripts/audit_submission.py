@@ -84,9 +84,7 @@ SHELL_INTERPOLATION = re.compile(
     r"`[^`\r\n]+`"
     r")"
 )
-TEMPLATE_INTERPOLATION = re.compile(
-    r"(?<!\$)(?:\$\{\{[^{}\r\n]+\}\}|\$\{[^{}\r\n]+\})"
-)
+TEMPLATE_INTERPOLATION = re.compile(r"(?<!\$)(?:\$\{\{[^{}\r\n]+\}\}|\$\{[^{}\r\n]+\})")
 TERRAFORM_INTERPOLATION = TEMPLATE_INTERPOLATION
 BRACED_INTERPOLATION = re.compile(r"\{[A-Za-z_][^{}\r\n]*\}")
 PYTHON_REFERENCE = r"[A-Za-z_][A-Za-z0-9_.]*(?:\[[^\]\r\n]+\])*"
