@@ -1,0 +1,80 @@
+{
+  "assignment_baseline": {
+    "comparable_nonblank_metrics": {"coverage": 1.0, "expected_status_rate": 1.0, "ndcg_at_5": 1.0, "precision_at_5": 1.0, "query_count": 1, "ranked_query_count": 1},
+    "metrics": {"coverage": 1.0, "expected_status_rate": 1.0, "ndcg_at_5": 1.0, "precision_at_5": 1.0, "query_count": 1, "ranked_query_count": 1},
+    "mode": "lexical_v1",
+    "mode_status": "evaluated",
+    "reviewed_hard_negative_rate": 0.0
+  },
+  "business_extension": {
+    "mode_status": "evaluated",
+    "parser_failures": {},
+    "parser_support": {
+      "ac_voltage": {"missing": 8},
+      "acting": {"missing": 8},
+      "current": {"missing": 8},
+      "dc_voltage": {"missing": 8},
+      "dimensions": {"missing": 8},
+      "material": {"missing": 8},
+      "mounting": {"missing": 8},
+      "mounting_feature": {"missing": 8}
+    },
+    "relaxed_hybrid": {"mode_status": "not_implemented"},
+    "review_workload": {"candidates_rejected_automatically": 0, "cases_requiring_review": 0, "cases_without_evidence_backed_result": 1},
+    "safety_benchmark": {
+      "case_count": 20,
+      "failed_count": 0,
+      "held_out_case_count": 12,
+      "passed_count": 20,
+      "representative_results": [
+        {"actual_codes": [], "actual_outcome": "compatible", "case_id": "current-supported", "expected_codes": [], "expected_outcome": "compatible", "passed": true, "rule": "current", "split": "training"},
+        {"actual_codes": ["numeric_hard_conflict"], "actual_outcome": "conflict", "case_id": "current-conflict", "expected_codes": ["numeric_hard_conflict"], "expected_outcome": "conflict", "passed": true, "rule": "current", "split": "held_out"},
+        {"actual_codes": [], "actual_outcome": "insufficient_evidence", "case_id": "sparse-abstention", "expected_codes": [], "expected_outcome": "insufficient_evidence", "passed": true, "rule": "structured_only", "split": "held_out"}
+      ]
+    },
+    "status_counts": {"insufficient_evidence": 1, "ok": 7},
+    "strict_hybrid": {
+      "defensible_candidate_shortfall": 0,
+      "eligible_case_count": 7,
+      "exactly_five_coverage": 1.0,
+      "metrics": {"coverage": 1.0, "expected_status_rate": 1.0, "ndcg_at_5": 1.0, "precision_at_5": 1.0, "query_count": 1, "ranked_query_count": 1},
+      "mode_status": "evaluated",
+      "reviewed_hard_negative_rate": 0.0
+    },
+    "structured_only": {"defensible_candidate_shortfall": 5, "eligible_case_count": 1, "exactly_five_coverage": 0.0, "mode_status": "evaluated", "ndcg_at_5": null, "precision_at_5": null}
+  },
+  "delta": {"ndcg_at_5": 0.0, "precision_at_5": 0.0, "reviewed_hard_negative_rate": 0.0},
+  "limitations": [
+    "Compatibility labels validate rule behavior; they do not certify electrical interchangeability.",
+    "Structured-only precision@5 and nDCG@5 are not reported without reviewed relevance labels for blank-description rows.",
+    "The batch API does not expose reliable per-query p50/p95 latency; those fields remain null.",
+    "The bundled policy requires engineering-owner confirmation before operational use."
+  ],
+  "metadata": {
+    "benchmark_query_count": 1,
+    "blank_description_count": 1,
+    "configuration": {
+      "compatibility_policy": {
+        "minimum_structured_coverage": 0.5,
+        "required_candidates": 5,
+        "rules": [
+          {"hard_category": false, "hard_ratio": 4.0, "name": "current", "never_relax": false, "supported_values": [], "weight": 3.0},
+          {"hard_category": false, "hard_ratio": 2.0, "name": "ac_voltage", "never_relax": true, "supported_values": [], "weight": 2.0},
+          {"hard_category": false, "hard_ratio": 2.0, "name": "dc_voltage", "never_relax": true, "supported_values": [], "weight": 2.0},
+          {"hard_category": false, "hard_ratio": null, "name": "dimensions", "never_relax": false, "supported_values": [], "weight": 3.0},
+          {"hard_category": true, "hard_ratio": null, "name": "acting", "never_relax": true, "supported_values": ["fast", "slow", "very_fast"], "weight": 3.0},
+          {"hard_category": true, "hard_ratio": null, "name": "material", "never_relax": true, "supported_values": ["ceramic", "glass", "metal"], "weight": 1.0},
+          {"hard_category": true, "hard_ratio": null, "name": "mounting", "never_relax": true, "supported_values": ["holder", "inline", "surface", "through_hole"], "weight": 1.0},
+          {"hard_category": true, "hard_ratio": null, "name": "mounting_feature", "never_relax": true, "supported_values": ["false", "true"], "weight": 0.5}
+        ],
+        "schema_version": "1.0"
+      }
+    },
+    "dataset_fingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
+    "package_versions": {"pandas": "3.0.5", "python": "3.12.14", "scikit-learn": "1.9.0"},
+    "row_count": 8,
+    "runtime_seconds": {"assignment_baseline_batch": 0.0, "business_extension_batch": 0.0, "per_query_p50": null, "per_query_p95": null},
+    "seed": null
+  },
+  "schema_version": "1.0"
+}

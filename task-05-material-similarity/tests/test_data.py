@@ -97,3 +97,32 @@ def test_profile_exposes_blanks_duplicates_sparsity_categories_and_units() -> No
 def test_profile_rejects_empty_catalog() -> None:
     with pytest.raises(MaterialDataError, match="empty"):
         profile_materials([])
+
+
+def test_profile_rejects_blank_identifier_and_unknown_column_lookup() -> None:
+    material = _row(" ", "fuse")
+
+    with pytest.raises(MaterialDataError, match="blank"):
+        profile_materials([material])
+
+    profile = profile_materials([_row("A", "fuse")])
+    with pytest.raises(KeyError, match="unknown"):
+        profile.column("unknown")
+
+
+def test_loader_rejects_empty_and_overwide_catalog_rows(tmp_path: Path) -> None:
+    empty = tmp_path / "empty.csv"
+    empty.write_text(";".join(MATERIAL_COLUMNS) + "\n", encoding="utf-8")
+    with pytest.raises(MaterialDataError, match="empty"):
+        load_materials(empty)
+
+    overwide = tmp_path / "overwide.csv"
+    overwide.write_text(
+        ";".join(MATERIAL_COLUMNS)
+        + "\n"
+        + ";".join(["A", "fuse", *([""] * (len(MATERIAL_COLUMNS) - 2)), "extra"])
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(MaterialDataError, match="does not match"):
+        load_materials(overwide)

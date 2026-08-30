@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from math import exp, isfinite, log
+from pathlib import Path
 from typing import Literal
 
-from material_similarity.data import PART_ID_COLUMN, profile_materials
+from material_similarity.data import (
+    DESCRIPTION_COLUMN,
+    PART_ID_COLUMN,
+    profile_materials,
+)
 from material_similarity.retrieval import (
     Alternative,
     RetrievalStatus,
@@ -30,8 +36,11 @@ _SPACE = re.compile(r"\s+")
 AttributeState = Literal["parsed", "missing", "unsupported", "conflict"]
 Qualifier = Literal["exact", "typical", "minimum", "maximum"]
 Mode = Literal["ac", "dc", "unspecified"]
-HybridMode = Literal["hybrid", "text_only"]
+HybridMode = Literal["hybrid", "text_only", "structured_only"]
 ValueKind = Literal["current", "voltage", "length", "category"]
+ExtensionMode = Literal["strict_hybrid", "structured_only"]
+ExtensionStatus = Literal["ok", "review_required", "insufficient_evidence"]
+CompatibilityOutcome = Literal["compatible", "conflict", "insufficient_evidence"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +163,59 @@ class HybridRetrievalResult:
 
 
 @dataclass(frozen=True, slots=True)
+class CompatibilityRule:
+    """Reviewed hard-gate and scoring settings for one parsed field."""
+
+    name: str
+    weight: float
+    hard_ratio: float | None
+    hard_category: bool
+    never_relax: bool
+    supported_values: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CompatibilityPolicy:
+    """Versioned compatibility settings supplied by an engineering owner."""
+
+    schema_version: str
+    minimum_structured_coverage: float
+    required_candidates: int
+    rules: tuple[CompatibilityRule, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a deterministic JSON-safe representation."""
+
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class CompatibilityAssessment:
+    """Pairwise structured evidence without any lexical score."""
+
+    outcome: CompatibilityOutcome
+    structured_score: float | None
+    structured_coverage: float
+    components: tuple[ScoreComponent, ...]
+    conflicts: tuple[StructuredConflict, ...]
+    unsupported: tuple[UnsupportedField, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class BusinessRetrievalResult:
+    """Opt-in version-2 result for strict or structured-only retrieval."""
+
+    schema_version: str
+    part_id: str
+    mode: ExtensionMode
+    status: ExtensionStatus
+    alternatives: tuple[HybridAlternative, ...]
+    excluded: tuple[ExcludedAlternative, ...]
+    evidence_coverage: float
+    reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class _AttributeSpec:
     name: str
     columns: tuple[str, ...]
@@ -161,6 +223,7 @@ class _AttributeSpec:
     parser: Callable[[str], StructuredValue]
     hard_ratio: float | None = None
     hard_category: bool = False
+    unsupported_is_hard: bool = False
 
 
 def parse_quantity(
@@ -225,8 +288,6 @@ def parse_quantity(
 
     factor, canonical_unit, unit_mode = _unit(kind, unit_text)
     if unit_mode != "unspecified":
-        if detected_mode != "unspecified" and detected_mode != unit_mode:
-            raise ValueError("quantity mode conflicts with its unit")
         mode = unit_mode
     lower *= factor
     upper *= factor
@@ -281,10 +342,89 @@ def parse_category(raw: str, *, aliases: Mapping[str, str]) -> Category:
 
 def parse_material_attributes(
     material: Mapping[str, str],
+    *,
+    policy: CompatibilityPolicy | None = None,
 ) -> tuple[ParsedAttribute, ...]:
     """Parse the fixed high-value subset and expose missing/unsupported/conflict states."""
 
-    return tuple(_parse_attribute(material, spec) for spec in _SPECS)
+    specs = _specs_for_policy(policy or LEGACY_HYBRID_POLICY)
+    return tuple(_parse_attribute(material, spec) for spec in specs)
+
+
+def load_compatibility_policy(path: Path) -> CompatibilityPolicy:
+    """Load a JSON-compatible YAML policy and reject ambiguous settings."""
+
+    try:
+        root = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read compatibility policy: {error}") from error
+    if not isinstance(root, dict):
+        raise ValueError("compatibility policy must be an object")
+    if root.get("schema_version") != "1.0":
+        raise ValueError("unsupported compatibility policy schema version")
+    coverage = root.get("minimum_structured_coverage")
+    required = root.get("required_candidates")
+    raw_rules = root.get("rules")
+    if isinstance(coverage, bool) or not isinstance(coverage, (int, float)):
+        raise ValueError("minimum structured coverage must be numeric")
+    if not isfinite(float(coverage)) or not 0.0 <= float(coverage) <= 1.0:
+        raise ValueError("minimum structured coverage must be between zero and one")
+    if isinstance(required, bool) or not isinstance(required, int) or required != 5:
+        raise ValueError("required candidates must be exactly five")
+    if not isinstance(raw_rules, list):
+        raise ValueError("compatibility policy rules must be an array")
+    rules = tuple(
+        _load_policy_rule(value, index) for index, value in enumerate(raw_rules)
+    )
+    policy = CompatibilityPolicy("1.0", float(coverage), required, rules)
+    _validate_policy(policy)
+    return policy
+
+
+def assess_compatibility(
+    query: Mapping[str, str],
+    candidate: Mapping[str, str],
+    *,
+    policy: CompatibilityPolicy | None = None,
+) -> CompatibilityAssessment:
+    """Apply structured hard gates before any text score can influence ranking."""
+
+    selected_policy = policy or DEFAULT_COMPATIBILITY_POLICY
+    specs = _specs_for_policy(selected_policy)
+    query_attributes = {
+        item.name: item
+        for item in parse_material_attributes(query, policy=selected_policy)
+    }
+    candidate_attributes = {
+        item.name: item
+        for item in parse_material_attributes(candidate, policy=selected_policy)
+    }
+    scored = _score_candidate(
+        _structured_text_placeholder(candidate[PART_ID_COLUMN].strip()),
+        query_attributes,
+        candidate_attributes,
+        text_weight=0.0,
+        minimum_coverage=selected_policy.minimum_structured_coverage,
+        specs=specs,
+        structured_only=True,
+    )
+    hard_conflicts = tuple(conflict for conflict in scored.conflicts if conflict.hard)
+    if hard_conflicts:
+        outcome: CompatibilityOutcome = "conflict"
+    elif scored.structured_score is None or (
+        scored.structured_coverage < selected_policy.minimum_structured_coverage
+    ):
+        outcome = "insufficient_evidence"
+    else:
+        outcome = "compatible"
+    return CompatibilityAssessment(
+        outcome=outcome,
+        structured_score=scored.structured_score,
+        structured_coverage=scored.structured_coverage,
+        components=scored.components,
+        conflicts=scored.conflicts,
+        unsupported=scored.unsupported,
+    )
 
 
 def rank_hybrid_alternatives(
@@ -292,6 +432,7 @@ def rank_hybrid_alternatives(
     *,
     text_weight: float = 0.65,
     minimum_structured_coverage: float = 0.25,
+    policy: CompatibilityPolicy | None = None,
 ) -> tuple[HybridRetrievalResult, ...]:
     """Rerank text-generated top-five candidates with explicit structured evidence."""
 
@@ -303,9 +444,14 @@ def rank_hybrid_alternatives(
     ):
         raise ValueError("minimum structured coverage must be between zero and one")
     profile_materials(materials)
+    selected_policy = policy or LEGACY_HYBRID_POLICY
+    specs = _specs_for_policy(selected_policy)
     by_id = {material[PART_ID_COLUMN].strip(): material for material in materials}
     parsed = {
-        part_id: {item.name: item for item in parse_material_attributes(material)}
+        part_id: {
+            item.name: item
+            for item in parse_material_attributes(material, policy=selected_policy)
+        }
         for part_id, material in by_id.items()
     }
     text_results = rank_alternatives(materials)
@@ -320,6 +466,7 @@ def rank_hybrid_alternatives(
                 parsed[text_alternative.part_id],
                 text_weight=text_weight,
                 minimum_coverage=minimum_structured_coverage,
+                specs=specs,
             )
             hard_conflicts = tuple(
                 conflict for conflict in scored.conflicts if conflict.hard
@@ -353,6 +500,76 @@ def rank_hybrid_alternatives(
     return tuple(results)
 
 
+def rank_business_alternatives(
+    materials: Sequence[Mapping[str, str]],
+    *,
+    policy: CompatibilityPolicy | None = None,
+) -> tuple[BusinessRetrievalResult, ...]:
+    """Run the opt-in strict policy and recover blank rows only from typed evidence."""
+
+    selected_policy = policy or DEFAULT_COMPATIBILITY_POLICY
+    _validate_policy(selected_policy)
+    profile_materials(materials)
+    by_id = {material[PART_ID_COLUMN].strip(): material for material in materials}
+    parsed = {
+        part_id: {
+            item.name: item
+            for item in parse_material_attributes(material, policy=selected_policy)
+        }
+        for part_id, material in by_id.items()
+    }
+    # Blank descriptions have no lexical evidence, so they must not enter either
+    # side of the TF-IDF model used by the strict text-backed route.
+    text_materials = tuple(
+        material for material in materials if material[DESCRIPTION_COLUMN].strip()
+    )
+    strict_results = (
+        {
+            result.part_id: result
+            for result in rank_hybrid_alternatives(
+                text_materials,
+                minimum_structured_coverage=(
+                    selected_policy.minimum_structured_coverage
+                ),
+                policy=selected_policy,
+            )
+        }
+        if text_materials
+        else {}
+    )
+    results: list[BusinessRetrievalResult] = []
+    for material in materials:
+        part_id = material[PART_ID_COLUMN].strip()
+        if material[DESCRIPTION_COLUMN].strip():
+            strict = strict_results[part_id]
+            status, reason = _extension_status(
+                len(strict.alternatives), selected_policy.required_candidates
+            )
+            results.append(
+                BusinessRetrievalResult(
+                    schema_version="2.0",
+                    part_id=part_id,
+                    mode="strict_hybrid",
+                    status=status,
+                    alternatives=strict.alternatives,
+                    excluded=strict.excluded,
+                    evidence_coverage=_query_coverage(
+                        parsed[part_id], _specs_for_policy(selected_policy)
+                    ),
+                    reason=reason,
+                )
+            )
+            continue
+        results.append(
+            _rank_structured_only(
+                part_id,
+                parsed,
+                selected_policy,
+            )
+        )
+    return tuple(results)
+
+
 def _score_candidate(
     text: Alternative,
     query: Mapping[str, ParsedAttribute],
@@ -360,6 +577,8 @@ def _score_candidate(
     *,
     text_weight: float,
     minimum_coverage: float,
+    specs: Sequence[_AttributeSpec],
+    structured_only: bool = False,
 ) -> HybridAlternative:
     components: list[ScoreComponent] = []
     penalties: list[ScorePenalty] = []
@@ -367,7 +586,8 @@ def _score_candidate(
     unsupported: list[UnsupportedField] = []
     comparable_weight = 0.0
     weighted_score = 0.0
-    for spec in _SPECS:
+    total_weight = sum(spec.weight for spec in specs)
+    for spec in specs:
         left = query[spec.name]
         right = candidate[spec.name]
         if left.state == "unsupported":
@@ -378,6 +598,21 @@ def _score_candidate(
             unsupported.append(
                 UnsupportedField(spec.name, "candidate", right.reason or "unsupported")
             )
+        if spec.unsupported_is_hard and (
+            left.state == "unsupported" or right.state == "unsupported"
+        ):
+            # A never-relax field with unparseable evidence cannot safely reach
+            # lexical scoring as though the structured gate had passed.
+            conflicts.append(
+                StructuredConflict(
+                    spec.name,
+                    "unsupported_never_relaxed_rule",
+                    True,
+                    left.value,
+                    right.value,
+                )
+            )
+            continue
         if left.state == "conflict" or right.state == "conflict":
             conflicts.append(
                 StructuredConflict(
@@ -406,22 +641,23 @@ def _score_candidate(
         )
         if conflict is not None:
             conflicts.append(conflict)
-        elif similarity < 1.0 and isinstance(left.value, Category):
-            penalty = round(0.05 * spec.weight / _TOTAL_WEIGHT, 6)
-            penalties.append(ScorePenalty(spec.name, "categorical_mismatch", penalty))
         if (
             isinstance(left.value, Quantity)
             and isinstance(right.value, Quantity)
             and left.value.qualifier != right.value.qualifier
         ):
-            penalty = round(0.02 * spec.weight / _TOTAL_WEIGHT, 6)
+            penalty = round(0.02 * spec.weight / total_weight, 6)
             penalties.append(ScorePenalty(spec.name, "qualifier_mismatch", penalty))
 
-    coverage = comparable_weight / _TOTAL_WEIGHT
+    coverage = comparable_weight / total_weight
     structured = weighted_score / comparable_weight if comparable_weight else None
     penalty_total = sum(item.value for item in penalties)
-    if structured is None or coverage < minimum_coverage:
-        mode: HybridMode = "text_only"
+    mode: HybridMode
+    if structured_only and structured is not None and coverage >= minimum_coverage:
+        mode = "structured_only"
+        final = max(0.0, min(1.0, structured - penalty_total))
+    elif structured is None or coverage < minimum_coverage:
+        mode = "text_only"
         final = text.score
     else:
         mode = "hybrid"
@@ -771,8 +1007,232 @@ _SPECS = (
 _TOTAL_WEIGHT = sum(spec.weight for spec in _SPECS)
 
 
+LEGACY_HYBRID_POLICY = CompatibilityPolicy(
+    schema_version="1.0",
+    minimum_structured_coverage=0.25,
+    required_candidates=5,
+    rules=tuple(
+        CompatibilityRule(
+            name=spec.name,
+            weight=spec.weight,
+            hard_ratio=spec.hard_ratio,
+            hard_category=spec.hard_category,
+            never_relax=False,
+            supported_values=(),
+        )
+        for spec in _SPECS
+    ),
+)
+
+DEFAULT_COMPATIBILITY_POLICY = CompatibilityPolicy(
+    schema_version="1.0",
+    minimum_structured_coverage=0.5,
+    required_candidates=5,
+    rules=tuple(
+        CompatibilityRule(
+            name=spec.name,
+            weight=spec.weight,
+            hard_ratio=spec.hard_ratio,
+            hard_category=spec.name
+            in {"acting", "material", "mounting", "mounting_feature"},
+            never_relax=spec.name
+            in {
+                "ac_voltage",
+                "dc_voltage",
+                "acting",
+                "material",
+                "mounting",
+                "mounting_feature",
+            },
+            supported_values={
+                "acting": tuple(sorted(set(_ACTING_ALIASES.values()))),
+                "material": tuple(sorted(set(_MATERIAL_ALIASES.values()))),
+                "mounting": tuple(sorted(set(_MOUNTING_ALIASES.values()))),
+                "mounting_feature": tuple(
+                    sorted(set(_MOUNTING_FEATURE_ALIASES.values()))
+                ),
+            }.get(spec.name, ()),
+        )
+        for spec in _SPECS
+    ),
+)
+
+
+def _rank_structured_only(
+    part_id: str,
+    parsed: Mapping[str, Mapping[str, ParsedAttribute]],
+    policy: CompatibilityPolicy,
+) -> BusinessRetrievalResult:
+    specs = _specs_for_policy(policy)
+    query_coverage = _query_coverage(parsed[part_id], specs)
+    if query_coverage < policy.minimum_structured_coverage:
+        return BusinessRetrievalResult(
+            "2.0",
+            part_id,
+            "structured_only",
+            "insufficient_evidence",
+            (),
+            (),
+            query_coverage,
+            "query_structured_coverage_below_minimum",
+        )
+    alternatives: list[HybridAlternative] = []
+    excluded: list[ExcludedAlternative] = []
+    for candidate_id, candidate in parsed.items():
+        if candidate_id == part_id:
+            continue
+        scored = _score_candidate(
+            _structured_text_placeholder(candidate_id),
+            parsed[part_id],
+            candidate,
+            text_weight=0.0,
+            minimum_coverage=policy.minimum_structured_coverage,
+            specs=specs,
+            structured_only=True,
+        )
+        hard_conflicts = tuple(
+            conflict for conflict in scored.conflicts if conflict.hard
+        )
+        if hard_conflicts:
+            excluded.append(ExcludedAlternative(candidate_id, 0.0, hard_conflicts))
+        elif (
+            scored.mode == "structured_only"
+            and scored.structured_score is not None
+            and scored.structured_coverage >= policy.minimum_structured_coverage
+        ):
+            alternatives.append(scored)
+    alternatives.sort(key=lambda item: (-item.final_score, item.part_id))
+    selected = tuple(alternatives[: policy.required_candidates])
+    status, reason = _extension_status(len(selected), policy.required_candidates)
+    return BusinessRetrievalResult(
+        "2.0",
+        part_id,
+        "structured_only",
+        status,
+        selected,
+        tuple(sorted(excluded, key=lambda item: item.part_id)),
+        query_coverage,
+        reason,
+    )
+
+
+def _structured_text_placeholder(part_id: str) -> Alternative:
+    return Alternative(
+        part_id=part_id,
+        score=0.0,
+        word_score=0.0,
+        character_score=0.0,
+        shared_tokens=(),
+        shared_character_ngrams=(),
+        method="structured_fallback",
+        confidence="field_supported",
+    )
+
+
+def _query_coverage(
+    attributes: Mapping[str, ParsedAttribute], specs: Sequence[_AttributeSpec]
+) -> float:
+    total = sum(spec.weight for spec in specs)
+    parsed_weight = sum(
+        spec.weight for spec in specs if attributes[spec.name].state == "parsed"
+    )
+    return round(parsed_weight / total, 6)
+
+
+def _extension_status(
+    candidate_count: int, required_candidates: int
+) -> tuple[ExtensionStatus, str | None]:
+    if candidate_count == required_candidates:
+        return "ok", None
+    if candidate_count:
+        return "review_required", "fewer_than_five_defensible_candidates"
+    return "insufficient_evidence", "no_defensible_candidates"
+
+
+def _specs_for_policy(policy: CompatibilityPolicy) -> tuple[_AttributeSpec, ...]:
+    _validate_policy(policy)
+    by_name = {rule.name: rule for rule in policy.rules}
+    return tuple(
+        replace(
+            spec,
+            weight=by_name[spec.name].weight,
+            hard_ratio=by_name[spec.name].hard_ratio,
+            hard_category=by_name[spec.name].hard_category,
+            unsupported_is_hard=by_name[spec.name].never_relax,
+        )
+        for spec in _SPECS
+    )
+
+
+def _validate_policy(policy: CompatibilityPolicy) -> None:
+    if policy.schema_version != "1.0":
+        raise ValueError("unsupported compatibility policy schema version")
+    if (
+        not isfinite(policy.minimum_structured_coverage)
+        or not 0.0 <= policy.minimum_structured_coverage <= 1.0
+    ):
+        raise ValueError("minimum structured coverage must be between zero and one")
+    if policy.required_candidates != 5:
+        raise ValueError("required candidates must be exactly five")
+    names = tuple(rule.name for rule in policy.rules)
+    expected_names = tuple(spec.name for spec in _SPECS)
+    if names != expected_names:
+        raise ValueError(
+            "compatibility policy rules must match the reviewed field order"
+        )
+    for rule in policy.rules:
+        if not isfinite(rule.weight) or rule.weight <= 0.0:
+            raise ValueError(f"{rule.name} weight must be finite and positive")
+        if rule.hard_ratio is not None and (
+            not isfinite(rule.hard_ratio) or rule.hard_ratio <= 1.0
+        ):
+            raise ValueError(f"{rule.name} hard ratio must be greater than one")
+        if len(set(rule.supported_values)) != len(rule.supported_values):
+            raise ValueError(f"{rule.name} supported values must be unique")
+
+
+def _load_policy_rule(value: object, index: int) -> CompatibilityRule:
+    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+        raise ValueError(f"compatibility policy rules[{index}] must be an object")
+    name = value.get("name")
+    weight = value.get("weight")
+    hard_ratio = value.get("hard_ratio")
+    hard_category = value.get("hard_category")
+    never_relax = value.get("never_relax")
+    supported_values = value.get("supported_values", [])
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError(f"compatibility policy rules[{index}].name is invalid")
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+        raise ValueError(f"compatibility policy rule {name} weight must be numeric")
+    if hard_ratio is not None and (
+        isinstance(hard_ratio, bool) or not isinstance(hard_ratio, (int, float))
+    ):
+        raise ValueError(f"compatibility policy rule {name} hard ratio is invalid")
+    if not isinstance(hard_category, bool) or not isinstance(never_relax, bool):
+        raise ValueError(f"compatibility policy rule {name} flags must be boolean")
+    if not isinstance(supported_values, list) or any(
+        not isinstance(item, str) or not item for item in supported_values
+    ):
+        raise ValueError(
+            f"compatibility policy rule {name} supported values are invalid"
+        )
+    return CompatibilityRule(
+        name=name,
+        weight=float(weight),
+        hard_ratio=None if hard_ratio is None else float(hard_ratio),
+        hard_category=hard_category,
+        never_relax=never_relax,
+        supported_values=tuple(supported_values),
+    )
+
+
 __all__ = [
+    "DEFAULT_COMPATIBILITY_POLICY",
+    "BusinessRetrievalResult",
     "Category",
+    "CompatibilityAssessment",
+    "CompatibilityPolicy",
+    "CompatibilityRule",
     "Dimensions",
     "ExcludedAlternative",
     "HybridAlternative",
@@ -783,9 +1243,12 @@ __all__ = [
     "ScorePenalty",
     "StructuredConflict",
     "UnsupportedField",
+    "assess_compatibility",
+    "load_compatibility_policy",
     "parse_category",
     "parse_dimensions",
     "parse_material_attributes",
     "parse_quantity",
+    "rank_business_alternatives",
     "rank_hybrid_alternatives",
 ]

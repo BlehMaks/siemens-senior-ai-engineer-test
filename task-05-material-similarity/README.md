@@ -124,6 +124,74 @@ expected-status agreement from `1.0` to `0.125`. Text nDCG@5 remains `0.846792`;
 hybrid nDCG@5 is `0.0` under the honest insufficient-candidate contract. Full
 evidence and limitations are in `reports/hybrid-evaluation.md`.
 
+## Business extension
+
+The version-2 business mode is opt-in and leaves the assignment baseline and the
+existing `complete`, `text`, and `hybrid` modes unchanged. It applies the reviewed
+policy in `evals/compatibility-policy.yaml` before ranking. A hard current,
+AC/DC, dimension, acting, material, mounting, or mounting-feature conflict cannot
+be offset by a text score. Missing evidence and unsupported parser input remain
+separate, inspectable states.
+
+```bash
+uv run material-similarity "input/IT DA AI Tasks/Fuse.csv" \
+  --mode extension \
+  --policy task-05-material-similarity/evals/compatibility-policy.yaml \
+  --part-id <PART_ID>
+```
+
+Rows with text use `strict_hybrid`. Blank descriptions never enter a TF-IDF query;
+they use the separately labeled `structured_only` mode only when reviewed typed
+fields meet the minimum evidence coverage. Version-2 status is `ok` only for five
+defensible candidates. One to four candidates produce `review_required`, and no
+defensible candidate or insufficient query evidence produces
+`insufficient_evidence`. Every result still supports engineering review rather than
+automatic approval.
+
+The extension emits one version-2 object for `--part-id`, or an array of those
+objects when the option is omitted:
+
+| Field | Type and invariant |
+|---|---|
+| `schema_version` | Always `"2.0"`; the default command remains on the unversioned assignment schema. |
+| `part_id` | Non-blank source identifier. |
+| `mode` | `strict_hybrid` for text-backed queries or `structured_only` for blank descriptions. |
+| `status` | `ok`, `review_required`, or `insufficient_evidence`; only `ok` has exactly five alternatives. |
+| `alternatives` | Zero to five scored candidates with text evidence, structured components, coverage, penalties, unsupported fields, and conflicts. |
+| `excluded` | Candidates rejected by hard gates, with their exact conflict codes and evidence. |
+| `evidence_coverage` | Query-side reviewed structured-weight coverage in `[0, 1]`. |
+| `reason` | `null` for `ok`; otherwise `fewer_than_five_defensible_candidates`, `no_defensible_candidates`, or `query_structured_coverage_below_minimum`. |
+
+The policy file is JSON-compatible YAML with schema `1.0`, a numeric
+`minimum_structured_coverage` in `[0, 1]`, `required_candidates` fixed at five, and
+the eight reviewed rules in documented order. Each rule supplies `name`, positive
+`weight`, optional `hard_ratio`, boolean `hard_category` and `never_relax` flags,
+and unique `supported_values`. Invalid policy shapes, unsupported parser values,
+unknown part IDs, and missing comparison outputs fail closed instead of silently
+falling back to the assignment baseline.
+
+The safety benchmark contains 20 reviewed, sanitized cases split into training and
+held-out groups. It covers every policy rule plus blank and duplicate descriptions,
+sparse rows, parser failures, strict candidates, hard conflicts, and mandatory
+abstention. Run the same-catalog comparison report with:
+
+```bash
+uv run python -m material_similarity.evaluation \
+  "input/IT DA AI Tasks/Fuse.csv" \
+  task-05-material-similarity/evals/relevance.yaml \
+  --mode comparison \
+  --safety-benchmark task-05-material-similarity/evals/safety.yaml \
+  --output task-05-material-similarity/reports/baseline-vs-extension.json \
+  --markdown-output task-05-material-similarity/reports/baseline-vs-extension.md
+```
+
+Both report files are rendered from one versioned object. The committed example is
+a sanitized deterministic fixture; private-catalog output must be generated locally
+with the owner-authorized catalog and reviewed before use. Relaxed hybrid retrieval is recorded as
+`not_implemented` in Tier 1. Structured-only precision@5 and nDCG@5 remain unset
+until blank-description rows have reviewed relevance labels; compatibility checks
+must not be mislabeled as interchangeability ground truth.
+
 ## Output contract
 
 The CLI emits one object for `--part-id`, or an array containing one object per
@@ -162,6 +230,10 @@ it until the catalog version changes.
   output.
 - `reports/hybrid-extension-design.md` defines the minimal missing-aware structured
   extension without changing the assignment's text-only result semantics.
+- `evals/compatibility-policy.yaml` and `evals/safety.yaml` contain the versioned
+  reviewed Tier 1 policy and bounded safety cases.
+- `reports/baseline-vs-extension.json` and `.md` are machine-readable and human
+  views generated from the same sanitized fixture result object.
 
 From the repository root, the complete Task 5 gate is:
 

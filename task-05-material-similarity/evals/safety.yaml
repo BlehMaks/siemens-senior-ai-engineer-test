@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "provenance": "Sanitized engineering-rule fixtures; labels validate retrieval safety behavior, not interchangeability.",
+  "reviewer_status": "reviewed",
+  "defaults": {
+    "Current Rating": "2A",
+    "Maximum AC Voltage Rating": "250VAC",
+    "Maximum DC Voltage Rating": "125VDC",
+    "Fuse Size": "6.3mm x 32mm",
+    "Acting": "slow",
+    "Blow Characteristic": "time delay",
+    "Fuse Material": "glass",
+    "Mounting": "holder",
+    "Mounting Feature": "yes"
+  },
+  "cases": [
+    {"case_id": "current-supported", "split": "training", "rule": "current", "tags": ["strict_candidate"], "query": {}, "candidate": {}, "expected_outcome": "compatible", "expected_codes": []},
+    {"case_id": "current-conflict", "split": "held_out", "rule": "current", "tags": ["hard_conflict"], "query": {}, "candidate": {"Current Rating": "20A"}, "expected_outcome": "conflict", "expected_codes": ["numeric_hard_conflict"]},
+    {"case_id": "ac-voltage-supported", "split": "training", "rule": "ac_voltage", "tags": ["strict_candidate"], "query": {}, "candidate": {}, "expected_outcome": "compatible", "expected_codes": []},
+    {"case_id": "ac-voltage-conflict", "split": "held_out", "rule": "ac_voltage", "tags": ["hard_conflict"], "query": {}, "candidate": {"Maximum AC Voltage Rating": "250VDC"}, "expected_outcome": "conflict", "expected_codes": ["unit_or_mode_mismatch"]},
+    {"case_id": "dc-voltage-supported", "split": "training", "rule": "dc_voltage", "tags": ["strict_candidate"], "query": {}, "candidate": {}, "expected_outcome": "compatible", "expected_codes": []},
+    {"case_id": "dc-voltage-conflict", "split": "held_out", "rule": "dc_voltage", "tags": ["hard_conflict"], "query": {}, "candidate": {"Maximum DC Voltage Rating": "125VAC"}, "expected_outcome": "conflict", "expected_codes": ["unit_or_mode_mismatch"]},
+    {"case_id": "dimensions-supported", "split": "training", "rule": "dimensions", "tags": ["strict_candidate"], "query": {}, "candidate": {}, "expected_outcome": "compatible", "expected_codes": []},
+    {"case_id": "dimensions-conflict", "split": "held_out", "rule": "dimensions", "tags": ["hard_conflict"], "query": {}, "candidate": {"Fuse Size": "2mm x 10mm"}, "expected_outcome": "conflict", "expected_codes": ["dimension_mismatch"]},
+    {"case_id": "acting-supported", "split": "training", "rule": "acting", "tags": ["strict_candidate"], "query": {}, "candidate": {}, "expected_outcome": "compatible", "expected_codes": []},
+    {"case_id": "acting-conflict", "split": "held_out", "rule": "acting", "tags": ["hard_conflict"], "query": {}, "candidate": {"Acting": "fast", "Blow Characteristic": "fast"}, "expected_outcome": "conflict", "expected_codes": ["categorical_mismatch"]},
+    {"case_id": "material-supported", "split": "training", "rule": "material", "tags": ["strict_candidate"], "query": {}, "candidate": {}, "expected_outcome": "compatible", "expected_codes": []},
+    {"case_id": "material-conflict", "split": "held_out", "rule": "material", "tags": ["hard_conflict"], "query": {}, "candidate": {"Fuse Material": "ceramic"}, "expected_outcome": "conflict", "expected_codes": ["categorical_mismatch"]},
+    {"case_id": "mounting-supported", "split": "training", "rule": "mounting", "tags": ["strict_candidate"], "query": {}, "candidate": {}, "expected_outcome": "compatible", "expected_codes": []},
+    {"case_id": "mounting-conflict", "split": "held_out", "rule": "mounting", "tags": ["hard_conflict"], "query": {}, "candidate": {"Mounting": "surface mount"}, "expected_outcome": "conflict", "expected_codes": ["categorical_mismatch"]},
+    {"case_id": "mounting-feature-supported", "split": "training", "rule": "mounting_feature", "tags": ["strict_candidate"], "query": {}, "candidate": {}, "expected_outcome": "compatible", "expected_codes": []},
+    {"case_id": "mounting-feature-conflict", "split": "held_out", "rule": "mounting_feature", "tags": ["hard_conflict"], "query": {}, "candidate": {"Mounting Feature": "no"}, "expected_outcome": "conflict", "expected_codes": ["categorical_mismatch"]},
+    {"case_id": "blank-description", "split": "held_out", "rule": "structured_only", "tags": ["blank_description", "strict_candidate"], "query": {"PART_DESCRIPTION": ""}, "candidate": {}, "expected_outcome": "compatible", "expected_codes": []},
+    {"case_id": "duplicate-description", "split": "held_out", "rule": "description", "tags": ["duplicate_description"], "query": {"PART_DESCRIPTION": "duplicate fuse"}, "candidate": {"PART_DESCRIPTION": "duplicate fuse"}, "expected_outcome": "compatible", "expected_codes": []},
+    {"case_id": "sparse-abstention", "split": "held_out", "rule": "structured_only", "tags": ["sparse_row", "must_abstain"], "query": {"Current Rating": "", "Maximum AC Voltage Rating": "", "Maximum DC Voltage Rating": "", "Fuse Size": "", "Acting": "", "Blow Characteristic": "", "Fuse Material": "", "Mounting": "", "Mounting Feature": ""}, "candidate": {}, "expected_outcome": "insufficient_evidence", "expected_codes": []},
+    {"case_id": "parser-failure", "split": "held_out", "rule": "current", "tags": ["parser_failure", "must_abstain"], "query": {"Current Rating": "bad", "Maximum AC Voltage Rating": "", "Maximum DC Voltage Rating": "", "Fuse Size": "", "Acting": "", "Blow Characteristic": "", "Fuse Material": "", "Mounting": "", "Mounting Feature": ""}, "candidate": {}, "expected_outcome": "insufficient_evidence", "expected_codes": []}
+  ]
+}

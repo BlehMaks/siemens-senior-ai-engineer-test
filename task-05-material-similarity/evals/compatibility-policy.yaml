@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "owner_confirmation": "required_before_operational_use",
+  "purpose": "Engineering review support; this policy does not certify interchangeability.",
+  "minimum_structured_coverage": 0.5,
+  "required_candidates": 5,
+  "rules": [
+    {
+      "name": "current",
+      "weight": 3.0,
+      "hard_ratio": 4.0,
+      "hard_category": false,
+      "never_relax": false,
+      "supported_values": []
+    },
+    {
+      "name": "ac_voltage",
+      "weight": 2.0,
+      "hard_ratio": 2.0,
+      "hard_category": false,
+      "never_relax": true,
+      "supported_values": []
+    },
+    {
+      "name": "dc_voltage",
+      "weight": 2.0,
+      "hard_ratio": 2.0,
+      "hard_category": false,
+      "never_relax": true,
+      "supported_values": []
+    },
+    {
+      "name": "dimensions",
+      "weight": 3.0,
+      "hard_ratio": null,
+      "hard_category": false,
+      "never_relax": false,
+      "supported_values": []
+    },
+    {
+      "name": "acting",
+      "weight": 3.0,
+      "hard_ratio": null,
+      "hard_category": true,
+      "never_relax": true,
+      "supported_values": ["fast", "slow", "very_fast"]
+    },
+    {
+      "name": "material",
+      "weight": 1.0,
+      "hard_ratio": null,
+      "hard_category": true,
+      "never_relax": true,
+      "supported_values": ["ceramic", "glass", "metal"]
+    },
+    {
+      "name": "mounting",
+      "weight": 1.0,
+      "hard_ratio": null,
+      "hard_category": true,
+      "never_relax": true,
+      "supported_values": ["holder", "inline", "surface", "through_hole"]
+    },
+    {
+      "name": "mounting_feature",
+      "weight": 0.5,
+      "hard_ratio": null,
+      "hard_category": true,
+      "never_relax": true,
+      "supported_values": ["false", "true"]
+    }
+  ]
+}

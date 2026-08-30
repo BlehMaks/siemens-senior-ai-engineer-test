@@ -4,21 +4,32 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from hashlib import file_digest
+from importlib.metadata import PackageNotFoundError, version
 from math import log2
 from pathlib import Path
-from typing import cast
+from time import perf_counter
+from typing import Literal, cast
 
 from material_similarity.data import (
     DESCRIPTION_COLUMN,
+    MATERIAL_COLUMNS,
     PART_ID_COLUMN,
     load_materials,
     profile_materials,
 )
 from material_similarity.hybrid import (
+    DEFAULT_COMPATIBILITY_POLICY,
+    BusinessRetrievalResult,
+    CompatibilityPolicy,
     HybridRetrievalResult,
+    assess_compatibility,
+    parse_material_attributes,
+    rank_business_alternatives,
     rank_hybrid_alternatives,
 )
 from material_similarity.normalize import normalize_description
@@ -122,6 +133,43 @@ class HybridEvaluationReport:
     non_promotion_reasons: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class SafetyCase:
+    """One reviewed pairwise compatibility expectation."""
+
+    case_id: str
+    split: Literal["training", "held_out"]
+    rule: str
+    tags: tuple[str, ...]
+    query: Mapping[str, str]
+    candidate: Mapping[str, str]
+    expected_outcome: str
+    expected_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SafetyBenchmark:
+    """Bounded reviewed safety cases independent of the private catalog."""
+
+    provenance: str
+    reviewer_status: str
+    cases: tuple[SafetyCase, ...]
+
+
+@dataclass(frozen=True)
+class SafetyCaseResult:
+    """Observed outcome for one immutable safety case."""
+
+    case_id: str
+    split: str
+    rule: str
+    expected_outcome: str
+    actual_outcome: str
+    expected_codes: tuple[str, ...]
+    actual_codes: tuple[str, ...]
+    passed: bool
+
+
 def load_benchmark(
     path: Path,
     materials: Sequence[Mapping[str, str]],
@@ -163,6 +211,339 @@ def load_benchmark(
     if len(set(query_ids)) != len(query_ids):
         raise BenchmarkError("benchmark contains duplicate query IDs")
     return Benchmark(expected_sha256, expected_rows, queries)
+
+
+def load_safety_benchmark(path: Path) -> SafetyBenchmark:
+    """Load the bounded JSON-compatible YAML safety benchmark."""
+
+    try:
+        root = _object(json.loads(path.read_text(encoding="utf-8")), "safety benchmark")
+    except (OSError, json.JSONDecodeError) as error:
+        raise BenchmarkError(f"cannot read safety benchmark: {error}") from error
+    if root.get("schema_version") != "1.0":
+        raise BenchmarkError("unsupported safety benchmark schema version")
+    provenance = _text(root.get("provenance"), "provenance")
+    reviewer_status = _text(root.get("reviewer_status"), "reviewer_status")
+    if reviewer_status != "reviewed":
+        raise BenchmarkError("safety benchmark must be reviewed")
+    defaults = _string_mapping(root.get("defaults"), "defaults")
+    raw_cases = _array(root.get("cases"), "cases")
+    if not 1 <= len(raw_cases) <= 24:
+        raise BenchmarkError("safety benchmark must contain between 1 and 24 cases")
+    cases = tuple(
+        _safety_case(value, defaults, index) for index, value in enumerate(raw_cases)
+    )
+    case_ids = tuple(case.case_id for case in cases)
+    if len(set(case_ids)) != len(case_ids):
+        raise BenchmarkError("safety benchmark contains duplicate case IDs")
+    if {case.split for case in cases} != {"training", "held_out"}:
+        raise BenchmarkError(
+            "safety benchmark must separate training and held-out cases"
+        )
+    required_rules = {
+        "current",
+        "ac_voltage",
+        "dc_voltage",
+        "dimensions",
+        "acting",
+        "material",
+        "mounting",
+        "mounting_feature",
+    }
+    for rule in required_rules:
+        outcomes = {case.expected_outcome for case in cases if case.rule == rule}
+        if "compatible" not in outcomes or not outcomes & {
+            "conflict",
+            "insufficient_evidence",
+        }:
+            raise BenchmarkError(
+                f"safety benchmark lacks supported and negative cases for {rule}"
+            )
+    required_tags = {
+        "blank_description",
+        "duplicate_description",
+        "hard_conflict",
+        "must_abstain",
+        "parser_failure",
+        "sparse_row",
+        "strict_candidate",
+    }
+    observed_tags = {tag for case in cases for tag in case.tags}
+    missing_tags = sorted(required_tags - observed_tags)
+    if missing_tags:
+        raise BenchmarkError(f"safety benchmark lacks required cases: {missing_tags}")
+    return SafetyBenchmark(provenance, reviewer_status, cases)
+
+
+def evaluate_safety_benchmark(
+    benchmark: SafetyBenchmark,
+    *,
+    policy: CompatibilityPolicy = DEFAULT_COMPATIBILITY_POLICY,
+) -> tuple[SafetyCaseResult, ...]:
+    """Evaluate all declared safety expectations without relevance certification."""
+
+    results: list[SafetyCaseResult] = []
+    for case in benchmark.cases:
+        assessment = assess_compatibility(case.query, case.candidate, policy=policy)
+        actual_codes = tuple(
+            sorted(
+                {
+                    *(conflict.code for conflict in assessment.conflicts),
+                    *(
+                        f"unsupported:{item.field}:{item.side}"
+                        for item in assessment.unsupported
+                    ),
+                }
+            )
+        )
+        expected_codes = tuple(sorted(case.expected_codes))
+        results.append(
+            SafetyCaseResult(
+                case_id=case.case_id,
+                split=case.split,
+                rule=case.rule,
+                expected_outcome=case.expected_outcome,
+                actual_outcome=assessment.outcome,
+                expected_codes=expected_codes,
+                actual_codes=actual_codes,
+                passed=(
+                    assessment.outcome == case.expected_outcome
+                    and set(expected_codes).issubset(actual_codes)
+                ),
+            )
+        )
+    return tuple(results)
+
+
+def build_comparison_report(
+    materials: Sequence[Mapping[str, str]],
+    benchmark: Benchmark,
+    safety_benchmark: SafetyBenchmark,
+    *,
+    dataset_fingerprint: str,
+    policy: CompatibilityPolicy = DEFAULT_COMPATIBILITY_POLICY,
+    runtime_seconds: tuple[float, float] | None = None,
+) -> dict[str, object]:
+    """Evaluate baseline and opt-in modes once and return their shared report object."""
+
+    if len(dataset_fingerprint) != 64 or any(
+        character not in "0123456789abcdef" for character in dataset_fingerprint
+    ):
+        raise ValueError("dataset fingerprint must be a lowercase SHA-256")
+    profile = profile_materials(materials)
+    baseline_started = perf_counter()
+    baseline_results = rank_alternatives(materials)
+    baseline_seconds = perf_counter() - baseline_started
+    extension_started = perf_counter()
+    extension_results = rank_business_alternatives(materials, policy=policy)
+    extension_seconds = perf_counter() - extension_started
+    if runtime_seconds is not None:
+        if len(runtime_seconds) != 2 or any(value < 0.0 for value in runtime_seconds):
+            raise ValueError("runtime override must contain two non-negative values")
+        baseline_seconds, extension_seconds = runtime_seconds
+
+    rows_by_id = {material[PART_ID_COLUMN].strip(): material for material in materials}
+    nonblank_queries = tuple(
+        query
+        for query in benchmark.queries
+        if normalize_description(rows_by_id[query.part_id][DESCRIPTION_COLUMN])
+    )
+    if not nonblank_queries:
+        raise BenchmarkError("comparison benchmark has no non-blank extension queries")
+    baseline_by_id = _results_by_id(baseline_results)
+    extension_by_id = {result.part_id: result for result in extension_results}
+    strict_retrieval = tuple(
+        _business_as_retrieval(extension_by_id[query.part_id])
+        for query in nonblank_queries
+    )
+    strict_metrics = _score_queries(
+        nonblank_queries,
+        _results_by_id(strict_retrieval),
+    )
+    comparable_baseline_metrics = _score_queries(nonblank_queries, baseline_by_id)
+    baseline_metrics = score_results(benchmark, baseline_results)
+    safety_results = evaluate_safety_benchmark(safety_benchmark, policy=policy)
+    strict = tuple(
+        result for result in extension_results if result.mode == "strict_hybrid"
+    )
+    structured = tuple(
+        result for result in extension_results if result.mode == "structured_only"
+    )
+    parser_support, parser_failures = _parser_summary(materials, policy)
+    mode_counts = Counter(result.status for result in extension_results)
+    strict_hard_negative_rate = _hard_negative_rate(
+        nonblank_queries,
+        _results_by_id(strict_retrieval),
+    )
+    baseline_hard_negative_rate = _hard_negative_rate(
+        nonblank_queries,
+        baseline_by_id,
+    )
+    safety_passed = sum(result.passed for result in safety_results)
+    limitations = [
+        "Compatibility labels validate rule behavior; they do not certify electrical interchangeability.",
+        "Structured-only precision@5 and nDCG@5 are not reported without reviewed relevance labels for blank-description rows.",
+        "The batch API does not expose reliable per-query p50/p95 latency; those fields remain null.",
+        "The bundled policy requires engineering-owner confirmation before operational use.",
+    ]
+    report: dict[str, object] = {
+        "schema_version": "1.0",
+        "metadata": {
+            "dataset_fingerprint": dataset_fingerprint,
+            "row_count": profile.row_count,
+            "blank_description_count": profile.blank_description_count,
+            "benchmark_query_count": len(benchmark.queries),
+            "seed": None,
+            "runtime_seconds": {
+                "assignment_baseline_batch": round(baseline_seconds, 6),
+                "business_extension_batch": round(extension_seconds, 6),
+                "per_query_p50": None,
+                "per_query_p95": None,
+            },
+            "package_versions": {
+                "python": platform.python_version(),
+                "pandas": _installed_version("pandas"),
+                "scikit-learn": _installed_version("scikit-learn"),
+            },
+            "configuration": {"compatibility_policy": policy.to_dict()},
+        },
+        "assignment_baseline": {
+            "mode": "lexical_v1",
+            "mode_status": "evaluated",
+            "metrics": asdict(baseline_metrics),
+            "comparable_nonblank_metrics": asdict(comparable_baseline_metrics),
+            "reviewed_hard_negative_rate": baseline_hard_negative_rate,
+        },
+        "business_extension": {
+            "mode_status": "evaluated",
+            "strict_hybrid": {
+                "mode_status": "evaluated",
+                "eligible_case_count": len(strict),
+                "metrics": asdict(strict_metrics),
+                "reviewed_hard_negative_rate": strict_hard_negative_rate,
+                "exactly_five_coverage": _status_rate(strict, "ok"),
+                "defensible_candidate_shortfall": sum(
+                    max(0, 5 - len(result.alternatives)) for result in strict
+                ),
+            },
+            "structured_only": {
+                "mode_status": "evaluated",
+                "eligible_case_count": len(structured),
+                "precision_at_5": None,
+                "ndcg_at_5": None,
+                "exactly_five_coverage": _status_rate(structured, "ok"),
+                "defensible_candidate_shortfall": sum(
+                    max(0, 5 - len(result.alternatives)) for result in structured
+                ),
+            },
+            "relaxed_hybrid": {"mode_status": "not_implemented"},
+            "status_counts": dict(sorted(mode_counts.items())),
+            "safety_benchmark": {
+                "case_count": len(safety_results),
+                "passed_count": safety_passed,
+                "failed_count": len(safety_results) - safety_passed,
+                "held_out_case_count": sum(
+                    result.split == "held_out" for result in safety_results
+                ),
+                "representative_results": [
+                    asdict(result)
+                    for result in safety_results
+                    if result.case_id
+                    in {"current-supported", "current-conflict", "sparse-abstention"}
+                ],
+            },
+            "parser_support": parser_support,
+            "parser_failures": parser_failures,
+            "review_workload": {
+                "candidates_rejected_automatically": sum(
+                    len(result.excluded) for result in extension_results
+                ),
+                "cases_requiring_review": mode_counts["review_required"],
+                "cases_without_evidence_backed_result": mode_counts[
+                    "insufficient_evidence"
+                ],
+            },
+        },
+        "delta": {
+            "precision_at_5": round(
+                strict_metrics.precision_at_5
+                - comparable_baseline_metrics.precision_at_5,
+                6,
+            ),
+            "ndcg_at_5": round(
+                strict_metrics.ndcg_at_5 - comparable_baseline_metrics.ndcg_at_5,
+                6,
+            ),
+            "reviewed_hard_negative_rate": round(
+                strict_hard_negative_rate - baseline_hard_negative_rate,
+                6,
+            ),
+        },
+        "limitations": limitations,
+    }
+    return cast(
+        dict[str, object],
+        json.loads(json.dumps(report, ensure_ascii=False, sort_keys=True)),
+    )
+
+
+def render_comparison_markdown(report: Mapping[str, object]) -> str:
+    """Render the human report exclusively from the machine-readable object."""
+
+    metadata = cast(Mapping[str, object], report["metadata"])
+    baseline = cast(Mapping[str, object], report["assignment_baseline"])
+    extension = cast(Mapping[str, object], report["business_extension"])
+    baseline_metrics = cast(Mapping[str, object], baseline["metrics"])
+    strict = cast(Mapping[str, object], extension["strict_hybrid"])
+    strict_metrics = cast(Mapping[str, object], strict["metrics"])
+    structured = cast(Mapping[str, object], extension["structured_only"])
+    safety = cast(Mapping[str, object], extension["safety_benchmark"])
+    workload = cast(Mapping[str, object], extension["review_workload"])
+    limitations = cast(Sequence[str], report["limitations"])
+    lines = [
+        "# Task 5 baseline versus business extension",
+        "",
+        f"- Schema version: `{report['schema_version']}`",
+        f"- Dataset fingerprint: `{metadata['dataset_fingerprint']}`",
+        f"- Catalog rows: {metadata['row_count']}",
+        f"- Blank descriptions: {metadata['blank_description_count']}",
+        "",
+        "## Mode comparison",
+        "",
+        "| Mode | Status | Eligible/queries | Precision@5 | nDCG@5 | Exactly-five coverage |",
+        "|---|---|---:|---:|---:|---:|",
+        f"| Lexical v1 | {baseline['mode_status']} | {baseline_metrics['query_count']} | {baseline_metrics['precision_at_5']} | {baseline_metrics['ndcg_at_5']} | {baseline_metrics['coverage']} |",
+        f"| Strict hybrid v2 | {strict['mode_status']} | {strict['eligible_case_count']} | {strict_metrics['precision_at_5']} | {strict_metrics['ndcg_at_5']} | {strict['exactly_five_coverage']} |",
+        f"| Structured only v2 | {structured['mode_status']} | {structured['eligible_case_count']} | not evaluated | not evaluated | {structured['exactly_five_coverage']} |",
+        f"| Relaxed hybrid | {cast(Mapping[str, object], extension['relaxed_hybrid'])['mode_status']} | 0 | not evaluated | not evaluated | not evaluated |",
+        "",
+        "## Safety and review workload",
+        "",
+        f"- Reviewed safety cases passed: {safety['passed_count']}/{safety['case_count']}",
+        f"- Automatically rejected candidates: {workload['candidates_rejected_automatically']}",
+        f"- Cases requiring review: {workload['cases_requiring_review']}",
+        f"- Cases without an evidence-backed result: {workload['cases_without_evidence_backed_result']}",
+        "",
+        "## Limitations",
+        "",
+        *(f"- {item}" for item in limitations),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def write_comparison_report(
+    report: Mapping[str, object],
+    json_path: Path,
+    markdown_path: Path,
+) -> None:
+    """Write deterministic JSON and Markdown views of the same report object."""
+
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    markdown_path.write_text(render_comparison_markdown(report), encoding="utf-8")
 
 
 def score_results(
@@ -305,11 +686,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("benchmark", type=Path)
     parser.add_argument(
         "--mode",
-        choices=("text", "hybrid"),
+        choices=("text", "hybrid", "comparison"),
         default="text",
-        help="Evaluate the text weight grid or compare the hybrid prototype",
+        help="Evaluate text weights, the prototype, or the versioned business report",
     )
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--markdown-output",
+        type=Path,
+        help="Markdown destination required by comparison mode",
+    )
+    parser.add_argument(
+        "--safety-benchmark",
+        type=Path,
+        help="Reviewed safety benchmark required by comparison mode",
+    )
     args = parser.parse_args(argv)
     catalog_path = cast(Path, args.catalog)
     benchmark_path = cast(Path, args.benchmark)
@@ -317,6 +708,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         digest = file_digest(handle, "sha256").hexdigest()
     materials = load_materials(catalog_path)
     benchmark = load_benchmark(benchmark_path, materials, catalog_sha256=digest)
+    if args.mode == "comparison":
+        output = cast(Path | None, args.output)
+        markdown_output = cast(Path | None, args.markdown_output)
+        safety_path = cast(Path | None, args.safety_benchmark)
+        if output is None or markdown_output is None or safety_path is None:
+            parser.error(
+                "comparison mode requires --output, --markdown-output, and --safety-benchmark"
+            )
+        report_object = build_comparison_report(
+            materials,
+            benchmark,
+            load_safety_benchmark(safety_path),
+            dataset_fingerprint=digest,
+        )
+        write_comparison_report(report_object, output, markdown_output)
+        return 0
     report = (
         evaluate_hybrid_benchmark(materials, benchmark)
         if args.mode == "hybrid"
@@ -337,6 +744,53 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         output.write_text(rendered, encoding="utf-8")
     return 0
+
+
+def _business_as_retrieval(result: BusinessRetrievalResult) -> RetrievalResult:
+    if result.mode != "strict_hybrid":
+        raise BenchmarkError("relevance comparison accepts strict hybrid results only")
+    status: RetrievalStatus = (
+        "ok" if result.status == "ok" else "insufficient_candidates"
+    )
+    return RetrievalResult(
+        result.part_id,
+        status,
+        tuple(alternative.text for alternative in result.alternatives),
+    )
+
+
+def _parser_summary(
+    materials: Sequence[Mapping[str, str]], policy: CompatibilityPolicy
+) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]]:
+    states: dict[str, Counter[str]] = {}
+    failures: dict[str, Counter[str]] = {}
+    for material in materials:
+        for attribute in parse_material_attributes(material, policy=policy):
+            states.setdefault(attribute.name, Counter())[attribute.state] += 1
+            if attribute.reason is not None:
+                failures.setdefault(attribute.name, Counter())[attribute.reason] += 1
+    return (
+        {name: dict(sorted(counts.items())) for name, counts in sorted(states.items())},
+        {
+            name: dict(sorted(counts.items()))
+            for name, counts in sorted(failures.items())
+        },
+    )
+
+
+def _status_rate(results: Sequence[BusinessRetrievalResult], status: str) -> float:
+    return (
+        round(sum(result.status == status for result in results) / len(results), 6)
+        if results
+        else 0.0
+    )
+
+
+def _installed_version(package: str) -> str:
+    try:
+        return version(package)
+    except PackageNotFoundError:
+        return "not-installed"
 
 
 def _query(
@@ -557,5 +1011,63 @@ def _integer(value: object, location: str) -> int:
     return value
 
 
-if __name__ == "__main__":  # pragma: no cover - exercised through ``main`` tests
+def _string_mapping(value: object, location: str) -> dict[str, str]:
+    item = _object(value, location)
+    if any(not isinstance(raw, str) for raw in item.values()):
+        raise BenchmarkError(f"{location} values must be text")
+    unexpected = sorted(set(item) - set(MATERIAL_COLUMNS))
+    if unexpected:
+        raise BenchmarkError(f"{location} has unsupported fields: {unexpected}")
+    return {key: cast(str, raw) for key, raw in item.items()}
+
+
+def _safety_case(
+    value: object,
+    defaults: Mapping[str, str],
+    index: int,
+) -> SafetyCase:
+    location = f"cases[{index}]"
+    item = _object(value, location)
+    case_id = _text(item.get("case_id"), f"{location}.case_id")
+    split = _text(item.get("split"), f"{location}.split")
+    if split not in {"training", "held_out"}:
+        raise BenchmarkError(f"{location}.split is invalid")
+    expected_outcome = _text(
+        item.get("expected_outcome"), f"{location}.expected_outcome"
+    )
+    if expected_outcome not in {"compatible", "conflict", "insufficient_evidence"}:
+        raise BenchmarkError(f"{location}.expected_outcome is invalid")
+    tags = tuple(
+        _text(tag, f"{location}.tags")
+        for tag in _array(item.get("tags"), f"{location}.tags")
+    )
+    if not tags or len(set(tags)) != len(tags):
+        raise BenchmarkError(f"{location}.tags must be non-empty and unique")
+    expected_codes = tuple(
+        _text(code, f"{location}.expected_codes")
+        for code in _array(item.get("expected_codes"), f"{location}.expected_codes")
+    )
+    if len(set(expected_codes)) != len(expected_codes):
+        raise BenchmarkError(f"{location}.expected_codes must be unique")
+    query = dict.fromkeys(MATERIAL_COLUMNS, "")
+    query.update(defaults)
+    query.update(_string_mapping(item.get("query"), f"{location}.query"))
+    query[PART_ID_COLUMN] = f"{case_id}:query"
+    candidate = dict.fromkeys(MATERIAL_COLUMNS, "")
+    candidate.update(defaults)
+    candidate.update(_string_mapping(item.get("candidate"), f"{location}.candidate"))
+    candidate[PART_ID_COLUMN] = f"{case_id}:candidate"
+    return SafetyCase(
+        case_id=case_id,
+        split=cast(Literal["training", "held_out"], split),
+        rule=_text(item.get("rule"), f"{location}.rule"),
+        tags=tags,
+        query=query,
+        candidate=candidate,
+        expected_outcome=expected_outcome,
+        expected_codes=expected_codes,
+    )
+
+
+if __name__ == "__main__":
     raise SystemExit(main())

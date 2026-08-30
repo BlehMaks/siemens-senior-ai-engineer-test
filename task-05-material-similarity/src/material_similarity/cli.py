@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import cast
 
 from material_similarity.data import load_materials
-from material_similarity.hybrid import HybridRetrievalResult, rank_hybrid_alternatives
+from material_similarity.hybrid import (
+    BusinessRetrievalResult,
+    HybridRetrievalResult,
+    load_compatibility_policy,
+    rank_business_alternatives,
+    rank_hybrid_alternatives,
+)
 from material_similarity.retrieval import (
     RetrievalResult,
     rank_alternatives,
@@ -27,24 +33,39 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--mode",
-        choices=("complete", "text", "hybrid"),
+        choices=("complete", "text", "hybrid", "extension"),
         default="complete",
         help=(
             "Return complete labeled results, the reviewed text baseline, or the "
-            "non-promoted hybrid prototype"
+            "non-promoted hybrid prototype, or the opt-in version-2 business mode"
         ),
+    )
+    parser.add_argument(
+        "--policy",
+        type=Path,
+        help="Reviewed JSON-compatible YAML policy for hybrid or extension mode",
     )
     parser.add_argument("--part-id", help="Return only this PART_ID")
     parser.add_argument("--output", type=Path, help="Write JSON to this path")
     args = parser.parse_args(argv)
 
     materials = load_materials(cast(Path, args.catalog))
-    results: tuple[RetrievalResult | HybridRetrievalResult, ...]
-    if args.mode == "hybrid":
-        results = rank_hybrid_alternatives(materials)
+    results: tuple[
+        RetrievalResult | HybridRetrievalResult | BusinessRetrievalResult, ...
+    ]
+    policy_path = cast(Path | None, args.policy)
+    policy = load_compatibility_policy(policy_path) if policy_path is not None else None
+    if args.mode == "extension":
+        results = rank_business_alternatives(materials, policy=policy)
+    elif args.mode == "hybrid":
+        results = rank_hybrid_alternatives(materials, policy=policy)
     elif args.mode == "text":
+        if policy is not None:
+            parser.error("--policy requires hybrid or extension mode")
         results = rank_alternatives(materials)
     else:
+        if policy is not None:
+            parser.error("--policy requires hybrid or extension mode")
         results = rank_complete_alternatives(materials)
     part_id = cast(str | None, args.part_id)
     if part_id is None:

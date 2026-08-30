@@ -59,3 +59,40 @@ def test_cli_exposes_text_and_hybrid_only_by_explicit_mode(
     assert hybrid_result["excluded"] == []
     assert all(item["mode"] == "text_only" for item in hybrid_result["alternatives"])
     assert all("text" in item for item in hybrid_result["alternatives"])
+
+    policy = Path(__file__).parents[1] / "evals" / "compatibility-policy.yaml"
+    assert (
+        main(
+            [
+                str(catalog),
+                "--mode",
+                "extension",
+                "--policy",
+                str(policy),
+                "--part-id",
+                "2",
+            ]
+        )
+        == 0
+    )
+    extension = json.loads(capsys.readouterr().out)
+    assert extension["schema_version"] == "2.0"
+    assert extension["mode"] == "strict_hybrid"
+
+
+@pytest.mark.parametrize("mode", ["text", "complete"])
+def test_cli_rejects_policy_for_non_policy_modes(tmp_path: Path, mode: str) -> None:
+    catalog = tmp_path / "Fuse.csv"
+    _catalog(catalog)
+    policy = Path(__file__).parents[1] / "evals" / "compatibility-policy.yaml"
+
+    with pytest.raises(SystemExit, match="2"):
+        main([str(catalog), "--mode", mode, "--policy", str(policy)])
+
+
+def test_cli_rejects_unknown_part_id(tmp_path: Path) -> None:
+    catalog = tmp_path / "Fuse.csv"
+    _catalog(catalog)
+
+    with pytest.raises(SystemExit, match="2"):
+        main([str(catalog), "--part-id", "missing"])

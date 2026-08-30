@@ -4,7 +4,9 @@ import json
 from dataclasses import asdict
 
 import pytest
+from sklearn.feature_extraction.text import TfidfVectorizer
 
+import material_similarity.retrieval as retrieval
 from material_similarity.data import (
     DESCRIPTION_COLUMN,
     MATERIAL_COLUMNS,
@@ -159,3 +161,34 @@ def test_result_dataclasses_serialize_to_stable_json() -> None:
     assert payload[0]["part_id"] == "0"
     assert payload[0]["status"] == "ok"
     assert len(payload[0]["alternatives"]) == TOP_K
+
+
+def test_channel_propagates_non_vocabulary_vectorizer_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vectorizer = TfidfVectorizer()
+
+    def fail(_descriptions: tuple[str, ...]) -> None:
+        raise ValueError("unexpected vectorizer failure")
+
+    monkeypatch.setattr(vectorizer, "fit_transform", fail)
+
+    with pytest.raises(ValueError, match="unexpected vectorizer failure"):
+        retrieval._fit_channel(("fuse",), vectorizer)
+
+
+def test_structured_fallback_honors_existing_candidate_exclusions() -> None:
+    materials = tuple(_material(part_id, "") for part_id in "QAB")
+    normalized = tuple(
+        dict.fromkeys(retrieval._FALLBACK_COLUMNS, "") for _ in materials
+    )
+
+    alternatives = retrieval._rank_structured_fallback(
+        query_index=0,
+        materials=materials,
+        normalized=normalized,
+        excluded={"A"},
+        limit=5,
+    )
+
+    assert [item.part_id for item in alternatives] == ["B"]
