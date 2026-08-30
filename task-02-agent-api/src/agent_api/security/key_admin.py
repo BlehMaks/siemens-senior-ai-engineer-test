@@ -264,15 +264,15 @@ def _quarantine_owned_output(
         quarantine = f".api-key-cleanup-{secrets.token_hex(16)}"
         try:
             os.mkdir(quarantine, 0o700, dir_fd=descriptor)
-            os.chmod(
-                quarantine,
-                0o700,
-                dir_fd=descriptor,
-                follow_symlinks=False,
-            )
         except FileExistsError:
             continue
         except OSError:
+            return
+        try:
+            _chmod_at_resilient(descriptor, quarantine, 0o700)
+        except OSError:
+            with suppress(OSError):
+                os.rmdir(quarantine, dir_fd=descriptor)
             return
         quarantined_name = f"{quarantine}/owned"
         try:
@@ -337,7 +337,7 @@ def _create_empty_quarantine_marker(descriptor: int, name: str) -> None:
             0o600,
             dir_fd=descriptor,
         )
-        os.fchmod(marker_descriptor, 0o600)
+        _fchmod_resilient(marker_descriptor, 0o600)
         os.fsync(marker_descriptor)
     except OSError:
         pass
@@ -389,6 +389,43 @@ def _rename_noreplace(
     if error == errno.EEXIST:
         return False
     raise OSError(error, os.strerror(error))
+
+
+def _chmod_at_resilient(descriptor: int, name: str, mode: int) -> None:
+    try:
+        os.chmod(name, mode, dir_fd=descriptor, follow_symlinks=False)
+        return
+    except OSError as original:
+        try:
+            libc = ctypes.CDLL(None, use_errno=True)
+            chmod_at = libc.fchmodat
+            chmod_at.argtypes = [
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_uint,
+                ctypes.c_int,
+            ]
+            chmod_at.restype = ctypes.c_int
+            nofollow = 0x0020 if sys.platform == "darwin" else 0x0100
+            if chmod_at(descriptor, os.fsencode(name), mode, nofollow) != 0:
+                raise OSError(ctypes.get_errno(), "fchmodat failed")
+        except OSError:
+            raise original from None
+
+
+def _fchmod_resilient(descriptor: int, mode: int) -> None:
+    try:
+        os.fchmod(descriptor, mode)
+        return
+    except OSError as original:
+        libc = ctypes.CDLL(None, use_errno=True)
+        chmod = getattr(libc, "fchmod", None)
+        if chmod is None:
+            raise original
+        chmod.argtypes = [ctypes.c_int, ctypes.c_uint]
+        chmod.restype = ctypes.c_int
+        if chmod(descriptor, mode) != 0:
+            raise original
 
 
 if __name__ == "__main__":

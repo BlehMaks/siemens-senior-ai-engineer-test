@@ -485,3 +485,116 @@ def test_restrictive_umask_keeps_documented_cleanup_permissions(
     assert stat.S_IMODE(cleanup[0].stat().st_mode) == 0o700
     assert stat.S_IMODE((cleanup[0] / "owned").stat().st_mode) == 0o600
     assert _cleanup_payload(cleanup[0]) == b""
+
+
+def test_cleanup_chmod_wrapper_failure_keeps_quarantine_usable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "generated.key"
+    real_fsync = os.fsync
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError(errno.EIO, "injected directory fsync failure")
+        real_fsync(descriptor)
+
+    def fail_cleanup_chmod(
+        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int,
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        del mode, dir_fd, follow_symlinks
+        if isinstance(target, str) and target.startswith(".api-key-cleanup-"):
+            raise OSError(errno.EIO, "injected cleanup chmod failure")
+        raise AssertionError(f"unexpected chmod target: {target!r}")
+
+    monkeypatch.setattr(os, "fsync", fail_directory_fsync)
+    monkeypatch.setattr(key_admin.os, "chmod", fail_cleanup_chmod)
+    previous_umask = os.umask(0o777)
+    try:
+        with pytest.raises(SystemExit, match="protected output file"):
+            key_admin._write_plaintext_file(output, "temporary-key")
+    finally:
+        os.umask(previous_umask)
+
+    assert not output.exists()
+    cleanup = _cleanup_entries(tmp_path)
+    assert len(cleanup) == 1
+    assert stat.S_IMODE(cleanup[0].stat().st_mode) == 0o700
+    assert stat.S_IMODE((cleanup[0] / "owned").stat().st_mode) == 0o600
+
+
+def test_marker_fchmod_wrapper_failure_keeps_documented_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "generated.key"
+    displaced = tmp_path / "displaced.key"
+    real_fsync = os.fsync
+    real_mkdir = os.mkdir
+    real_open = os.open
+    real_fchmod = os.fchmod
+    marker_descriptor = -1
+    moved = False
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError(errno.EIO, "injected directory fsync failure")
+        real_fsync(descriptor)
+
+    def move_source_after_reservation(
+        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal moved
+        real_mkdir(target, mode, dir_fd=dir_fd)
+        if (
+            not moved
+            and isinstance(target, str)
+            and target.startswith(".api-key-cleanup-")
+            and dir_fd is not None
+        ):
+            os.rename(
+                output.name,
+                displaced.name,
+                src_dir_fd=dir_fd,
+                dst_dir_fd=dir_fd,
+            )
+            moved = True
+
+    def capture_marker_open(
+        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal marker_descriptor
+        opened = real_open(target, flags, mode, dir_fd=dir_fd)
+        if isinstance(target, str) and target.endswith("/owned"):
+            marker_descriptor = opened
+        return opened
+
+    def fail_marker_fchmod(descriptor: int, mode: int) -> None:
+        if descriptor == marker_descriptor:
+            raise OSError(errno.EIO, "injected marker fchmod failure")
+        real_fchmod(descriptor, mode)
+
+    monkeypatch.setattr(os, "fsync", fail_directory_fsync)
+    monkeypatch.setattr(key_admin.os, "mkdir", move_source_after_reservation)
+    monkeypatch.setattr(key_admin.os, "open", capture_marker_open)
+    monkeypatch.setattr(key_admin.os, "fchmod", fail_marker_fchmod)
+    previous_umask = os.umask(0o777)
+    try:
+        with pytest.raises(SystemExit, match="protected output file"):
+            key_admin._write_plaintext_file(output, "temporary-key")
+    finally:
+        os.umask(previous_umask)
+
+    cleanup = _cleanup_entries(tmp_path)
+    assert moved and marker_descriptor >= 0 and len(cleanup) == 1
+    assert stat.S_IMODE(cleanup[0].stat().st_mode) == 0o700
+    assert stat.S_IMODE((cleanup[0] / "owned").stat().st_mode) == 0o600
