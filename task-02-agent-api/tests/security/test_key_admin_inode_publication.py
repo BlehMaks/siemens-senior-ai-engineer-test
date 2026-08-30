@@ -303,62 +303,6 @@ def test_late_parent_replacement_is_rejected_and_scrubbed(
     assert _cleanup_payload(cleanup[0]) == b""
 
 
-def test_quarantine_reservation_does_not_overwrite_a_collision(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    output = tmp_path / "generated.key"
-    foreign_content = b"foreign-owner\n"
-    real_fsync = os.fsync
-    real_mkdir = os.mkdir
-    collision: Path | None = None
-
-    def fail_directory_fsync(descriptor: int) -> None:
-        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
-            raise OSError(errno.EIO, "injected directory fsync failure")
-        real_fsync(descriptor)
-
-    def create_collision(
-        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
-        mode: int = 0o777,
-        *,
-        dir_fd: int | None = None,
-    ) -> None:
-        nonlocal collision
-        if (
-            collision is None
-            and isinstance(target, str)
-            and target.startswith(".api-key-cleanup-")
-            and dir_fd is not None
-        ):
-            foreign = os.open(
-                target,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                0o600,
-                dir_fd=dir_fd,
-            )
-            try:
-                os.write(foreign, foreign_content)
-            finally:
-                os.close(foreign)
-            collision = tmp_path / target
-            raise FileExistsError(errno.EEXIST, "injected quarantine collision")
-        real_mkdir(target, mode, dir_fd=dir_fd)
-
-    monkeypatch.setattr(os, "fsync", fail_directory_fsync)
-    monkeypatch.setattr(os, "mkdir", create_collision)
-
-    with pytest.raises(SystemExit, match="protected output file"):
-        key_admin._write_plaintext_file(output, "temporary-key")
-
-    assert collision is not None
-    assert collision.read_bytes() == foreign_content
-    cleanup_directories = [
-        entry for entry in _cleanup_entries(tmp_path) if entry.is_dir()
-    ]
-    assert len(cleanup_directories) == 1
-    assert _cleanup_payload(cleanup_directories[0]) == b""
-
-
 def test_source_replacement_after_reservation_is_preserved(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -366,7 +310,7 @@ def test_source_replacement_after_reservation_is_preserved(
     displaced = tmp_path / "created.key"
     foreign_content = b"foreign-owner\n"
     real_fsync = os.fsync
-    real_mkdir = os.mkdir
+    real_rename = key_admin._rename_noreplace
     replaced = False
 
     def fail_directory_fsync(descriptor: int) -> None:
@@ -374,26 +318,26 @@ def test_source_replacement_after_reservation_is_preserved(
             raise OSError(errno.EIO, "injected directory fsync failure")
         real_fsync(descriptor)
 
-    def replace_source_after_reservation(
-        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
-        mode: int = 0o777,
-        *,
-        dir_fd: int | None = None,
-    ) -> None:
+    def replace_source_before_move(
+        source_descriptor: int,
+        source: str,
+        destination_descriptor: int,
+        destination: str,
+    ) -> bool:
         nonlocal replaced
-        real_mkdir(target, mode, dir_fd=dir_fd)
-        if (
-            not replaced
-            and isinstance(target, str)
-            and target.startswith(".api-key-cleanup-")
-            and dir_fd is not None
-        ):
+        if not replaced and destination.startswith(".api-key-cleanup-"):
             output.rename(displaced)
             output.write_bytes(foreign_content)
             replaced = True
+        return real_rename(
+            source_descriptor,
+            source,
+            destination_descriptor,
+            destination,
+        )
 
     monkeypatch.setattr(os, "fsync", fail_directory_fsync)
-    monkeypatch.setattr(os, "mkdir", replace_source_after_reservation)
+    monkeypatch.setattr(key_admin, "_rename_noreplace", replace_source_before_move)
 
     with pytest.raises(SystemExit, match="protected output file"):
         key_admin._write_plaintext_file(output, "temporary-key")
@@ -406,7 +350,7 @@ def test_source_replacement_after_reservation_is_preserved(
     assert _cleanup_payload(cleanup[0]) == b""
 
 
-def test_owned_child_collision_is_not_overwritten(
+def test_cleanup_collision_is_not_overwritten(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     output = tmp_path / "generated.key"
@@ -427,7 +371,7 @@ def test_owned_child_collision_is_not_overwritten(
         destination: str,
     ) -> bool:
         nonlocal collision
-        if collision is None and destination.endswith("/owned"):
+        if collision is None and destination.startswith(".api-key-cleanup-"):
             foreign = os.open(
                 destination,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -483,51 +427,8 @@ def test_restrictive_umask_keeps_documented_cleanup_permissions(
 
     cleanup = _cleanup_entries(tmp_path)
     assert len(cleanup) == 1
-    assert stat.S_IMODE(cleanup[0].stat().st_mode) == 0o700
-    assert stat.S_IMODE((cleanup[0] / "owned").stat().st_mode) == 0o600
+    assert stat.S_IMODE(cleanup[0].stat().st_mode) == 0o600
     assert _cleanup_payload(cleanup[0]) == b""
-
-
-@pytest.mark.parametrize("failure", [OSError, NotImplementedError])
-def test_cleanup_chmod_wrapper_failure_keeps_quarantine_usable(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    failure: type[Exception],
-) -> None:
-    output = tmp_path / "generated.key"
-    real_fsync = os.fsync
-
-    def fail_directory_fsync(descriptor: int) -> None:
-        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
-            raise OSError(errno.EIO, "injected directory fsync failure")
-        real_fsync(descriptor)
-
-    def fail_cleanup_chmod(
-        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
-        mode: int,
-        *,
-        dir_fd: int | None = None,
-        follow_symlinks: bool = True,
-    ) -> None:
-        del mode, dir_fd, follow_symlinks
-        if isinstance(target, str) and target.startswith(".api-key-cleanup-"):
-            raise failure(errno.EIO, "injected cleanup chmod failure")
-        raise AssertionError(f"unexpected chmod target: {target!r}")
-
-    monkeypatch.setattr(os, "fsync", fail_directory_fsync)
-    monkeypatch.setattr(key_admin.os, "chmod", fail_cleanup_chmod)
-    previous_umask = os.umask(0o777)
-    try:
-        with pytest.raises(SystemExit, match="protected output file"):
-            key_admin._write_plaintext_file(output, "temporary-key")
-    finally:
-        os.umask(previous_umask)
-
-    assert not output.exists()
-    cleanup = _cleanup_entries(tmp_path)
-    assert len(cleanup) == 1
-    assert stat.S_IMODE(cleanup[0].stat().st_mode) == 0o700
-    assert stat.S_IMODE((cleanup[0] / "owned").stat().st_mode) == 0o600
 
 
 @pytest.mark.parametrize("failure", [OSError, NotImplementedError])
@@ -536,41 +437,10 @@ def test_marker_fchmod_wrapper_failure_keeps_documented_mode(
     monkeypatch: pytest.MonkeyPatch,
     failure: type[Exception],
 ) -> None:
-    output = tmp_path / "generated.key"
-    displaced = tmp_path / "displaced.key"
-    real_fsync = os.fsync
-    real_mkdir = os.mkdir
+    marker_name = ".api-key-cleanup-marker"
     real_open = os.open
     real_fchmod = os.fchmod
     marker_descriptor = -1
-    moved = False
-
-    def fail_directory_fsync(descriptor: int) -> None:
-        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
-            raise OSError(errno.EIO, "injected directory fsync failure")
-        real_fsync(descriptor)
-
-    def move_source_after_reservation(
-        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
-        mode: int = 0o777,
-        *,
-        dir_fd: int | None = None,
-    ) -> None:
-        nonlocal moved
-        real_mkdir(target, mode, dir_fd=dir_fd)
-        if (
-            not moved
-            and isinstance(target, str)
-            and target.startswith(".api-key-cleanup-")
-            and dir_fd is not None
-        ):
-            os.rename(
-                output.name,
-                displaced.name,
-                src_dir_fd=dir_fd,
-                dst_dir_fd=dir_fd,
-            )
-            moved = True
 
     def capture_marker_open(
         target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
@@ -581,7 +451,7 @@ def test_marker_fchmod_wrapper_failure_keeps_documented_mode(
     ) -> int:
         nonlocal marker_descriptor
         opened = real_open(target, flags, mode, dir_fd=dir_fd)
-        if isinstance(target, str) and target.endswith("/owned"):
+        if target == marker_name:
             marker_descriptor = opened
         return opened
 
@@ -590,68 +460,53 @@ def test_marker_fchmod_wrapper_failure_keeps_documented_mode(
             raise failure(errno.EIO, "injected marker fchmod failure")
         real_fchmod(descriptor, mode)
 
-    monkeypatch.setattr(os, "fsync", fail_directory_fsync)
-    monkeypatch.setattr(key_admin.os, "mkdir", move_source_after_reservation)
     monkeypatch.setattr(key_admin.os, "open", capture_marker_open)
     monkeypatch.setattr(key_admin.os, "fchmod", fail_marker_fchmod)
+    directory_descriptor = real_open(
+        tmp_path,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
     previous_umask = os.umask(0o777)
     try:
-        with pytest.raises(SystemExit, match="protected output file"):
-            key_admin._write_plaintext_file(output, "temporary-key")
+        key_admin._create_empty_quarantine_marker(
+            directory_descriptor,
+            marker_name,
+        )
     finally:
         os.umask(previous_umask)
+        os.close(directory_descriptor)
 
-    cleanup = _cleanup_entries(tmp_path)
-    assert moved and marker_descriptor >= 0 and len(cleanup) == 1
-    assert stat.S_IMODE(cleanup[0].stat().st_mode) == 0o700
-    assert stat.S_IMODE((cleanup[0] / "owned").stat().st_mode) == 0o600
+    marker = tmp_path / marker_name
+    assert marker_descriptor >= 0
+    assert stat.S_IMODE(marker.stat().st_mode) == 0o600
+    assert marker.read_bytes() == b""
 
 
-def test_permission_repair_preserves_rebound_foreign_directory(
+def test_cleanup_never_changes_permissions_through_a_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     output = tmp_path / "generated.key"
-    quarantine_name = ".api-key-cleanup-race"
-    quarantine = tmp_path / quarantine_name
-    displaced = tmp_path / "displaced-cleanup"
-    real_chmod = os.chmod
     real_fsync = os.fsync
-    real_mkdir = os.mkdir
 
     def fail_directory_fsync(descriptor: int) -> None:
         if stat.S_ISDIR(os.fstat(descriptor).st_mode):
             raise OSError(errno.EIO, "injected directory fsync failure")
         real_fsync(descriptor)
 
-    def replace_reservation_then_fail(
-        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
-        mode: int,
-        *,
-        dir_fd: int | None = None,
-        follow_symlinks: bool = True,
-    ) -> None:
-        del mode, follow_symlinks
-        assert target == quarantine_name and dir_fd is not None
-        os.rename(
-            quarantine_name,
-            displaced.name,
-            src_dir_fd=dir_fd,
-            dst_dir_fd=dir_fd,
-        )
-        real_mkdir(quarantine_name, 0o755, dir_fd=dir_fd)
-        real_chmod(quarantine_name, 0o755, dir_fd=dir_fd)
-        raise OSError(errno.EIO, "injected cleanup chmod failure")
+    def forbidden_path_chmod(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise AssertionError("cleanup must change permissions only by descriptor")
 
     monkeypatch.setattr(os, "fsync", fail_directory_fsync)
-    monkeypatch.setattr(key_admin.secrets, "token_hex", lambda _: "race")
-    monkeypatch.setattr(key_admin.os, "chmod", replace_reservation_then_fail)
+    monkeypatch.setattr(key_admin.os, "chmod", forbidden_path_chmod)
 
     with pytest.raises(SystemExit, match="protected output file"):
         key_admin._write_plaintext_file(output, "temporary-key")
 
-    assert displaced.is_dir() and quarantine.is_dir()
-    assert stat.S_IMODE(quarantine.stat().st_mode) == 0o755
-    assert not (quarantine / "owned").exists()
+    cleanup = _cleanup_entries(tmp_path)
+    assert not output.exists() and len(cleanup) == 1
+    assert stat.S_IMODE(cleanup[0].stat().st_mode) == 0o600
+    assert cleanup[0].read_bytes() == b""
 
 
 def test_linux_without_renameat2_symbol_uses_raw_syscall(
@@ -746,6 +601,49 @@ def test_unsupported_linux_syscall_fails_closed(
     assert not destination.exists()
 
 
+@pytest.mark.parametrize("unsupported_error", [errno.EINVAL, errno.ENOSYS])
+def test_unsupported_linux_renameat2_symbol_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unsupported_error: int,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.write_bytes(b"source")
+
+    class UnsupportedRename:
+        argtypes: Any = None
+        restype: Any = None
+
+        def __call__(self, *args: object) -> int:
+            del args
+            ctypes.set_errno(unsupported_error)
+            return -1
+
+    fake_libc = type("FakeLibc", (), {"renameat2": UnsupportedRename()})()
+    monkeypatch.setattr(key_admin.sys, "platform", "linux")
+    monkeypatch.setattr(
+        key_admin.ctypes,
+        "CDLL",
+        lambda *args, **kwargs: fake_libc,
+    )
+    descriptor = os.open(tmp_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        with pytest.raises(OSError) as raised:
+            key_admin._rename_noreplace(
+                descriptor,
+                source.name,
+                descriptor,
+                destination.name,
+            )
+    finally:
+        os.close(descriptor)
+
+    assert raised.value.errno == errno.ENOTSUP
+    assert source.read_bytes() == b"source"
+    assert not destination.exists()
+
+
 def test_failed_nonblocking_quarantine_open_restores_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -764,7 +662,7 @@ def test_failed_nonblocking_quarantine_open_restores_source(
         nonlocal observed_flags
         if (
             isinstance(target, str)
-            and target.endswith("/owned")
+            and target.startswith(".api-key-cleanup-")
             and observed_flags == 0
         ):
             observed_flags = flags
@@ -816,7 +714,7 @@ def test_symlink_race_during_move_is_restored(
         destination: str,
     ) -> bool:
         nonlocal raced
-        if not raced and destination.endswith("/owned"):
+        if not raced and destination.startswith(".api-key-cleanup-"):
             os.rename(
                 source,
                 displaced.name,

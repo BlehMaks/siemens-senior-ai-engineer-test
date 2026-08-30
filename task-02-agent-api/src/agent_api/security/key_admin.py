@@ -263,41 +263,19 @@ def _quarantine_owned_output(
     for _ in range(32):
         quarantine = f".api-key-cleanup-{secrets.token_hex(16)}"
         try:
-            os.mkdir(quarantine, 0o700, dir_fd=descriptor)
-        except FileExistsError:
-            continue
-        except OSError:
-            return
-        try:
-            reserved = os.stat(
-                quarantine,
-                dir_fd=descriptor,
-                follow_symlinks=False,
-            )
-            reservation = (reserved.st_dev, reserved.st_ino)
-            _chmod_at_resilient(
-                descriptor,
-                quarantine,
-                0o700,
-                expected=reservation,
-            )
-        except OSError:
-            return
-        quarantined_name = f"{quarantine}/owned"
-        try:
             current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
         except OSError:
-            _create_empty_quarantine_marker(descriptor, quarantined_name)
+            _create_empty_quarantine_marker(descriptor, quarantine)
             return
         if (current.st_dev, current.st_ino) != expected:
-            _create_empty_quarantine_marker(descriptor, quarantined_name)
+            _create_empty_quarantine_marker(descriptor, quarantine)
             return
         try:
             renamed = _rename_noreplace(
                 descriptor,
                 name,
                 descriptor,
-                quarantined_name,
+                quarantine,
             )
         except OSError:
             return
@@ -305,7 +283,7 @@ def _quarantine_owned_output(
             continue
         try:
             quarantine_descriptor = os.open(
-                quarantined_name,
+                quarantine,
                 os.O_WRONLY
                 | getattr(os, "O_NOFOLLOW", 0)
                 | getattr(os, "O_NONBLOCK", 0),
@@ -314,7 +292,7 @@ def _quarantine_owned_output(
         except OSError:
             _restore_quarantined_entry(
                 descriptor,
-                source=quarantined_name,
+                source=quarantine,
                 destination=name,
             )
             return
@@ -327,11 +305,11 @@ def _quarantine_owned_output(
                 with suppress(OSError):
                     if _rename_noreplace(
                         descriptor,
-                        quarantined_name,
+                        quarantine,
                         descriptor,
                         name,
                     ):
-                        _create_empty_quarantine_marker(descriptor, quarantined_name)
+                        _create_empty_quarantine_marker(descriptor, quarantine)
         except OSError:
             pass
         finally:
@@ -428,6 +406,8 @@ def _rename_noreplace(
     error = ctypes.get_errno()
     if error == errno.EEXIST:
         return False
+    if error in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP}:
+        raise OSError(errno.ENOTSUP, "no no-replace rename primitive") from None
     raise OSError(error, os.strerror(error))
 
 
@@ -473,55 +453,6 @@ def _linux_syscall_rename_noreplace(
     if error in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP}:
         raise OSError(errno.ENOTSUP, "no no-replace rename primitive") from None
     raise OSError(error, os.strerror(error))
-
-
-def _chmod_at_resilient(
-    descriptor: int,
-    name: str,
-    mode: int,
-    *,
-    expected: tuple[int, int],
-) -> None:
-    try:
-        os.chmod(name, mode, dir_fd=descriptor, follow_symlinks=False)
-    except (NotImplementedError, OSError) as original:
-        if not _directory_entry_matches(descriptor, name, expected):
-            raise OSError(errno.ESTALE, "cleanup reservation changed") from original
-        try:
-            libc = ctypes.CDLL(None, use_errno=True)
-            chmod_at = libc.fchmodat
-            chmod_at.argtypes = [
-                ctypes.c_int,
-                ctypes.c_char_p,
-                ctypes.c_uint,
-                ctypes.c_int,
-            ]
-            chmod_at.restype = ctypes.c_int
-            nofollow = 0x0020 if sys.platform == "darwin" else 0x0100
-            if chmod_at(descriptor, os.fsencode(name), mode, nofollow) != 0:
-                raise OSError(ctypes.get_errno(), "fchmodat failed")
-        except (AttributeError, OSError) as repair:
-            raise OSError(errno.ENOTSUP, "could not repair cleanup mode") from repair
-    if not _directory_entry_matches(descriptor, name, expected, mode=mode):
-        raise OSError(errno.ESTALE, "cleanup reservation changed")
-
-
-def _directory_entry_matches(
-    descriptor: int,
-    name: str,
-    expected: tuple[int, int],
-    *,
-    mode: int | None = None,
-) -> bool:
-    try:
-        current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-    except OSError:
-        return False
-    return (
-        stat.S_ISDIR(current.st_mode)
-        and (current.st_dev, current.st_ino) == expected
-        and (mode is None or stat.S_IMODE(current.st_mode) == mode)
-    )
 
 
 def _fchmod_resilient(descriptor: int, mode: int) -> None:

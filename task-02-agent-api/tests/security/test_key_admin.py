@@ -207,7 +207,7 @@ def test_parent_directory_replacement_fails_without_plaintext_residue(
     assert not (displaced / output.name).exists()
     cleanup = list(displaced.glob(".api-key-cleanup-*"))
     assert len(cleanup) == 1
-    assert (cleanup[0] / "owned").read_bytes() == b""
+    assert cleanup[0].read_bytes() == b""
 
 
 def test_key_admin_protected_output_sets_a_bounded_expiry(
