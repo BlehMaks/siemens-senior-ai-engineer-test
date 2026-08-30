@@ -231,3 +231,59 @@ def test_starred_unpacking_does_not_attribute_sibling_literals(
     compile(content, "config.py", "exec")
 
     assert not _contains_credential_assignment("config.py", content)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_token"),
+    [
+        (_seed("tok", 'en, tail = *["12345678"], "tail"\n').decode(), "12345678"),
+        (_seed("head, tok", 'en = "head", *["12345678"]\n').decode(), "12345678"),
+        (
+            _seed(
+                "((head, *tok",
+                'en), tail) = (("head", *["12345678"]), "tail")\n',
+            ).decode(),
+            ["12345678"],
+        ),
+    ],
+)
+def test_fixed_starred_rhs_preserves_credential_attribution(
+    source: str, expected_token: str | list[str]
+) -> None:
+    namespace: dict[str, object] = {}
+    exec(source, namespace)
+    assert namespace["token"] == expected_token
+
+    assert _contains_credential_assignment("config.py", source.encode())
+
+
+def test_large_hexadecimal_literal_does_not_crash() -> None:
+    content = _seed("tok", "en = 0x", "f" * 4000, "\n")
+    compile(content, "config.py", "exec")
+
+    assert _contains_credential_assignment("config.py", content)
+
+
+def test_incomplete_python_fallback_uses_declared_encoding() -> None:
+    source = _seed("# coding: cp1252\ntok", 'en = "Ã©Ã©Ã©Ã©"\nif (\n').decode()
+    assert len("Ã©Ã©Ã©Ã©") == 8
+
+    assert _contains_credential_assignment("config.py", source.encode("cp1252"))
+
+
+def test_conditional_sequence_preserves_target_value_pairing() -> None:
+    source = _seed(
+        "tok",
+        'en, harmless = (runtime_token, "12345678") ',
+        'if enabled else (other_token, "abcdefgh")\n',
+    ).decode()
+    for enabled, expected_token in ((True, "a"), (False, "b")):
+        namespace = {
+            "enabled": enabled,
+            "runtime_token": "a",
+            "other_token": "b",
+        }
+        exec(source, namespace)
+        assert namespace["token"] == expected_token
+
+    assert not _contains_credential_assignment("config.py", source.encode())

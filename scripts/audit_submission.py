@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import ast
+import io
 import re
 import subprocess
+import tokenize
 from pathlib import Path, PurePosixPath
 
 MAX_PUBLIC_FILE_BYTES = 5 * 1024 * 1024
@@ -296,8 +298,12 @@ def _contains_credential_assignment_linewise(path: str, content: bytes) -> bool:
     """Scan configuration lines when a structured parser is unavailable."""
 
     suffix = Path(path).suffix.lower()
-    encoding = "utf-8-sig" if suffix == ".py" else "utf-8"
-    lines = content.decode(encoding, errors="replace").splitlines()
+    decoded = (
+        _decode_python_source(content)
+        if suffix == ".py"
+        else content.decode("utf-8", errors="replace")
+    )
+    lines = decoded.splitlines()
     shell_context = suffix in SHELL_SUFFIXES or bool(
         lines and SHELL_SHEBANG.match(lines[0])
     )
@@ -399,7 +405,7 @@ def _contains_credential_assignment_linewise(path: str, content: bytes) -> bool:
 
 
 def _python_contains_credential_assignment(content: bytes) -> bool | None:
-    source = content.decode("utf-8-sig", errors="replace")
+    source = _decode_python_source(content)
     try:
         tree = ast.parse(content)
     except SyntaxError:
@@ -466,6 +472,19 @@ def _python_name_is_credential(name: str) -> bool:
     )
 
 
+def _decode_python_source(content: bytes) -> str:
+    """Decode Python bytes using the same encoding declaration rules as Python."""
+
+    try:
+        encoding, _ = tokenize.detect_encoding(io.BytesIO(content).readline)
+    except (SyntaxError, UnicodeDecodeError):
+        encoding = "utf-8-sig"
+    try:
+        return content.decode(encoding)
+    except (LookupError, UnicodeDecodeError):
+        return content.decode("utf-8-sig", errors="replace")
+
+
 def _python_target_is_credential(target: ast.expr) -> bool:
     if isinstance(target, ast.Name):
         return _python_name_is_credential(target.id)
@@ -488,6 +507,10 @@ def _python_target_is_credential(target: ast.expr) -> bool:
 def _python_assignment_contains_literal(
     target: ast.expr, value: ast.expr, source: str
 ) -> bool:
+    if isinstance(value, ast.IfExp):
+        return _python_assignment_contains_literal(
+            target, value.body, source
+        ) or _python_assignment_contains_literal(target, value.orelse, source)
     if isinstance(target, (ast.List, ast.Tuple)) and isinstance(
         value, (ast.List, ast.Tuple)
     ):
@@ -502,6 +525,10 @@ def _python_assignment_contains_literal(
 def _python_sequence_assignment_contains_literal(
     targets: list[ast.expr], values: list[ast.expr], source: str
 ) -> bool:
+    expanded_values = _python_expand_static_starred_values(values)
+    if expanded_values is not None:
+        values = expanded_values
+
     target_stars = [
         index for index, target in enumerate(targets) if isinstance(target, ast.Starred)
     ]
@@ -545,11 +572,32 @@ def _python_sequence_assignment_contains_literal(
     return False
 
 
+def _python_expand_static_starred_values(
+    values: list[ast.expr],
+) -> list[ast.expr] | None:
+    """Expand starred list and tuple displays whose length is statically known."""
+
+    expanded: list[ast.expr] = []
+    for value in values:
+        if not isinstance(value, ast.Starred):
+            expanded.append(value)
+            continue
+        if not isinstance(value.value, (ast.List, ast.Tuple)):
+            return None
+        nested = _python_expand_static_starred_values(value.value.elts)
+        if nested is None:
+            return None
+        expanded.extend(nested)
+    return expanded
+
+
 def _python_value_contains_literal(value: ast.expr, source: str) -> bool:
     if isinstance(value, ast.Constant):
         if isinstance(value.value, (str, bytes)):
             return len(value.value) >= 8
-        if type(value.value) in {int, float, complex}:
+        if type(value.value) is int:
+            return abs(value.value) >= 10**15
+        if type(value.value) in {float, complex}:
             return len(str(value.value).replace("_", "")) >= 16
         return False
     if isinstance(value, (ast.List, ast.Set, ast.Tuple)):
