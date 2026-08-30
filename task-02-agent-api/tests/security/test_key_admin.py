@@ -180,22 +180,32 @@ def test_parent_directory_replacement_fails_without_plaintext_residue(
     output_directory.mkdir()
     displaced = tmp_path / "displaced"
     output = output_directory / "generated.key"
-    real_link = os.link
+    real_open = os.open
+    replaced = False
 
-    def replace_parent(source: str, destination: str, **kwargs: object) -> None:
-        output_directory.rename(displaced)
-        output_directory.mkdir()
-        output.write_text("concurrent-owner\n", encoding="utf-8")
-        real_link(source, destination, **kwargs)
+    def replace_parent(
+        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal replaced
+        if target == output.name and dir_fd is not None and not replaced:
+            output_directory.rename(displaced)
+            output_directory.mkdir()
+            output.write_text("concurrent-owner\n", encoding="utf-8")
+            replaced = True
+        return real_open(target, flags, mode, dir_fd=dir_fd)
 
-    monkeypatch.setattr(os, "link", replace_parent)
+    monkeypatch.setattr(os, "open", replace_parent)
 
     with pytest.raises(SystemExit, match="protected output file"):
         key_admin._write_plaintext_file(output, "temporary-key")
 
     assert output.read_text(encoding="utf-8") == "concurrent-owner\n"
     assert not (displaced / output.name).exists()
-    assert list(displaced.glob(".api-key-*.tmp")) == []
+    assert list(displaced.glob(".api-key-cleanup-*")) == []
 
 
 def test_key_admin_protected_output_sets_a_bounded_expiry(
