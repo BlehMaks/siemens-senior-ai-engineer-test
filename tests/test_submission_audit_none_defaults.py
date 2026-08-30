@@ -166,3 +166,68 @@ def test_utf8_bom_uses_structured_python_detection(
     compile(content, "config.py", "exec")
 
     assert _contains_credential_assignment("config.py", content) is expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        '[*"12345678"]',
+        '(*[b"12345678"],)',
+        '{*"12345678"}',
+    ],
+)
+def test_starred_value_does_not_hide_literal(value: str) -> None:
+    content = _seed("tok", f"en = {value}\n")
+    compile(content, "config.py", "exec")
+
+    assert _contains_credential_assignment("config.py", content)
+
+
+def test_bom_invalid_python_fallback_scans_first_line() -> None:
+    content = b"\xef\xbb\xbf" + _seed("tok", 'en = "12345678"\nif (\n')
+
+    assert _contains_credential_assignment("config.py", content)
+
+
+@pytest.mark.parametrize(
+    ("number", "expected"),
+    [
+        ("123_456_789_012_345", False),
+        ("1_234_567_890_123_456", True),
+    ],
+)
+def test_declared_encoding_keeps_numeric_threshold_stable(
+    number: str, expected: bool
+) -> None:
+    content = (
+        _seed(
+            '# coding: latin-1\nlabel = "',
+            "é".encode("latin-1").decode("latin-1"),
+            '"\ntok',
+            f"en = {number}\n",
+        )
+        .decode("utf-8")
+        .encode("latin-1")
+    )
+    compile(content, "config.py", "exec")
+
+    assert _contains_credential_assignment("config.py", content) is expected
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        _seed("*api_k", 'ey, harmless = runtime_token, "12345678"\n'),
+        _seed("tok", 'en, middle, tail = *runtime_values, "12345678"\n'),
+        _seed(
+            "((head, *api_k",
+            'ey), tail) = (("12345678", runtime_token), runtime_tail)\n',
+        ),
+    ],
+)
+def test_starred_unpacking_does_not_attribute_sibling_literals(
+    content: bytes,
+) -> None:
+    compile(content, "config.py", "exec")
+
+    assert not _contains_credential_assignment("config.py", content)

@@ -295,8 +295,9 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
 def _contains_credential_assignment_linewise(path: str, content: bytes) -> bool:
     """Scan configuration lines when a structured parser is unavailable."""
 
-    lines = content.decode("utf-8", errors="replace").splitlines()
     suffix = Path(path).suffix.lower()
+    encoding = "utf-8-sig" if suffix == ".py" else "utf-8"
+    lines = content.decode(encoding, errors="replace").splitlines()
     shell_context = suffix in SHELL_SUFFIXES or bool(
         lines and SHELL_SHEBANG.match(lines[0])
     )
@@ -490,21 +491,58 @@ def _python_assignment_contains_literal(
     if isinstance(target, (ast.List, ast.Tuple)) and isinstance(
         value, (ast.List, ast.Tuple)
     ):
-        if len(target.elts) == len(value.elts) and not any(
-            isinstance(item, ast.Starred) for item in target.elts
-        ):
-            return any(
-                _python_assignment_contains_literal(item, assigned, source)
-                for item, assigned in zip(target.elts, value.elts, strict=True)
-            )
-        if any(
-            isinstance(item, ast.Starred) and _python_target_is_credential(item.value)
-            for item in target.elts
-        ):
-            return _python_value_contains_literal(value, source)
+        return _python_sequence_assignment_contains_literal(
+            target.elts, value.elts, source
+        )
     return _python_target_is_credential(target) and _python_value_contains_literal(
         value, source
     )
+
+
+def _python_sequence_assignment_contains_literal(
+    targets: list[ast.expr], values: list[ast.expr], source: str
+) -> bool:
+    target_stars = [
+        index for index, target in enumerate(targets) if isinstance(target, ast.Starred)
+    ]
+    value_stars = [
+        index for index, value in enumerate(values) if isinstance(value, ast.Starred)
+    ]
+    target_prefix = target_stars[0] if target_stars else len(targets)
+    value_prefix = value_stars[0] if value_stars else len(values)
+    prefix_count = min(target_prefix, value_prefix)
+    if any(
+        _python_assignment_contains_literal(targets[index], values[index], source)
+        for index in range(prefix_count)
+    ):
+        return True
+
+    target_suffix = (
+        len(targets) - target_stars[-1] - 1 if target_stars else len(targets)
+    )
+    value_suffix = len(values) - value_stars[-1] - 1 if value_stars else len(values)
+    suffix_count = min(target_suffix, value_suffix)
+    if any(
+        _python_assignment_contains_literal(targets[-index], values[-index], source)
+        for index in range(1, suffix_count + 1)
+    ):
+        return True
+
+    if not target_stars and not value_stars and len(targets) == len(values):
+        return any(
+            _python_assignment_contains_literal(target, value, source)
+            for target, value in zip(targets, values, strict=True)
+        )
+    if target_stars and not value_stars:
+        star_index = target_stars[0]
+        starred_target = targets[star_index]
+        assert isinstance(starred_target, ast.Starred)
+        assigned_end = len(values) - (len(targets) - star_index - 1)
+        return _python_target_is_credential(starred_target.value) and any(
+            _python_value_contains_literal(value, source)
+            for value in values[star_index:assigned_end]
+        )
+    return False
 
 
 def _python_value_contains_literal(value: ast.expr, source: str) -> bool:
@@ -512,8 +550,7 @@ def _python_value_contains_literal(value: ast.expr, source: str) -> bool:
         if isinstance(value.value, (str, bytes)):
             return len(value.value) >= 8
         if type(value.value) in {int, float, complex}:
-            segment = ast.get_source_segment(source, value)
-            return segment is not None and len(segment.replace("_", "")) >= 16
+            return len(str(value.value).replace("_", "")) >= 16
         return False
     if isinstance(value, (ast.List, ast.Set, ast.Tuple)):
         return any(_python_value_contains_literal(item, source) for item in value.elts)
@@ -521,6 +558,8 @@ def _python_value_contains_literal(value: ast.expr, source: str) -> bool:
         return any(
             _python_value_contains_literal(item, source) for item in value.values
         )
+    if isinstance(value, ast.Starred):
+        return _python_value_contains_literal(value.value, source)
     if isinstance(value, ast.JoinedStr):
         if any(isinstance(item, ast.FormattedValue) for item in value.values):
             return False
