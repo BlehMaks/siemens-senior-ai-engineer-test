@@ -20,7 +20,7 @@ from typing import Protocol
 import aiosqlite
 
 from search_agent import RunUsage
-from search_agent.contracts import OpaqueId
+from search_agent.contracts import ActionTraceRecord, OpaqueId
 
 from .ports import RunFailureCode, RunState
 from .storage import AuditEntry, MigrationError, validate_current_schema
@@ -241,6 +241,36 @@ class OperationalTelemetry:
             tenant=self._pseudonym("tenant", tenant_id),
             run=self._pseudonym("run", run_id),
             outcome=outcome,
+        )
+
+    def action_trace(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        session_id: OpaqueId,
+        run_id: OpaqueId,
+        record: ActionTraceRecord,
+        at: datetime,
+    ) -> None:
+        if type(record) is not ActionTraceRecord:
+            raise ValueError("action trace has an invalid type")
+        checked = ActionTraceRecord.model_validate(
+            record.model_dump(mode="python", warnings="error"), strict=True
+        )
+        if checked != record:
+            raise ValueError("action trace changed during validation")
+        fields = checked.model_dump(
+            mode="json",
+            exclude={"safe_id"},
+            exclude_none=True,
+        )
+        self._emit(
+            "agent.action",
+            at=at,
+            tenant=self._pseudonym("tenant", tenant_id),
+            session=self._pseudonym("session", session_id),
+            run=self._pseudonym("run", run_id),
+            **fields,
         )
 
     def lease_outcome(

@@ -10,10 +10,16 @@ import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Protocol, cast
 
 from search_agent import FailureReason, RunResult, RunUsage, TerminalState
-from search_agent.contracts import OpaqueId, QueryText, ScopedAnswer
+from search_agent.contracts import (
+    ActionTraceRecord,
+    ConversationTurn,
+    OpaqueId,
+    QueryText,
+    ScopedAnswer,
+)
 from search_agent.memory import RunReflection, reflect_run
 
 from ..observability import OperationalTelemetry
@@ -59,6 +65,18 @@ class RunExecutor(Protocol):
         session_id: OpaqueId,
         run_id: OpaqueId,
         request: QueryText,
+    ) -> RunResult: ...
+
+
+class ContextRunExecutor(Protocol):
+    async def run_with_context(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        session_id: OpaqueId,
+        run_id: OpaqueId,
+        request: QueryText,
+        conversation_context: tuple[ConversationTurn, ...],
     ) -> RunResult: ...
 
 
@@ -252,14 +270,7 @@ class LocalWorker:
     async def _execute(
         self, item: WorkItem, run: RunRecord, permit: ExecutionPermit | None
     ) -> bool:
-        task = asyncio.create_task(
-            self._executor.run(
-                tenant_id=run.tenant_id,
-                session_id=run.session_id,
-                run_id=run.run_id,
-                request=run.query,
-            )
-        )
+        task = asyncio.create_task(self._invoke_executor(run))
         current = run
         try:
             while True:
@@ -363,6 +374,7 @@ class LocalWorker:
         try:
             projection = _projection_from_result(result, run=current)
             result_usage: RunUsage | None = result.usage
+            self._observe_trace(current, result.trace)
         except (AttributeError, TypeError, ValueError):
             projection = _TerminalProjection(
                 next_state=RunState.FAILED,
@@ -375,6 +387,44 @@ class LocalWorker:
         if terminal is not None:
             self._observe_work(item, terminal.state.value)
         return terminal is not None
+
+    async def _invoke_executor(self, run: RunRecord) -> RunResult:
+        run_with_context = getattr(self._executor, "run_with_context", None)
+        if not callable(run_with_context):
+            return await self._executor.run(
+                tenant_id=run.tenant_id,
+                session_id=run.session_id,
+                run_id=run.run_id,
+                request=run.query,
+            )
+        history = await self._repository.list_session(
+            tenant_id=run.tenant_id,
+            session_id=run.session_id,
+            limit=7,
+        )
+        completed = [
+            item
+            for item in history
+            if item.run_id != run.run_id
+            and item.state is RunState.COMPLETED
+            and item.answer is not None
+        ][-6:]
+        conversation_context = tuple(
+            ConversationTurn(
+                request=item.query,
+                answer=item.answer.answer_text[:2000],
+            )
+            for item in completed
+            if item.answer is not None
+        )
+        context_executor = cast(ContextRunExecutor, self._executor)
+        return await context_executor.run_with_context(
+            tenant_id=run.tenant_id,
+            session_id=run.session_id,
+            run_id=run.run_id,
+            request=run.query,
+            conversation_context=conversation_context,
+        )
 
     async def _finish_result(
         self,
@@ -520,6 +570,23 @@ class LocalWorker:
             )
         except Exception:
             return
+
+    def _observe_trace(
+        self, run: RunRecord, trace: tuple[ActionTraceRecord, ...]
+    ) -> None:
+        if self._telemetry is None:
+            return
+        for record in trace:
+            try:
+                self._telemetry.action_trace(
+                    tenant_id=run.tenant_id,
+                    session_id=run.session_id,
+                    run_id=run.run_id,
+                    record=record,
+                    at=self._clock(),
+                )
+            except Exception:
+                continue
 
     async def _observe_terminal(
         self, run: RunRecord, *, usage: RunUsage | None

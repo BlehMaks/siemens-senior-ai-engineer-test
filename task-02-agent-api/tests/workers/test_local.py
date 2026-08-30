@@ -44,6 +44,7 @@ from agent_api.storage import (
 from agent_api.workers import LocalWorker
 from search_agent import (
     Citation,
+    ConversationTurn,
     ExtractedEvidence,
     FailureReason,
     OptionalAssistance,
@@ -372,6 +373,50 @@ class ScriptedExecutor:
         return self.result
 
 
+class SessionRunRepository(FakeRunRepository):
+    async def list_session(
+        self, *, tenant_id: OpaqueId, session_id: OpaqueId, limit: int = 100
+    ) -> tuple[RunRecord, ...]:
+        async with self._lock:
+            selected = [
+                run
+                for run in self._runs.values()
+                if run.tenant_id == tenant_id and run.session_id == session_id
+            ]
+        selected.sort(key=lambda run: (run.created_at, run.run_id))
+        return tuple(selected[:limit])
+
+
+@dataclass(slots=True)
+class ContextExecutor:
+    result: RunResult
+    contexts: list[tuple[ConversationTurn, ...]] = field(default_factory=list)
+
+    async def run(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        session_id: OpaqueId,
+        run_id: OpaqueId,
+        request: str,
+    ) -> RunResult:
+        del tenant_id, session_id, run_id, request
+        raise AssertionError("context-capable executor must use run_with_context")
+
+    async def run_with_context(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        session_id: OpaqueId,
+        run_id: OpaqueId,
+        request: str,
+        conversation_context: tuple[ConversationTurn, ...],
+    ) -> RunResult:
+        del tenant_id, session_id, run_id, request
+        self.contexts.append(conversation_context)
+        return self.result
+
+
 @pytest.mark.asyncio
 async def test_two_workers_execute_one_delivery() -> None:
     run = queued_run()
@@ -408,6 +453,58 @@ async def test_two_workers_execute_one_delivery() -> None:
     assert stored is not None
     assert stored.state is RunState.COMPLETED
     assert stored.delivery_attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_context_executor_receives_only_prior_completed_same_session_turns() -> (
+    None
+):
+    previous = RunRecord(
+        tenant_id="tenant-one",
+        session_id="session-one",
+        run_id="run-previous",
+        generation_id="generation-previous",
+        idempotency_key="request-key-previous",
+        query="Find the latest Siemens sustainability report",
+        state=RunState.COMPLETED,
+        version=1,
+        delivery_attempts=1,
+        created_at=NOW - timedelta(minutes=2),
+        updated_at=NOW - timedelta(minutes=1),
+        terminal_at=NOW - timedelta(minutes=1),
+        answer=ScopedAnswer(
+            answer_text="Siemens published its sustainability report for 2025.",
+            citations=(),
+        ),
+    )
+    other_session = previous.model_copy(
+        update={
+            "session_id": "session-other",
+            "run_id": "run-other",
+            "generation_id": "generation-other",
+            "idempotency_key": "request-key-other",
+        }
+    )
+    repository = SessionRunRepository(previous, other_session, queued_run())
+    executor = ContextExecutor(result=completed_result())
+    worker = LocalWorker(
+        repository=cast(RunRepository, repository),
+        queue=FakeQueue(work_item()),
+        executor=executor,
+        worker_id="worker-one",
+        clock=MutableClock(NOW),
+        lease_id_factory=lambda: "lease-one",
+    )
+
+    assert await worker.process_one() is True
+    assert executor.contexts == [
+        (
+            ConversationTurn(
+                request="Find the latest Siemens sustainability report",
+                answer="Siemens published its sustainability report for 2025.",
+            ),
+        )
+    ]
 
 
 @pytest.mark.asyncio

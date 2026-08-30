@@ -28,7 +28,7 @@ from agent_api.storage import (
     TenantRecord,
     migrate,
 )
-from search_agent import RunUsage
+from search_agent import ActionTraceRecord, RunUsage, TraceOutcome, TraceStage
 
 NOW = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
 
@@ -156,6 +156,43 @@ async def test_terminal_log_is_diagnostic_but_contains_no_raw_identity_or_conten
         raw not in str(samples)
         for raw in (tenant, session, run, "corr-private-client-0001")
     )
+
+
+def test_action_trace_is_pseudonymized_and_keeps_only_allowlisted_metadata(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("agent_api.operations.action-test")
+    logger.setLevel(logging.INFO)
+    telemetry = OperationalTelemetry(
+        pseudonym_key=b"k" * 32,
+        audit=AuditRecorder(),
+        logger=logger,
+    )
+    record = ActionTraceRecord(
+        stage=TraceStage.FETCH,
+        action="fetch.document",
+        outcome=TraceOutcome.SUCCEEDED,
+        safe_id="run-private-one",
+        context_hash="a" * 64,
+        bytes_count=1024,
+    )
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        telemetry.action_trace(
+            tenant_id="tenant-private-one",
+            session_id="session-private-one",
+            run_id="run-private-one",
+            record=record,
+            at=NOW,
+        )
+
+    payload = json.loads(caplog.records[0].message)
+    assert payload["event"] == "agent.action"
+    assert payload["stage"] == "fetch"
+    assert payload["action"] == "fetch.document"
+    assert payload["bytes_count"] == 1024
+    assert "safe_id" not in payload
+    assert "private-one" not in caplog.records[0].message
 
 
 @pytest.mark.asyncio
