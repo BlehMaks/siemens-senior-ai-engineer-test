@@ -48,6 +48,10 @@ The operator entry point is
 Terraform for every GCP and GitHub configuration change. A normal first run is:
 
 ```bash
+# One-time workstation login. bootstrap.sh does not run these commands.
+gcloud auth application-default login
+gcloud auth application-default set-quota-project siemens-senior-ai-engineer
+
 export TERRAFORM_BIN=/absolute/path/to/terraform
 
 ./task-03-deployment-strategy/scripts/bootstrap.sh plan \
@@ -62,6 +66,11 @@ export TERRAFORM_BIN=/absolute/path/to/terraform
   BlehMaks \
   europe-west3
 ```
+
+The login creates Application Default Credentials for the Terraform provider. It
+does not provision or change cloud resources. The project, billing link, account
+terms, MFA, and any protected-environment approval remain manual prerequisites.
+The deployment guide lists each manual step and its expected result.
 
 `deploy` applies the reviewed Terraform bootstrap, verifies it, and then
 dispatches the protected GitHub workflow for the exact pushed `master` commit.

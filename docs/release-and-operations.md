@@ -51,7 +51,8 @@ suite still covers all six packages.
 The operator computer needs:
 
 - Terraform 1.9.8;
-- Google credentials already available to the Terraform provider;
+- Google Application Default Credentials for an operator who can read and
+  bootstrap `siemens-senior-ai-engineer`;
 - GitHub CLI authenticated to the target repository;
 - `git`, `jq`, and `openssl`;
 - the current `master` commit pushed before deployment dispatch.
@@ -62,6 +63,20 @@ Confirm GitHub access without changing the repository:
 gh auth status
 gh repo view BlehMaks/siemens-senior-ai-engineer-test
 ```
+
+Terraform cannot complete an interactive account login or MFA challenge. On each
+new operator computer, create its local ADC file before the first plan:
+
+```bash
+gcloud auth application-default login
+gcloud auth application-default set-quota-project siemens-senior-ai-engineer
+```
+
+This is a one-time credential setup, not a provisioning step. The wrapper and the
+GitHub deployment workflow do not call `gcloud`. After login, `bootstrap.sh plan`
+must read project number `163220015018` and show only the two state buckets on a
+clean project. A `data.google_project.current` permission error means that the ADC
+identity still lacks access or belongs to a different account.
 
 The project and its billing relationship must already exist. Everything inside
 the project, plus the repository delivery boundary, is managed by Terraform.
@@ -232,8 +247,18 @@ reviewed action and is never part of the bootstrap wrapper.
 
 ## External decisions that remain manual
 
-Terraform cannot create the user's billing account, accept platform terms, pass
-MFA, or approve its own protected GitHub Environment. Those account-level actions
-remain with a human operator. Corporate identity, data residency, retention,
-production SLOs, model licensing, and final capacity are enterprise design inputs,
-not claims made by this assessment deployment.
+Terraform starts only after an operator has completed these account-level steps:
+
+1. Create or select `siemens-senior-ai-engineer` and confirm project number
+   `163220015018`.
+2. Link an active EUR billing account and authorize the operator to use it.
+3. Accept required Google Cloud terms, complete MFA, and create local ADC with the
+   commands in the prerequisites section.
+4. Create the GitHub repository and push `master` once. Terraform can then manage
+   its rules, variables, environment, and Workload Identity Federation boundary.
+5. Approve a protected GitHub Environment deployment when GitHub asks for human
+   review. Terraform cannot approve its own run.
+
+Corporate identity, data residency, retention, production SLOs, model licensing,
+and final capacity also require decisions from the owning teams. The assessment
+does not claim to settle them.

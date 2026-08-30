@@ -31,6 +31,10 @@ All GCP and GitHub configuration changes begin with
 provisioning and can plan, apply, verify, or dispatch deployment:
 
 ```bash
+# One-time operator login. The wrapper never calls gcloud.
+gcloud auth application-default login
+gcloud auth application-default set-quota-project PROJECT_ID
+
 ./task-03-deployment-strategy/scripts/bootstrap.sh plan \
   PROJECT_ID OWNER/REPOSITORY REVIEWER europe-west3
 
