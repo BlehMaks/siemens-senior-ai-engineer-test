@@ -59,6 +59,10 @@ case "$1 $2" in
     project=liquidity-planning-platform
     database=sai-dev
     if [[ $FAKE_SCENARIO == legacy_default ]]; then database='(default)'; fi
+    if [[ $FAKE_SCENARIO == mixed_invalid ]]; then
+      database='(default)'
+      if [[ $address == *.runs ]]; then project=another-project; fi
+    fi
     if [[ $FAKE_SCENARIO == wrong_database ]]; then database=unexpected-db; fi
     if [[ $FAKE_SCENARIO == wrong_project ]]; then project=another-project; fi
     printf 'project = "%s"\ndatabase = "%s"\n' "$project" "$database"
@@ -125,7 +129,9 @@ def test_migration_restores_intermediate_addresses_without_recreating_indexes(
         )
 
 
-@pytest.mark.parametrize("scenario", ["wrong_project", "wrong_database", "both_named"])
+@pytest.mark.parametrize(
+    "scenario", ["wrong_project", "wrong_database", "mixed_invalid", "both_named"]
+)
 def test_migration_fails_closed_for_ambiguous_ownership(
     tmp_path: Path,
     scenario: str,

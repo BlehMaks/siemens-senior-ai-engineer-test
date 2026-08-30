@@ -81,6 +81,7 @@ def test_named_database_indexes_retain_protected_legacy_addresses() -> None:
     )
 
     assert "removed {" not in main
+    assert main.count("moved {") == len(legacy_names)
     for name in legacy_names:
         marker = f'resource "google_firestore_index" "{name}"'
         resource = main.split(marker, maxsplit=1)[1].split('\nresource "', maxsplit=1)[
@@ -89,6 +90,12 @@ def test_named_database_indexes_retain_protected_legacy_addresses() -> None:
 
         assert "database   = google_firestore_database.assessment.name" in resource
         assert "prevent_destroy = true" in resource
+        assert re.search(
+            rf"moved\s*\{{\s*"
+            rf"from\s*=\s*google_firestore_index\.assessment_{name}\s*"
+            rf"to\s*=\s*google_firestore_index\.{name}\s*\}}",
+            main,
+        )
         assert f'resource "google_firestore_index" "assessment_{name}"' not in main
 
 

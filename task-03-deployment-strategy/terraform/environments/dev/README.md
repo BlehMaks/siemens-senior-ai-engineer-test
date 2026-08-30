@@ -27,9 +27,10 @@ is committed.
 - the named `sai-dev` Firestore database uses delete protection and Terraform
   destroy set to `ABANDON`, leaving any project `(default)` database untouched;
 - each Firestore composite index uses `prevent_destroy`; the protected deploy
-  workflow runs `scripts/migrate_firestore_index_state.sh` before planning so an
-  old `(default)` state entry is forgotten without deleting its cloud index, while
-  an existing `sai-dev` entry is preserved;
+  workflow runs `scripts/migrate_firestore_index_state.sh` before planning, checks
+  the full known state before changing it, and forgets an old `(default)` entry
+  without deleting its cloud index; Terraform `moved` declarations preserve
+  intermediate `assessment_*` entries even if someone plans directly;
 - Artifact Registry uses immutable tags;
 - bootstrap grants database-conditioned `roles/datastore.user` and
   resource-scoped `roles/secretmanager.secretAccessor` only to the API and worker

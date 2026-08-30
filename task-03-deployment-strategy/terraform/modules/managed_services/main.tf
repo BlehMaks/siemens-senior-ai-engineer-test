@@ -75,6 +75,36 @@ resource "google_artifact_registry_repository_iam_member" "deployer_writer" {
   member     = "serviceAccount:${var.deployer_service_account_email}"
 }
 
+moved {
+  from = google_firestore_index.assessment_sessions
+  to   = google_firestore_index.sessions
+}
+
+moved {
+  from = google_firestore_index.assessment_runs
+  to   = google_firestore_index.runs
+}
+
+moved {
+  from = google_firestore_index.assessment_run_events
+  to   = google_firestore_index.run_events
+}
+
+moved {
+  from = google_firestore_index.assessment_audit_entries
+  to   = google_firestore_index.audit_entries
+}
+
+moved {
+  from = google_firestore_index.assessment_quota_execution_leases_active
+  to   = google_firestore_index.quota_execution_leases_active
+}
+
+moved {
+  from = google_firestore_index.assessment_quota_sse_leases_active
+  to   = google_firestore_index.quota_sse_leases_active
+}
+
 resource "google_firestore_index" "sessions" {
   project    = var.project_id
   database   = google_firestore_database.assessment.name

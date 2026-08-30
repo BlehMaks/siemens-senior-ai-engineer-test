@@ -72,6 +72,9 @@ legacy_names=(
   quota_execution_leases_active
   quota_sse_leases_active
 )
+forget_addresses=("")
+move_sources=("")
+move_destinations=("")
 
 for legacy_name in "${legacy_names[@]}"; do
   legacy_address="module.managed_services.google_firestore_index.${legacy_name}"
@@ -87,8 +90,7 @@ for legacy_name in "${legacy_names[@]}"; do
 
     case $legacy_database in
       '(default)')
-        "$TERRAFORM_BIN" -chdir="$terraform_root" state rm \
-          -lock-timeout=60s "$legacy_address"
+        forget_addresses+=("$legacy_address")
         ;;
       "$database_id")
         legacy_in_named_database=true
@@ -112,9 +114,19 @@ for legacy_name in "${legacy_names[@]}"; do
     [[ $legacy_in_named_database == false ]] ||
       fail "$legacy_address and $replacement_address both own a $database_id index"
 
-    "$TERRAFORM_BIN" -chdir="$terraform_root" state mv \
-      -lock-timeout=60s "$replacement_address" "$legacy_address"
+    move_sources+=("$replacement_address")
+    move_destinations+=("$legacy_address")
   fi
+done
+
+for ((index = 1; index < ${#forget_addresses[@]}; index++)); do
+  "$TERRAFORM_BIN" -chdir="$terraform_root" state rm \
+    -lock-timeout=60s "${forget_addresses[$index]}"
+done
+
+for ((index = 1; index < ${#move_sources[@]}; index++)); do
+  "$TERRAFORM_BIN" -chdir="$terraform_root" state mv \
+    -lock-timeout=60s "${move_sources[$index]}" "${move_destinations[$index]}"
 done
 
 printf 'Firestore index state is ready for database %s.\n' "$database_id"
