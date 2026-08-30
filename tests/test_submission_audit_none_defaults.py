@@ -366,3 +366,23 @@ def test_correlated_starred_conditionals_keep_branch_pairing() -> None:
         assert namespace["harmless"] == "12345678"
 
     assert not _contains_credential_assignment("config.py", source.encode())
+
+
+def test_rebound_condition_does_not_force_impossible_branch_correlation() -> None:
+    source = _seed(
+        "enabled = True\nhead, tok",
+        "en, sibling, tail = ",
+        "*([(enabled := False)] if enabled else [runtime_a, runtime_b]), ",
+        '*([runtime_token] if enabled else ["12345678", (enabled := True)]), ',
+        "*([runtime_tail] if enabled else [])\n",
+    ).decode()
+    namespace = {
+        "runtime_a": "a",
+        "runtime_b": "b",
+        "runtime_token": "rt",
+        "runtime_tail": "tail",
+    }
+    exec(source, namespace)
+    assert namespace["token"] == "12345678"
+
+    assert _contains_credential_assignment("config.py", source.encode())

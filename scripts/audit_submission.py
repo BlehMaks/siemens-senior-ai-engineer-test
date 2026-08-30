@@ -531,11 +531,19 @@ def _python_assignment_contains_literal(
 def _python_sequence_assignment_contains_literal(
     targets: list[ast.expr], values: list[ast.expr], source: str
 ) -> bool:
+    rebound_names = {
+        node.target.id
+        for value in values
+        for node in ast.walk(value)
+        if isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name)
+    }
     return any(
         _python_expanded_sequence_assignment_contains_literal(
             targets, expanded_values, source
         )
-        for expanded_values, _ in _python_expand_static_starred_values(values)
+        for expanded_values, _ in _python_expand_static_starred_values(
+            values, rebound_names
+        )
     )
 
 
@@ -588,12 +596,15 @@ def _python_expanded_sequence_assignment_contains_literal(
 
 def _python_expand_static_starred_values(
     values: list[ast.expr],
+    rebound_names: set[str] | None = None,
 ) -> list[tuple[list[ast.expr], dict[str, bool]]]:
     """Return exact alternatives while preserving unknown starred segments."""
 
+    if rebound_names is None:
+        rebound_names = set()
     expanded: list[tuple[list[ast.expr], dict[str, bool]]] = [([], {})]
     for value in values:
-        alternatives = _python_static_starred_value_alternatives(value)
+        alternatives = _python_static_starred_value_alternatives(value, rebound_names)
         combined: list[tuple[list[ast.expr], dict[str, bool]]] = []
         for prefix, prefix_conditions in expanded:
             for alternative, alternative_conditions in alternatives:
@@ -614,28 +625,30 @@ def _python_expand_static_starred_values(
 
 def _python_static_starred_value_alternatives(
     value: ast.expr,
+    rebound_names: set[str],
 ) -> list[tuple[list[ast.expr], dict[str, bool]]]:
     if not isinstance(value, ast.Starred):
         return [([value], {})]
-    alternatives = _python_sequence_expression_alternatives(value.value)
+    alternatives = _python_sequence_expression_alternatives(value.value, rebound_names)
     return alternatives if alternatives is not None else [([value], {})]
 
 
 def _python_sequence_expression_alternatives(
     value: ast.expr,
+    rebound_names: set[str],
 ) -> list[tuple[list[ast.expr], dict[str, bool]]] | None:
     if isinstance(value, (ast.List, ast.Tuple)):
-        return _python_expand_static_starred_values(value.elts)
+        return _python_expand_static_starred_values(value.elts, rebound_names)
     if not isinstance(value, ast.IfExp):
         return None
 
-    body = _python_sequence_expression_alternatives(value.body)
-    orelse = _python_sequence_expression_alternatives(value.orelse)
+    body = _python_sequence_expression_alternatives(value.body, rebound_names)
+    orelse = _python_sequence_expression_alternatives(value.orelse, rebound_names)
     if body is None or orelse is None:
         return None
     condition = (
         f"name:{value.test.id}"
-        if isinstance(value.test, ast.Name)
+        if isinstance(value.test, ast.Name) and value.test.id not in rebound_names
         else f"node:{id(value.test)}"
     )
     alternatives: list[tuple[list[ast.expr], dict[str, bool]]] = []
