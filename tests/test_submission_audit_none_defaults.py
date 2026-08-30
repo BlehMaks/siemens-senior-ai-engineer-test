@@ -401,3 +401,28 @@ def test_lambda_local_rebound_does_not_change_outer_branch_pairing() -> None:
         assert namespace["token"] == "r"
 
     assert not _contains_credential_assignment("config.py", source.encode())
+
+
+def test_lambda_default_rebound_changes_outer_branch_pairing() -> None:
+    source = _seed(
+        "enabled = True\nhead, tok",
+        "en = *([(lambda value=(enabled := False): value)] ",
+        "if enabled else [runtime_head]), ",
+        '*([runtime_token] if enabled else ["12345678"])\n',
+    ).decode()
+    namespace = {"runtime_head": "head", "runtime_token": "runtime"}
+    exec(source, namespace)
+    assert namespace["token"] == "12345678"
+
+    assert _contains_credential_assignment("config.py", source.encode())
+
+
+def test_rebound_collection_handles_deep_valid_expression() -> None:
+    expression = " + ".join("runtime_value" for _ in range(500))
+    source = _seed(
+        "tok",
+        f"en, harmless = runtime_token, {expression}\n",
+    ).decode()
+    compile(source, "config.py", "exec")
+
+    assert not _contains_credential_assignment("config.py", source.encode())

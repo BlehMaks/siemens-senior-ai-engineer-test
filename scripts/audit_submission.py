@@ -545,22 +545,23 @@ def _python_sequence_assignment_contains_literal(
 
 
 def _python_rebound_names(values: list[ast.expr]) -> set[str]:
-    class ReboundNameVisitor(ast.NodeVisitor):
-        def __init__(self) -> None:
-            self.names: set[str] = set()
-
-        def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+    names: set[str] = set()
+    pending: list[ast.AST] = list(values)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.NamedExpr):
             if isinstance(node.target, ast.Name):
-                self.names.add(node.target.id)
-            self.visit(node.value)
-
-        def visit_Lambda(self, node: ast.Lambda) -> None:
-            del node
-
-    visitor = ReboundNameVisitor()
-    for value in values:
-        visitor.visit(value)
-    return visitor.names
+                names.add(node.target.id)
+            pending.append(node.value)
+            continue
+        if isinstance(node, ast.Lambda):
+            pending.extend(node.args.defaults)
+            pending.extend(
+                default for default in node.args.kw_defaults if default is not None
+            )
+            continue
+        pending.extend(ast.iter_child_nodes(node))
+    return names
 
 
 def _python_expanded_sequence_assignment_contains_literal(
