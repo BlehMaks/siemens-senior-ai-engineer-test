@@ -61,15 +61,15 @@ def test_artifact_access_is_repository_specific() -> None:
     assert assigned_roles == {"roles/artifactregistry.writer"}
     assert 'resource "google_project_iam_member"' not in main
     assert "repository = google_artifact_registry_repository.containers.name" in main
-    assert 'resource "google_firestore_index" "assessment_sessions"' in main
-    assert 'resource "google_firestore_index" "assessment_runs"' in main
-    assert 'resource "google_firestore_index" "assessment_run_events"' in main
+    assert 'resource "google_firestore_index" "sessions"' in main
+    assert 'resource "google_firestore_index" "runs"' in main
+    assert 'resource "google_firestore_index" "run_events"' in main
     assert "allUsers" not in main
     assert "allAuthenticatedUsers" not in main
     assert 'member = "*"' not in main
 
 
-def test_named_database_index_migration_abandons_default_indexes() -> None:
+def test_named_database_indexes_retain_protected_legacy_addresses() -> None:
     main = read(MODULE / "main.tf")
     legacy_names = (
         "sessions",
@@ -80,15 +80,16 @@ def test_named_database_index_migration_abandons_default_indexes() -> None:
         "quota_sse_leases_active",
     )
 
-    assert main.count("removed {") == len(legacy_names)
+    assert "removed {" not in main
     for name in legacy_names:
-        assert re.search(
-            rf"removed\s*\{{\s*"
-            rf"from\s*=\s*google_firestore_index\.{name}\s*"
-            rf"lifecycle\s*\{{\s*destroy\s*=\s*false\s*\}}\s*\}}",
-            main,
-        )
-        assert f'resource "google_firestore_index" "assessment_{name}"' in main
+        marker = f'resource "google_firestore_index" "{name}"'
+        resource = main.split(marker, maxsplit=1)[1].split('\nresource "', maxsplit=1)[
+            0
+        ]
+
+        assert "database   = google_firestore_database.assessment.name" in resource
+        assert "prevent_destroy = true" in resource
+        assert f'resource "google_firestore_index" "assessment_{name}"' not in main
 
 
 def test_data_lifecycle_and_alerts_fail_safe() -> None:
@@ -117,4 +118,5 @@ def test_operator_docs_state_cost_and_destroy_limits() -> None:
     assert "alert, not an enforcement boundary" in cost_review
     assert "DELETE_PROTECTION_ENABLED" not in destroy_review
     assert "delete protection is enabled" in destroy_review
+    assert "index `prevent_destroy` guards" in destroy_review
     assert "ABANDON" in destroy_review

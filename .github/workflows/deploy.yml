@@ -215,6 +215,15 @@ jobs:
           -backend-config=bucket=$TF_STATE_BUCKET
           -backend-config=prefix=assessment/dev
 
+      - name: Align legacy Firestore index state
+        env:
+          TERRAFORM_BIN: terraform
+        run: >-
+          task-03-deployment-strategy/scripts/migrate_firestore_index_state.sh
+          "$GITHUB_WORKSPACE/task-03-deployment-strategy/terraform/environments/dev"
+          "$TF_VAR_project_id"
+          "sai-dev"
+
       - name: Create the managed foundation on first deployment
         env:
           TF_VAR_image_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

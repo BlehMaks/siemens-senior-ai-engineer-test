@@ -75,55 +75,7 @@ resource "google_artifact_registry_repository_iam_member" "deployer_writer" {
   member     = "serviceAccount:${var.deployer_service_account_email}"
 }
 
-removed {
-  from = google_firestore_index.sessions
-
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = google_firestore_index.runs
-
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = google_firestore_index.run_events
-
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = google_firestore_index.audit_entries
-
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = google_firestore_index.quota_execution_leases_active
-
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = google_firestore_index.quota_sse_leases_active
-
-  lifecycle {
-    destroy = false
-  }
-}
-
-resource "google_firestore_index" "assessment_sessions" {
+resource "google_firestore_index" "sessions" {
   project    = var.project_id
   database   = google_firestore_database.assessment.name
   collection = "sessions"
@@ -142,9 +94,13 @@ resource "google_firestore_index" "assessment_sessions" {
     field_path = "session_id"
     order      = "ASCENDING"
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
-resource "google_firestore_index" "assessment_runs" {
+resource "google_firestore_index" "runs" {
   project    = var.project_id
   database   = google_firestore_database.assessment.name
   collection = "runs"
@@ -168,9 +124,13 @@ resource "google_firestore_index" "assessment_runs" {
     field_path = "run_id"
     order      = "ASCENDING"
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
-resource "google_firestore_index" "assessment_run_events" {
+resource "google_firestore_index" "run_events" {
   project    = var.project_id
   database   = google_firestore_database.assessment.name
   collection = "run_events"
@@ -189,9 +149,13 @@ resource "google_firestore_index" "assessment_run_events" {
     field_path = "sequence"
     order      = "ASCENDING"
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
-resource "google_firestore_index" "assessment_audit_entries" {
+resource "google_firestore_index" "audit_entries" {
   project    = var.project_id
   database   = google_firestore_database.assessment.name
   collection = "audit_entries"
@@ -210,9 +174,13 @@ resource "google_firestore_index" "assessment_audit_entries" {
     field_path = "entry_id"
     order      = "ASCENDING"
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
-resource "google_firestore_index" "assessment_quota_execution_leases_active" {
+resource "google_firestore_index" "quota_execution_leases_active" {
   project    = var.project_id
   database   = google_firestore_database.assessment.name
   collection = "quota_execution_leases"
@@ -226,9 +194,13 @@ resource "google_firestore_index" "assessment_quota_execution_leases_active" {
     field_path = "expires_at"
     order      = "ASCENDING"
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
-resource "google_firestore_index" "assessment_quota_sse_leases_active" {
+resource "google_firestore_index" "quota_sse_leases_active" {
   project    = var.project_id
   database   = google_firestore_database.assessment.name
   collection = "quota_sse_leases"
@@ -241,6 +213,10 @@ resource "google_firestore_index" "assessment_quota_sse_leases_active" {
   fields {
     field_path = "expires_at"
     order      = "ASCENDING"
+  }
+
+  lifecycle {
+    prevent_destroy = true
   }
 }
 

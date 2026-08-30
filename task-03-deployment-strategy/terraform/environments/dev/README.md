@@ -26,6 +26,10 @@ is committed.
 - one explicit region: `europe-west3`;
 - the named `sai-dev` Firestore database uses delete protection and Terraform
   destroy set to `ABANDON`, leaving any project `(default)` database untouched;
+- each Firestore composite index uses `prevent_destroy`; the protected deploy
+  workflow runs `scripts/migrate_firestore_index_state.sh` before planning so an
+  old `(default)` state entry is forgotten without deleting its cloud index, while
+  an existing `sai-dev` entry is preserved;
 - Artifact Registry uses immutable tags;
 - bootstrap grants database-conditioned `roles/datastore.user` and
   resource-scoped `roles/secretmanager.secretAccessor` only to the API and worker

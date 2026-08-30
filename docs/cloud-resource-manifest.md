@@ -138,9 +138,15 @@ bucket, no secret payload access, no queue-administration role, no project IAM
 administration, and no service-account key. The named database and conditional
 data/index bindings keep the assessment identities out of any pre-existing
 `(default)` database used by another service in the same project.
-Legacy Terraform addresses for `(default)` indexes are removed from state with
-`destroy = false`; the module then creates separate index resources in `sai-dev`.
-An upgrade therefore leaves the existing database and its indexes in place.
+Before the protected deployment plan, the migration script checks the project and
+database recorded for each known index address. It forgets an address only when it
+belongs to this project and the `(default)` database; the cloud index itself is
+left alone. An existing `sai-dev` address stays where it is. If an earlier version
+used an `assessment_*` address for the same `sai-dev` index, Terraform moves that
+state entry back to its stable address without recreating the index. Any other
+project, database, or duplicate owner stops the deployment. The index resources
+also use `prevent_destroy`, so bypassing this migration fails instead of replacing
+an old index.
 
 ## GitHub entities
 

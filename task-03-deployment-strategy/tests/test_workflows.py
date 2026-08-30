@@ -101,6 +101,23 @@ def test_remote_state_and_secret_container_inputs_fail_closed() -> None:
     assert "terraform init -backend=false" not in deploy
 
 
+def test_deploy_aligns_firestore_index_state_before_planning() -> None:
+    source = read(WORKFLOW_ROOT / "deploy.yml")
+    migration = source.index("- name: Align legacy Firestore index state")
+    foundation = source.index(
+        "- name: Create the managed foundation on first deployment"
+    )
+
+    assert migration < foundation
+    assert "scripts/migrate_firestore_index_state.sh" in source[migration:foundation]
+    assert (
+        '"$GITHUB_WORKSPACE/task-03-deployment-strategy/terraform/environments/dev"'
+        in source[migration:foundation]
+    )
+    assert '"$TF_VAR_project_id"' in source[migration:foundation]
+    assert '"sai-dev"' in source[migration:foundation]
+
+
 def test_ci_runs_the_cross_module_environment_contract() -> None:
     source = read(WORKFLOW_ROOT / "ci.yml")
     contract_step = source.split(

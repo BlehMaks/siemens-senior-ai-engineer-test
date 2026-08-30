@@ -7,6 +7,8 @@ This stack is biased toward recoverability rather than aggressive teardown.
 - Firestore delete protection is enabled by default.
 - Firestore uses Terraform deletion policy `ABANDON`, so a casual `destroy`
   will not delete the assessment database.
+- Firestore composite indexes use `prevent_destroy`, which blocks replacement or
+  teardown until a reviewed change removes the guard.
 - Secret containers have deletion protection enabled, so versions injected outside
   Terraform cannot disappear during a routine infrastructure teardown.
 - The Artifact Registry repository uses immutable tags to keep release history
@@ -19,7 +21,8 @@ This stack is biased toward recoverability rather than aggressive teardown.
 
 If a full teardown is ever required, the reviewer should first disable Firestore
 delete protection and switch `firestore_deletion_policy` from `ABANDON` to
-`DELETE`, then disable Secret Manager deletion protection in a reviewed change.
+`DELETE`, remove the index `prevent_destroy` guards, then disable Secret Manager
+deletion protection in a reviewed change.
 Cloud Run deletion protection and the bootstrap queue's `prevent_destroy` must
 also be disabled in their owning stacks before removing the execution plane.
 These explicit changes keep destructive intent out of routine environment cleanup.
