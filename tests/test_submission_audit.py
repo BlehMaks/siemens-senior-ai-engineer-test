@@ -150,7 +150,8 @@ def test_http_url_is_not_a_machine_path(repository: Path) -> None:
         'signing_secret = EnvPepperProvider("AGENT_API_TASK_SIGNING_HMAC").pepper()\n',
         "secret = var.api_key_pepper_secret_id\n",
         'secret = base64.urlsafe_b64encode(b"s" * 32).decode()\n',
-        seed("call(index_tok", "en=refreshed_token,\n)\n").decode(),
+        seed("call(\n    index_tok", "en=refreshed_token,)\n").decode(),
+        seed("index_tok", "en = (refreshed_token,)\n").decode(),
     ],
 )
 def test_symbolic_credential_expressions_are_not_secret_literals(
@@ -176,6 +177,7 @@ def test_symbolic_credential_expressions_are_not_secret_literals(
         ("config.yaml", seed("tok", "en: |\n  abcdefghijklmnop\n").decode()),
         ("settings.py", seed("API_", 'KEY = b"abcdefghijklmnop"\n').decode()),
         ("settings.py", seed("TOK", 'EN = """abcdefghijklmnop"""\n').decode()),
+        ("settings.py", seed("TOK", 'EN = ("abcdefghijklmnop",)\n').decode()),
         (
             "settings.toml",
             seed("tok", 'en = """abcdefghijklmnop"""\n').decode(),

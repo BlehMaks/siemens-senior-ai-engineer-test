@@ -84,6 +84,9 @@ SHELL_INTERPOLATION = re.compile(
 TEMPLATE_INTERPOLATION = re.compile(r"(?<!\$)\$\{[^{}\r\n]+\}")
 TERRAFORM_INTERPOLATION = TEMPLATE_INTERPOLATION
 BRACED_INTERPOLATION = re.compile(r"\{[A-Za-z_][^{}\r\n]*\}")
+PYTHON_REFERENCE = r"[A-Za-z_][A-Za-z0-9_.]*(?:\[[^\]\r\n]+\])*"
+PYTHON_TRAILING_REFERENCE = re.compile(rf"{PYTHON_REFERENCE}\s*,\s*[\])}}]*")
+PYTHON_REFERENCE_TUPLE = re.compile(rf"\(\s*{PYTHON_REFERENCE}\s*,?\s*\)")
 SHELL_SUFFIXES = {".bash", ".sh", ".zsh"}
 TEMPLATE_SUFFIXES = {".env", ".json", ".toml", ".yaml", ".yml"}
 SHELL_SHEBANG = re.compile(r"^#![^\r\n]*(?:ba|z)?sh(?:[ \t]|$)")
@@ -350,8 +353,11 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
                 continue
 
             unquoted = _strip_inline_comment(value).split(";", 1)[0].strip()
-            if python_context and unquoted.endswith(","):
-                unquoted = unquoted[:-1].rstrip()
+            if python_context and (
+                PYTHON_TRAILING_REFERENCE.fullmatch(unquoted)
+                or PYTHON_REFERENCE_TUPLE.fullmatch(unquoted)
+            ):
+                continue
             if _is_literal(
                 unquoted,
                 minimum_length=16,
