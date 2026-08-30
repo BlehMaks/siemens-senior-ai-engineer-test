@@ -32,10 +32,7 @@ from search_agent.memory import (
 NOW = datetime(2026, 8, 28, 12, tzinfo=UTC)
 URL_ADAPTER = TypeAdapter(AnyHttpUrl)
 MEMORY_EVAL_FIXTURE = (
-    Path(__file__).resolve().parents[2]
-    / "evals"
-    / "fixtures"
-    / "reviewed-memory.json"
+    Path(__file__).resolve().parents[2] / "evals" / "fixtures" / "reviewed-memory.json"
 )
 
 
@@ -63,9 +60,7 @@ def fact(
         conflict_key=f"topic-{number}",
         source_id=f"source-{number}",
         evidence_id=f"ev-fact-{number}",
-        source_url=URL_ADAPTER.validate_python(
-            f"https://example.com/reports/{number}"
-        ),
+        source_url=URL_ADAPTER.validate_python(f"https://example.com/reports/{number}"),
         proposed_at=NOW - timedelta(days=3),
         expires_at=expires_at or NOW + timedelta(days=1),
         author=FactAuthor.DETERMINISTIC_TEST,
@@ -250,9 +245,7 @@ async def test_active_selection_seal_cannot_be_replayed_after_pointer_change() -
         expected_active_version=1,
     )
 
-    replayed = context.model_copy(
-        update={"observed_at": NOW + timedelta(minutes=1)}
-    )
+    replayed = context.model_copy(update={"observed_at": NOW + timedelta(minutes=1)})
     with pytest.raises(ValueError, match="active"):
         replayed.revalidated_copy()
 
@@ -350,9 +343,7 @@ async def test_repository_reader_selects_only_active_records_with_hard_caps() ->
         reviewed_at=NOW - timedelta(days=2),
     )
     for number in range(1, 6):
-        procedure_candidate = procedure(
-            number, state=ProcedureReviewState.PROPOSED
-        )
+        procedure_candidate = procedure(number, state=ProcedureReviewState.PROPOSED)
         procedures.propose(procedure_candidate, expected_latest_version=None)
         procedures.review(
             tenant_id=procedure_candidate.tenant_id,
@@ -416,10 +407,7 @@ async def test_repository_reader_reflects_deletion_without_caching() -> None:
 
     assert facts.delete_session(tenant_id="tenant-one", session_id="session-one") == 1
     assert (
-        procedures.delete_session(
-            tenant_id="tenant-one", session_id="session-one"
-        )
-        == 1
+        procedures.delete_session(tenant_id="tenant-one", session_id="session-one") == 1
     )
 
     context = await reader.read_active(tenant_id="tenant-one", at=NOW)
@@ -560,9 +548,7 @@ async def test_repository_reader_supports_sqlite_repositories(
             context = await reader.read_active(tenant_id="tenant-one", at=NOW)
 
     assert context.facts == (expected_fact,)
-    assert tuple(item.procedure for item in context.procedures) == (
-        expected_procedure,
-    )
+    assert tuple(item.procedure for item in context.procedures) == (expected_procedure,)
 
 
 @pytest.mark.asyncio

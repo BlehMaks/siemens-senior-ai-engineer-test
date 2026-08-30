@@ -858,9 +858,7 @@ def test_sqlite_delete_rejects_hidden_session_corruption(tmp_path: Path) -> None
             )
 
         with pytest.raises(ReflectionStorageError, match="stored procedure"):
-            repository.delete_session(
-                tenant_id="tenant-one", session_id="session-one"
-            )
+            repository.delete_session(tenant_id="tenant-one", session_id="session-one")
 
 
 def test_sqlite_activation_rejects_malformed_current_pointer(tmp_path: Path) -> None:
@@ -907,9 +905,7 @@ def test_sqlite_delete_rejects_malformed_active_pointer(tmp_path: Path) -> None:
             )
 
         with pytest.raises(ReflectionStorageError, match="pointer"):
-            repository.delete_session(
-                tenant_id="tenant-one", session_id="session-one"
-            )
+            repository.delete_session(tenant_id="tenant-one", session_id="session-one")
         assert repository._connection.execute(
             "SELECT COUNT(*) FROM procedure_versions WHERE tenant_id = ? "
             "AND procedure_id = ? AND version = 1",
@@ -984,9 +980,7 @@ def test_sqlite_delete_rejects_invalid_head_only_row(tmp_path: Path) -> None:
             )
 
         with pytest.raises(ReflectionStorageError, match="head"):
-            repository.delete_session(
-                tenant_id="tenant-one", session_id="session-one"
-            )
+            repository.delete_session(tenant_id="tenant-one", session_id="session-one")
         assert repository._connection.execute(
             "SELECT COUNT(*) FROM procedure_versions WHERE tenant_id = ? "
             "AND procedure_id = ?",

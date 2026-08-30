@@ -45,6 +45,7 @@ ProcedureStep = Annotated[
 
 _MAX_SERIALIZED_BYTES = 16 * 1024
 
+
 class _RepositoryLockOwner(Protocol):
     _lock: RLock
 
@@ -53,9 +54,7 @@ def _serialized[LockOwner: _RepositoryLockOwner, **P, R](
     method: Callable[Concatenate[LockOwner, P], R],
 ) -> Callable[Concatenate[LockOwner, P], R]:
     @wraps(method)
-    def locked(
-        self: LockOwner, /, *args: P.args, **kwargs: P.kwargs
-    ) -> R:
+    def locked(self: LockOwner, /, *args: P.args, **kwargs: P.kwargs) -> R:
         with self._lock:
             return method(self, *args, **kwargs)
 
@@ -492,9 +491,7 @@ class InMemoryProcedureRepository:
 
     def _validate_version_heads(
         self,
-        versions: tuple[
-            tuple[tuple[str, str, int], ProcedureVersion], ...
-        ],
+        versions: tuple[tuple[tuple[str, str, int], ProcedureVersion], ...],
     ) -> None:
         maxima: dict[tuple[str, str], int] = {}
         for key, procedure in versions:
@@ -844,9 +841,7 @@ class SQLiteProcedureRepository:
                     raise ReflectionStorageError("active procedure pointer is invalid")
                 row = self._fetch_row((*scope, pointer[0]))
                 if row is None:
-                    raise ReflectionStorageError(
-                        "active procedure pointer is dangling"
-                    )
+                    raise ReflectionStorageError("active procedure pointer is dangling")
                 selected = _decode_row(row)
                 if selected.state is not ProcedureReviewState.APPROVED:
                     raise ReflectionStorageError("active procedure is not approved")
@@ -902,20 +897,14 @@ class SQLiteProcedureRepository:
                     or any(type(value) is not str for value in pointer[:2])
                     or type(pointer[2]) is not int
                 ):
-                    raise ReflectionStorageError(
-                        "active procedure pointer is invalid"
-                    )
+                    raise ReflectionStorageError("active procedure pointer is invalid")
                 self._latest_version((pointer[0], pointer[1]))
                 row = self._fetch_row(pointer)
                 if row is None:
-                    raise ReflectionStorageError(
-                        "active procedure pointer is dangling"
-                    )
+                    raise ReflectionStorageError("active procedure pointer is dangling")
                 values_list.append(_decode_row(row))
             values = tuple(values_list)
-            if any(
-                item.state is not ProcedureReviewState.APPROVED for item in values
-            ):
+            if any(item.state is not ProcedureReviewState.APPROVED for item in values):
                 raise ReflectionStorageError("active procedure is not approved")
         return values
 
@@ -948,20 +937,14 @@ class SQLiteProcedureRepository:
                     or any(type(value) is not str for value in pointer[:2])
                     or type(pointer[2]) is not int
                 ):
-                    raise ReflectionStorageError(
-                        "active procedure pointer is invalid"
-                    )
+                    raise ReflectionStorageError("active procedure pointer is invalid")
                 self._latest_version((pointer[0], pointer[1]))
                 row = self._fetch_row(pointer)
                 if row is None:
-                    raise ReflectionStorageError(
-                        "active procedure pointer is dangling"
-                    )
+                    raise ReflectionStorageError("active procedure pointer is dangling")
                 values_list.append(_decode_row(row))
             values = tuple(values_list)
-            if any(
-                item.state is not ProcedureReviewState.APPROVED for item in values
-            ):
+            if any(item.state is not ProcedureReviewState.APPROVED for item in values):
                 raise ReflectionStorageError("active procedure is not approved")
             revision = self._read_activation_revision()
         return values, revision
@@ -1117,9 +1100,7 @@ class SQLiteProcedureRepository:
             or type(row[1]) is not int
             or row[1] < 0
         ):
-            raise ReflectionStorageError(
-                "procedure activation revision is invalid"
-            )
+            raise ReflectionStorageError("procedure activation revision is invalid")
         return row[1]
 
     def _bump_activation_revision(self) -> None:
@@ -1128,9 +1109,7 @@ class SQLiteProcedureRepository:
             "WHERE singleton = 1"
         )
         if cursor.rowcount != 1:
-            raise ReflectionStorageError(
-                "procedure activation revision is invalid"
-            )
+            raise ReflectionStorageError("procedure activation revision is invalid")
 
     def _validate_scope_metadata(
         self, tenant_id: str, procedure_id: str | None
@@ -1214,9 +1193,7 @@ class SQLiteProcedureRepository:
                 "ORDER BY tenant_id, procedure_id LIMIT -1"
             ).fetchall()
         except sqlite3.Error as exc:
-            raise ReflectionStorageError(
-                "SQLite active procedure read failed"
-            ) from exc
+            raise ReflectionStorageError("SQLite active procedure read failed") from exc
         pointers: list[tuple[str, str, int]] = []
         for row in rows:
             if (
@@ -1318,9 +1295,7 @@ def _scope(tenant_id: object, procedure_id: object) -> tuple[str, str]:
 
 
 def _require_expected(current: object, expected: object) -> None:
-    if current is not None and (
-        type(current) is not int or not 1 <= current <= 10_000
-    ):
+    if current is not None and (type(current) is not int or not 1 <= current <= 10_000):
         raise ReflectionStorageError("stored procedure version is invalid")
     if expected is not None:
         expected = _version(expected)

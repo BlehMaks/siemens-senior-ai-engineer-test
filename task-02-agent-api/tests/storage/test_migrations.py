@@ -464,8 +464,8 @@ async def test_current_schema_rejects_active_pointer_constraint_drift(
     (
         "json_set(payload, '$.version', json('true'))",
         "json_remove(payload, '$.review')",
-        "replace(payload, '\"state\":\"approved\"', "
-        "'\"state\":\"approved\",\"state\":\"proposed\"')",
+        'replace(payload, \'"state":"approved"\', '
+        '\'"state":"approved","state":"proposed"\')',
     ),
     ids=("boolean-version", "missing-review", "duplicate-state"),
 )

@@ -90,9 +90,7 @@ class ReviewedMemoryContext(StrictModel):
     tenant_id: OpaqueId
     observed_at: datetime
     facts: tuple[SemanticFact, ...] = Field(max_length=MAX_CONTEXT_FACTS)
-    procedures: tuple[ActiveProcedure, ...] = Field(
-        max_length=MAX_CONTEXT_PROCEDURES
-    )
+    procedures: tuple[ActiveProcedure, ...] = Field(max_length=MAX_CONTEXT_PROCEDURES)
     _activation_revision: int | None = PrivateAttr(default=None)
 
     @field_validator("procedures", mode="before")
@@ -117,15 +115,13 @@ class ReviewedMemoryContext(StrictModel):
             or len(self.procedures) > MAX_CONTEXT_PROCEDURES
         ):
             raise ValueError("reviewed memory context exceeds its record limits")
-        if (
-            self.observed_at.tzinfo is None
-            or self.observed_at.utcoffset() != timedelta(0)
+        if self.observed_at.tzinfo is None or self.observed_at.utcoffset() != timedelta(
+            0
         ):
             raise ValueError("reviewed memory timestamp must be UTC")
         observed_at = self.observed_at.astimezone(UTC)
         if any(type(fact) is not SemanticFact for fact in self.facts) or any(
-            type(procedure) is not ActiveProcedure
-            for procedure in self.procedures
+            type(procedure) is not ActiveProcedure for procedure in self.procedures
         ):
             raise ValueError("reviewed memory records are invalid")
         try:
@@ -140,8 +136,7 @@ class ReviewedMemoryContext(StrictModel):
         try:
             activation_revision = self._activation_revision
             if self.procedures and (
-                type(activation_revision) is not int
-                or activation_revision < 0
+                type(activation_revision) is not int or activation_revision < 0
             ):
                 raise ValueError
             checked_revision = (
@@ -307,9 +302,7 @@ class RepositoryReviewedMemoryReader:
             partial(self._revalidate_active, context, tenant_id, at),
         )
 
-    def _read_active(
-        self, tenant_id: OpaqueId, at: datetime
-    ) -> ReviewedMemoryContext:
+    def _read_active(self, tenant_id: OpaqueId, at: datetime) -> ReviewedMemoryContext:
         with self._lock:
             facts = self.semantic_facts.list_active(
                 tenant_id=tenant_id,
@@ -353,10 +346,9 @@ def _active_selection_attestation(
 ) -> bytes:
     if type(activation_revision) is not int or activation_revision < 0:
         raise ValueError("procedure activation revision is invalid")
-    payload = (
-        f"{activation_revision}:".encode("ascii")
-        + procedure.model_dump_json().encode("utf-8")
-    )
+    payload = f"{activation_revision}:".encode(
+        "ascii"
+    ) + procedure.model_dump_json().encode("utf-8")
     return hmac.digest(_ACTIVE_SELECTION_KEY, payload, "sha256")
 
 
