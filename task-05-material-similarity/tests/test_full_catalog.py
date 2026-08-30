@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from material_similarity.data import load_materials
-from material_similarity.retrieval import TOP_K, rank_alternatives
+from material_similarity.retrieval import TOP_K, rank_complete_alternatives
 
 _DEFAULT_CATALOG = Path(__file__).parents[2] / "input" / "IT DA AI Tasks" / "Fuse.csv"
 _CATALOG = Path(os.environ.get("SIEMENS_FUSE_CSV", _DEFAULT_CATALOG))
@@ -17,19 +17,20 @@ _CATALOG = Path(os.environ.get("SIEMENS_FUSE_CSV", _DEFAULT_CATALOG))
 def test_full_catalog_has_one_honest_result_per_part_id() -> None:
     materials = load_materials(_CATALOG)
 
-    results = rank_alternatives(materials)
+    results = rank_complete_alternatives(materials)
 
     assert len(results) == len(materials) == 998
     assert len({result.part_id for result in results}) == 998
-    assert Counter(result.status for result in results) == {
-        "ok": 663,
-        "insufficient_description": 335,
+    assert Counter(result.status for result in results) == {"ok": 998}
+    assert all(len(result.alternatives) == TOP_K for result in results)
+    assert Counter(result.alternatives[0].method for result in results) == {
+        "description": 663,
+        "structured_fallback": 335,
     }
     assert all(
-        len(result.alternatives) == TOP_K for result in results if result.status == "ok"
-    )
-    assert all(
-        alternative.shared_tokens or alternative.shared_character_ngrams
+        alternative.shared_tokens
+        or alternative.shared_character_ngrams
+        or alternative.shared_fields
         for result in results
         for alternative in result.alternatives
     )

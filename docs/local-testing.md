@@ -236,8 +236,8 @@ jq 'map(select(.status == "ok"))[0]' \
   artifacts/local/task5/alternatives.json
 ```
 
-Every `ok` result must contain five unique alternatives and must not return the
-query part itself. Check that contract:
+Every result for the supplied catalog must be `ok`, contain five unique alternatives,
+and must not return the query part itself. Check that contract:
 
 ```bash
 jq '[
@@ -252,8 +252,11 @@ jq '[
 ] | length' artifacts/local/task5/alternatives.json
 ```
 
-The expected output is `0`. Rows with blank descriptions should have
-`insufficient_description` status and no invented alternatives.
+The expected output is `0`. Rows with blank descriptions use
+`structured_fallback`; inspect `confidence` and `shared_fields`. Six completely
+empty source rows are labeled `missingness_only`, not silently presented as
+engineering-approved replacements. Use `--mode text` to reproduce the reviewed
+description-only abstention behavior.
 
 To inspect one known part separately, replace `<PART_ID>` with an ID from
 `Fuse.csv`:

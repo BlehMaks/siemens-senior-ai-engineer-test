@@ -11,7 +11,11 @@ from material_similarity.data import (
     PART_ID_COLUMN,
     MaterialDataError,
 )
-from material_similarity.retrieval import TOP_K, rank_alternatives
+from material_similarity.retrieval import (
+    TOP_K,
+    rank_alternatives,
+    rank_complete_alternatives,
+)
 
 
 def _material(part_id: str, description: str) -> dict[str, str]:
@@ -86,6 +90,43 @@ def test_blank_descriptions_abstain_without_affecting_other_records() -> None:
     assert blank.alternatives == ()
     assert all(result.status == "ok" for result in results[1:])
     assert all(len(result.alternatives) == TOP_K for result in results[1:])
+
+
+def test_complete_ranking_fills_blank_descriptions_with_labeled_field_evidence() -> (
+    None
+):
+    blank = _material("BLANK", "")
+    blank["Fuse Material"] = "Ceramic"
+    candidates = []
+    for index in range(6):
+        candidate = _material(str(index), f"fuse family {index}")
+        candidate["Fuse Material"] = "Ceramic"
+        candidates.append(candidate)
+
+    result = rank_complete_alternatives((blank, *candidates))[0]
+
+    assert result.status == "ok"
+    assert len(result.alternatives) == TOP_K
+    assert all(item.method == "structured_fallback" for item in result.alternatives)
+    assert all(item.confidence == "field_supported" for item in result.alternatives)
+    assert all("Fuse Material" in item.shared_fields for item in result.alternatives)
+
+
+def test_complete_ranking_uses_missingness_only_for_data_empty_rows() -> None:
+    materials = tuple(_material(part_id, "") for part_id in "QABCDEF")
+
+    first = rank_complete_alternatives(materials)[0]
+    reordered = rank_complete_alternatives((materials[0], *reversed(materials[1:])))[0]
+
+    assert first.status == "ok"
+    assert [item.part_id for item in first.alternatives] == ["A", "B", "C", "D", "E"]
+    assert first == reordered
+    assert all(item.method == "structured_fallback" for item in first.alternatives)
+    assert all(item.confidence == "missingness_only" for item in first.alternatives)
+    assert all(
+        item.shared_fields and item.shared_fields[0].startswith("missing:")
+        for item in first.alternatives
+    )
 
 
 def test_sparse_vocabulary_does_not_fabricate_zero_similarity_results() -> None:

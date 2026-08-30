@@ -16,6 +16,7 @@ from sklearn.metrics.pairwise import cosine_similarity  # type: ignore[import-un
 
 from material_similarity.data import (
     DESCRIPTION_COLUMN,
+    MATERIAL_COLUMNS,
     PART_ID_COLUMN,
     profile_materials,
 )
@@ -26,7 +27,16 @@ WORD_WEIGHT = 0.25
 _EVIDENCE_LIMIT = 5
 
 RetrievalStatus = Literal["ok", "insufficient_description", "insufficient_candidates"]
+RetrievalMethod = Literal["description", "structured_fallback"]
+RetrievalConfidence = Literal[
+    "description_supported", "field_supported", "missingness_only"
+]
 ScoreMatrix = list[list[float]]
+_FALLBACK_COLUMNS = tuple(
+    column
+    for column in MATERIAL_COLUMNS
+    if column not in {PART_ID_COLUMN, DESCRIPTION_COLUMN}
+)
 
 
 @dataclass(frozen=True)
@@ -39,6 +49,9 @@ class Alternative:
     character_score: float
     shared_tokens: tuple[str, ...]
     shared_character_ngrams: tuple[str, ...]
+    method: RetrievalMethod = "description"
+    confidence: RetrievalConfidence = "description_supported"
+    shared_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -113,6 +126,44 @@ def rank_alternatives(
         )
         results.append(RetrievalResult(part_id, status, alternatives))
     return tuple(results)
+
+
+def rank_complete_alternatives(
+    materials: Sequence[Mapping[str, str]],
+    *,
+    word_weight: float = WORD_WEIGHT,
+) -> tuple[RetrievalResult, ...]:
+    """Return five labeled alternatives per row, filling text gaps structurally."""
+
+    text_results = rank_alternatives(materials, word_weight=word_weight)
+    normalized = tuple(
+        {
+            column: normalize_description(material[column])
+            for column in _FALLBACK_COLUMNS
+        }
+        for material in materials
+    )
+    completed: list[RetrievalResult] = []
+    for query_index, text_result in enumerate(text_results):
+        if len(text_result.alternatives) == TOP_K:
+            completed.append(text_result)
+            continue
+        existing = {item.part_id for item in text_result.alternatives}
+        fallback = _rank_structured_fallback(
+            query_index=query_index,
+            materials=materials,
+            normalized=normalized,
+            excluded=existing,
+            limit=TOP_K - len(text_result.alternatives),
+        )
+        alternatives = (*text_result.alternatives, *fallback)
+        status: RetrievalStatus = (
+            "ok" if len(alternatives) == TOP_K else "insufficient_candidates"
+        )
+        completed.append(
+            RetrievalResult(text_result.part_id, status, tuple(alternatives))
+        )
+    return tuple(completed)
 
 
 @dataclass(frozen=True)
@@ -200,6 +251,75 @@ def _alternative(
             character, query_position, candidate_position
         ),
     )
+
+
+def _rank_structured_fallback(
+    *,
+    query_index: int,
+    materials: Sequence[Mapping[str, str]],
+    normalized: tuple[dict[str, str], ...],
+    excluded: set[str],
+    limit: int,
+) -> tuple[Alternative, ...]:
+    query = normalized[query_index]
+    observed = tuple(column for column in _FALLBACK_COLUMNS if query[column])
+    missing = tuple(column for column in _FALLBACK_COLUMNS if not query[column])
+    candidates: list[tuple[float, str, RetrievalConfidence, tuple[str, ...]]] = []
+    for candidate_index, candidate in enumerate(materials):
+        if candidate_index == query_index:
+            continue
+        part_id = candidate[PART_ID_COLUMN].strip()
+        if part_id in excluded:
+            continue
+        values = normalized[candidate_index]
+        exact = tuple(
+            column
+            for column in observed
+            if values[column] and values[column] == query[column]
+        )
+        matching_missingness = tuple(column for column in missing if not values[column])
+        score = _structured_fallback_score(
+            exact_matches=len(exact),
+            observed_fields=len(observed),
+            matching_missingness=len(matching_missingness),
+            missing_fields=len(missing),
+        )
+        if exact:
+            confidence: RetrievalConfidence = "field_supported"
+            evidence = exact
+        else:
+            confidence = "missingness_only"
+            evidence = tuple(f"missing:{column}" for column in matching_missingness)
+        candidates.append((score, part_id, confidence, evidence[:_EVIDENCE_LIMIT]))
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    return tuple(
+        Alternative(
+            part_id=part_id,
+            score=round(score, 6),
+            word_score=0.0,
+            character_score=0.0,
+            shared_tokens=(),
+            shared_character_ngrams=(),
+            method="structured_fallback",
+            confidence=confidence,
+            shared_fields=evidence,
+        )
+        for score, part_id, confidence, evidence in candidates[:limit]
+    )
+
+
+def _structured_fallback_score(
+    *,
+    exact_matches: int,
+    observed_fields: int,
+    matching_missingness: int,
+    missing_fields: int,
+) -> float:
+    if observed_fields == 0:
+        return matching_missingness / missing_fields
+    exact_score = exact_matches / observed_fields
+    missingness_score = matching_missingness / missing_fields if missing_fields else 1.0
+    return round(0.9 * exact_score + 0.1 * missingness_score, 12)
 
 
 def _shared_features(

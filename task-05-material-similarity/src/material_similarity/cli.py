@@ -10,8 +10,12 @@ from pathlib import Path
 from typing import cast
 
 from material_similarity.data import load_materials
-from material_similarity.hybrid import rank_hybrid_alternatives
-from material_similarity.retrieval import rank_alternatives
+from material_similarity.hybrid import HybridRetrievalResult, rank_hybrid_alternatives
+from material_similarity.retrieval import (
+    RetrievalResult,
+    rank_alternatives,
+    rank_complete_alternatives,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -23,20 +27,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--mode",
-        choices=("text", "hybrid"),
-        default="text",
-        help="Use the reviewed text baseline or the non-promoted structured prototype",
+        choices=("complete", "text", "hybrid"),
+        default="complete",
+        help=(
+            "Return complete labeled results, the reviewed text baseline, or the "
+            "non-promoted hybrid prototype"
+        ),
     )
     parser.add_argument("--part-id", help="Return only this PART_ID")
     parser.add_argument("--output", type=Path, help="Write JSON to this path")
     args = parser.parse_args(argv)
 
     materials = load_materials(cast(Path, args.catalog))
-    results = (
-        rank_hybrid_alternatives(materials)
-        if args.mode == "hybrid"
-        else rank_alternatives(materials)
-    )
+    results: tuple[RetrievalResult | HybridRetrievalResult, ...]
+    if args.mode == "hybrid":
+        results = rank_hybrid_alternatives(materials)
+    elif args.mode == "text":
+        results = rank_alternatives(materials)
+    else:
+        results = rank_complete_alternatives(materials)
     part_id = cast(str | None, args.part_id)
     if part_id is None:
         payload: object = [asdict(result) for result in results]
