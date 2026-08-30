@@ -12,6 +12,8 @@ request through the agent, API, and cloud boundary.
 5. Check the [cloud resource and IAM manifest](cloud-resource-manifest.md).
 6. Read the [Task 3 strategy](../task-03-deployment-strategy/architecture/strategy.md)
    before treating assessment defaults as an enterprise recommendation.
+7. Use the [owner acceptance checklist](owner-acceptance-checklist.md) for a clean
+   second-computer run, private Tasks 4–5 reports, and explicit cloud sign-off.
 
 ## Evidence map
 
@@ -32,6 +34,9 @@ request through the agent, API, and cloud boundary.
 | Deployment uses short-lived identity and immutable image digests | `.github/workflows/deploy.yml`, `terraform/bootstrap/github.tf` | `task-03-deployment-strategy/tests/test_workflows.py` |
 | Cloud security state is shared across replicas and Firestore transactions stay bounded | `task-02-agent-api/src/agent_api/security/cloud_state.py`, `storage/cloud.py` | `task-02-agent-api/tests/storage/test_cloud_adapters.py`, `test_run_generation.py` |
 | All six tasks can be checked on another computer | `scripts/local_submission_check.sh` | `tests/test_local_submission_script.py` and the command itself |
+| Task 4 preserves grouped baseline evaluation while calibrated cost scenarios remain explicit opt-ins | `task-04-binary-classification/src/binary_classification/evaluate.py`, `calibration.py`, `decision.py` | `task-04-binary-classification/tests/`; `task-04-binary-classification/reports/baseline-vs-extension.json` and `.md` |
+| Task 5 keeps lexical retrieval separate from compatibility-gated and structured-only review modes | `task-05-material-similarity/src/material_similarity/hybrid.py`, `evaluation.py` | `task-05-material-similarity/tests/`; `task-05-material-similarity/reports/baseline-vs-extension.json` and `.md` |
+| Task 6 retains the dependency-free percentage helper and adds an opt-in multi-column sklearn adapter with safe JSON mappings | `task-06-category-consolidation/src/category_consolidation/core.py`, `sklearn.py`, `artifact.py` | `task-06-category-consolidation/tests/`; `task-06-category-consolidation/reports/baseline-vs-extension.json` and `.md` |
 
 ## Data-science packages
 
@@ -42,6 +47,9 @@ data-dependent checks. Task 4 persists and parity-checks its fitted pipeline;
 Task 5 rebuilds one transparent TF-IDF index per catalog invocation and returns five
 labeled alternatives for every supplied row; Task 6 is a fitted deterministic
 transform, not a separately trained predictive model, and has no external input.
+The [owner acceptance checklist](owner-acceptance-checklist.md) keeps locally
+reproducible evidence distinct from second-computer, private-data, business-policy,
+and live-cloud acceptance that only the repository owner can complete.
 
 ## Claims to avoid
 
