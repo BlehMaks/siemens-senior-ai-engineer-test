@@ -289,10 +289,10 @@ async def test_app_shutdown_is_bounded_when_executor_suppresses_cancellation(
         worker_shutdown_seconds=0.01,
     )
     loop = asyncio.get_running_loop()
-    started_at = loop.time()
 
     async with app.router.lifespan_context(app):
         await asyncio.wait_for(executor.started.wait(), timeout=2)
+        started_at = loop.time()
 
     assert loop.time() - started_at < 0.2
     assert executor.ignored_cancellation.is_set()
