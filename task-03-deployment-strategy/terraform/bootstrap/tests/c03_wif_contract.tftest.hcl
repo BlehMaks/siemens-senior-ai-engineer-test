@@ -9,6 +9,10 @@ mock_provider "google" {
 
 mock_provider "google-beta" {}
 
+variables {
+  budget_amount_units = 7
+}
+
 mock_provider "github" {
   override_data {
     target = data.github_repository.target
