@@ -37,6 +37,10 @@ To exercise only the running agent and API from Tasks 1 to 3:
 make local-acceptance
 ```
 
+For a clean-computer walkthrough that also generates inspectable Task 4, Task 5,
+and Task 6 results, follow
+[`docs/local-testing.md`](docs/local-testing.md).
+
 ## Cloud delivery for Tasks 1 to 3
 
 The cloud path provisions the agent, API, worker, storage, queue, secrets,
