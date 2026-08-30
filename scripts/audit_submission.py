@@ -513,6 +513,8 @@ def _python_target_is_credential(target: ast.expr) -> bool:
 def _python_assignment_contains_literal(
     target: ast.expr, value: ast.expr, source: str
 ) -> bool:
+    if not _python_target_is_credential(target):
+        return False
     if isinstance(value, ast.IfExp):
         return _python_assignment_contains_literal(
             target, value.body, source
@@ -531,12 +533,7 @@ def _python_assignment_contains_literal(
 def _python_sequence_assignment_contains_literal(
     targets: list[ast.expr], values: list[ast.expr], source: str
 ) -> bool:
-    rebound_names = {
-        node.target.id
-        for value in values
-        for node in ast.walk(value)
-        if isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name)
-    }
+    rebound_names = _python_rebound_names(values)
     return any(
         _python_expanded_sequence_assignment_contains_literal(
             targets, expanded_values, source
@@ -545,6 +542,25 @@ def _python_sequence_assignment_contains_literal(
             values, rebound_names
         )
     )
+
+
+def _python_rebound_names(values: list[ast.expr]) -> set[str]:
+    class ReboundNameVisitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.names: set[str] = set()
+
+        def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+            if isinstance(node.target, ast.Name):
+                self.names.add(node.target.id)
+            self.visit(node.value)
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            del node
+
+    visitor = ReboundNameVisitor()
+    for value in values:
+        visitor.visit(value)
+    return visitor.names
 
 
 def _python_expanded_sequence_assignment_contains_literal(

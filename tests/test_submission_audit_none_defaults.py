@@ -386,3 +386,18 @@ def test_rebound_condition_does_not_force_impossible_branch_correlation() -> Non
     assert namespace["token"] == "12345678"
 
     assert _contains_credential_assignment("config.py", source.encode())
+
+
+def test_lambda_local_rebound_does_not_change_outer_branch_pairing() -> None:
+    source = _seed(
+        "tok",
+        "en, *rest = *([runtime_token] if enabled else []), ",
+        '*(["12345678"] if enabled else [runtime_token, "12345678"]), ',
+        "(lambda: (enabled := False))\n",
+    ).decode()
+    for enabled in (True, False):
+        namespace = {"enabled": enabled, "runtime_token": "r"}
+        exec(source, namespace)
+        assert namespace["token"] == "r"
+
+    assert not _contains_credential_assignment("config.py", source.encode())
