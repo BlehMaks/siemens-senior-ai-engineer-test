@@ -1,0 +1,123 @@
+{
+  "assignment_baseline": {
+    "by_column": {
+      "channel": {
+        "category_count_after": 4,
+        "category_count_before": 5,
+        "fallback_count": 2,
+        "fallback_rate": 0.3333333333333333,
+        "retained_category_count": 3,
+        "unseen_count": 1,
+        "unseen_rate": 0.16666666666666666
+      },
+      "region": {
+        "category_count_after": 4,
+        "category_count_before": 6,
+        "fallback_count": 3,
+        "fallback_rate": 0.5,
+        "retained_category_count": 3,
+        "unseen_count": 1,
+        "unseen_rate": 0.16666666666666666
+      }
+    },
+    "description": "Standalone single-column percentage-only helper.",
+    "mode_status": "evaluated",
+    "single_column_output_equivalent": true
+  },
+  "business_extension": {
+    "alias_normalization": {
+      "mode_status": "not_implemented"
+    },
+    "artifact": {
+      "fingerprint": "sha256:b2506f3ca431a877c509b759a1f60651a05be9fb5ce16dc8a8ec9408f6789924",
+      "schema_version": 1
+    },
+    "by_column": {
+      "channel": {
+        "category_count_after": 3,
+        "category_count_before": 5,
+        "fallback_count": 3,
+        "fallback_rate": 0.5,
+        "retained_category_count": 2,
+        "unseen_count": 1,
+        "unseen_rate": 0.16666666666666666
+      },
+      "region": {
+        "category_count_after": 3,
+        "category_count_before": 6,
+        "fallback_count": 4,
+        "fallback_rate": 0.6666666666666666,
+        "retained_category_count": 2,
+        "unseen_count": 1,
+        "unseen_rate": 0.16666666666666666
+      }
+    },
+    "description": "Opt-in multi-column percentage plus minimum-count policy.",
+    "mapping_differences_from_percent_only": {
+      "channel": [
+        "partner"
+      ],
+      "region": [
+        "east"
+      ]
+    },
+    "microbenchmark": {
+      "adapter_median_seconds": 0.014721167040988803,
+      "adapter_overhead_ratio": 0.9408224811032332,
+      "core_median_seconds": 0.015647125081159174,
+      "iterations": 5,
+      "peak_memory_bytes": 254232,
+      "row_count": 5000
+    },
+    "mode_status": "evaluated",
+    "sklearn_checks": {
+      "clone": true,
+      "fit_transform": true,
+      "get_feature_names_out": true,
+      "get_params_set_params": true,
+      "pandas_output": true,
+      "pickle_runtime_check": true,
+      "pipeline": true,
+      "safe_json_artifact": true
+    }
+  },
+  "delta": {
+    "comparable_measures": {
+      "channel": {
+        "fallback_count": 1,
+        "retained_category_count": -1
+      },
+      "region": {
+        "fallback_count": 1,
+        "retained_category_count": -1
+      }
+    }
+  },
+  "limitations": [
+    "The fixture is sanitized engineering evidence, not production data.",
+    "Runtime and peak memory vary by machine and are not universal promises.",
+    "Category meaning is not inferred; alias normalization remains deferred."
+  ],
+  "metadata": {
+    "configuration": {
+      "columns": [
+        "region",
+        "channel"
+      ],
+      "min_count": 3,
+      "threshold_percent": 15.0
+    },
+    "data_fingerprint": "sha256:7dc26bf7160f8271368725050fdf19591635bab39753f934ff7e20815670b81b",
+    "inference_rows": 6,
+    "package_versions": {
+      "pandas": "3.0.5",
+      "python": "3.12.14",
+      "scikit_learn": "1.9.0",
+      "task_6": "0.1.0"
+    },
+    "runtime_seconds": 0.16222737496718764,
+    "seed": 0,
+    "training_rows": 12
+  },
+  "schema_version": 1
+}

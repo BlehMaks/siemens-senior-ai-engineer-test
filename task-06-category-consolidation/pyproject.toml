@@ -5,6 +5,12 @@ description = "Leakage-safe rare-category consolidation"
 requires-python = ">=3.12,<3.13"
 dependencies = []
 
+[project.optional-dependencies]
+sklearn = [
+    "pandas>=2.3,<4",
+    "scikit-learn>=1.7,<2",
+]
+
 [build-system]
 requires = ["uv_build>=0.12.6,<0.13"]
 build-backend = "uv_build"

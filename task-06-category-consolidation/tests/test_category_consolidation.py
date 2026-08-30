@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import sys
 import tracemalloc
 from math import inf, nan, nextafter
 from time import perf_counter
@@ -97,6 +99,50 @@ def test_hundred_threshold_keeps_only_full_dataset_category() -> None:
     assert consolidate_rare_categories(["a", "b"], 100.0) == ["__RARE__", "__RARE__"]
 
 
+def test_optional_min_count_rejects_category_that_passes_percentage() -> None:
+    values = ["minor", "minor", "major", "major", "major", "major"]
+
+    assert consolidate_rare_categories(values, 20.0)[:2] == ["minor", "minor"]
+    assert consolidate_rare_categories(values, 20.0, min_count=3)[:2] == [
+        "__RARE__",
+        "__RARE__",
+    ]
+
+
+def test_existing_positional_rare_label_contract_is_preserved() -> None:
+    consolidator = RareCategoryConsolidator(60.0, "OTHER")
+
+    assert consolidator.fit_transform(["a", "b"]).values == ["OTHER", "OTHER"]
+    assert consolidator.min_count is None
+
+
+def test_min_count_exact_boundary_is_retained() -> None:
+    assert consolidate_rare_categories(["a", "a", "b"], 0.0, min_count=2) == [
+        "a",
+        "a",
+        "__RARE__",
+    ]
+
+
+@pytest.mark.parametrize("invalid_min_count", [True, False, 1.5, "2"])
+def test_non_integer_min_count_is_rejected(invalid_min_count: object) -> None:
+    with pytest.raises(TypeError, match="min_count"):
+        RareCategoryConsolidator(10.0, min_count=invalid_min_count)  # type: ignore[arg-type]
+
+
+def test_negative_min_count_is_rejected() -> None:
+    with pytest.raises(ValueError, match="min_count"):
+        RareCategoryConsolidator(10.0, min_count=-1)
+
+
+def test_zero_min_count_preserves_percentage_only_behavior() -> None:
+    values = ["a", "b", "b"]
+
+    assert consolidate_rare_categories(values, 40.0, min_count=0) == (
+        consolidate_rare_categories(values, 40.0)
+    )
+
+
 def test_missing_sentinel_counts_toward_denominator_and_exact_boundary() -> None:
     values = [None, None, "blue", "green"]
 
@@ -115,6 +161,14 @@ def test_collision_safe_fallback_label_is_resolved_at_fit_time() -> None:
 
     assert consolidator.resolved_rare_label == "__RARE____rare"
     assert result.values == ["__RARE____rare", "__RARE____rare", "__RARE____rare"]
+
+
+def test_collision_resolution_skips_observed_generated_labels() -> None:
+    consolidator = RareCategoryConsolidator(100.0, rare_label="__RARE__")
+
+    consolidator.fit(["__RARE__", "__RARE____rare", "__RARE____rare_1"])
+
+    assert consolidator.resolved_rare_label == "__RARE____rare_2"
 
 
 def test_collision_fallback_is_deterministic_for_equal_objects() -> None:
@@ -195,6 +249,18 @@ def test_custom_missing_sentinel_can_be_retained_when_frequent() -> None:
     assert result.values == [MISSING_CATEGORY, MISSING_CATEGORY, "__RARE__"]
 
 
+def test_missing_sentinel_copy_and_invalid_labels() -> None:
+    assert copy.copy(MISSING_CATEGORY) is MISSING_CATEGORY
+    assert copy.deepcopy(MISSING_CATEGORY) is MISSING_CATEGORY
+    with pytest.raises(TypeError, match="rare_label"):
+        RareCategoryConsolidator(10.0, rare_label=[])  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="missing_sentinel"):
+        RareCategoryConsolidator(
+            10.0,
+            missing_sentinel=(["nested"],),
+        )
+
+
 @settings(deadline=None, max_examples=80)
 @given(
     values=st.lists(
@@ -231,7 +297,11 @@ def test_fit_and_transform_perf_budget() -> None:
     tracemalloc.stop()
 
     assert len(result.values) == len(values)
-    assert elapsed < 1.0
+    # Coverage tracing roughly doubles this loop's wall time. Keep the original
+    # uninstrumented budget as the performance contract; the traced ceiling only
+    # prevents coverage collection from turning instrumentation into a regression.
+    elapsed_budget = 3.0 if sys.gettrace() is not None else 1.0
+    assert elapsed < elapsed_budget
     assert peak_bytes < 256 * 1024 * 1024
 
 

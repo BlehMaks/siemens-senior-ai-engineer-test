@@ -1,70 +1,193 @@
 # Task 6: Functions for categorical attributes
 
-## Goal
+This package groups categories with insufficient training support into one
+collision-safe fallback label. The assignment helper remains dependency-free; the
+business extension is opt-in and adds a pandas/scikit-learn integration, a minimum
+count rule, diagnostics, and a safe mapping artifact.
 
-This package groups categories whose training frequency is strictly less than a
-percentage threshold into one collision-safe fallback label.
+## Installation profiles
+
+From the repository root, the locked development environment includes all test
+dependencies:
+
+```bash
+uv sync --locked
+```
+
+The Task 6 package can also be installed by itself without pandas or scikit-learn:
+
+```bash
+uv venv .venv-task6-base --python 3.12
+uv pip install --python .venv-task6-base/bin/python ./task-06-category-consolidation
+.venv-task6-base/bin/python -c "import category_consolidation"
+```
+
+On Windows/WSL, use `.venv-task6-base/Scripts/python.exe` instead of the `bin`
+path. Install the opt-in adapter with the `sklearn` extra:
+
+```bash
+uv venv .venv-task6-extra --python 3.12
+uv pip install --python .venv-task6-extra/bin/python './task-06-category-consolidation[sklearn]'
+```
+
+## Assignment baseline
 
 The assignment wording says "less frequent than the threshold", so categories at
-the exact boundary stay untouched. The threshold is learned on training data once
-and reused for validation, test, and inference so the preprocessing cannot leak
-future label information back into model fitting.
+the exact percentage boundary stay untouched. Default behavior is percentage-only
+and matches the original helper contract:
 
-## Public contract
+```python
+from category_consolidation import consolidate_rare_categories
 
-- Input order and output length never change.
-- The threshold accepts finite real numbers from `0` to `100` inclusive.
-- Boolean thresholds are rejected explicitly so `True` and `False` cannot sneak in
-  as `1` and `0`.
-- The denominator includes every validated value, including an explicit missing
-  sentinel such as `None` or `""`.
-- Empty input is valid and returns an empty output.
-- `0` keeps every seen category.
-- `100` keeps only categories that occupy the full training set.
-- Unhashable values fail with an index-aware `TypeError`.
-- The fallback label is made unique at fit time if it would collide with a real
-  category.
-- Unseen inference categories are mapped to the fallback label and reported through
-  transform diagnostics.
+result = consolidate_rare_categories(
+    ["common", "common", "rare"],
+    threshold_percent=40.0,
+)
+assert result == ["common", "common", "__RARE__"]
+```
 
-## API shape
+`RareCategoryConsolidator` is the reusable train/inference object. Fit it once on
+training data and reuse the frozen mapping for validation, test, and inference.
+Calling the one-shot helper separately on each split would relearn frequencies and
+violate the leakage boundary.
 
-`RareCategoryConsolidator` is the reusable train/inference object.
+The baseline contract is unchanged:
 
-- `fit(values)` records the observed and retained categories from training data.
-- `transform(values)` applies the frozen mapping.
-- `transform_with_diagnostics(values)` also reports unseen indexes and values.
-- `fit_transform(values)` is a convenience for one-shot training preprocessing.
-- `consolidate_rare_categories(values, threshold_percent, ...)` is a thin helper for
-  the assignment's standalone-function framing.
+- input order and output length never change;
+- thresholds accept finite real numbers from `0` to `100` inclusive;
+- the denominator includes missing sentinels;
+- exact percentage boundaries are retained;
+- unhashable values fail with their input index;
+- fallback labels are made collision-safe at fit time;
+- unseen inference categories map to the fallback and appear in diagnostics;
+- importing `category_consolidation` requires no optional dependency.
 
-This is a fitted deterministic preprocessing transform, not a predictive ML model.
-Call `fit` once on the training split and reuse the same object for validation, test,
-and inference; calling the one-shot helper separately on each split would relearn
-frequencies and violate the leakage boundary. The assignment does not require a
-serialized Task 6 artifact, but a production pipeline must persist these fitted
-categories together with the downstream model rather than fitting them per request.
+## Business extension
 
-## Why this helps logistic regression
+### Dual support rule
 
-One-hot encoding turns every distinct category into its own coefficient. Very rare
-levels create sparse columns with weak support, so the fitted coefficients can swing
-hard because of noise instead of stable signal. Grouping rare levels reduces the
-number of fragile columns, makes the design matrix denser, and lowers the chance
-that one accidental category becomes a brittle proxy for the target.
+`min_count` is optional and disabled by default. When enabled, a category must pass
+both the percentage and count boundaries; equality at either boundary is retained.
+Booleans, negative values, and non-integers are rejected.
 
-This is still a training-time decision. The threshold and retained-category set must
-come only from the training split, then stay frozen for every later split.
+```python
+from category_consolidation import consolidate_rare_categories
 
-## Alternative approaches
+result = consolidate_rare_categories(
+    ["minor", "minor", "major", "major", "major", "major"],
+    threshold_percent=20.0,
+    min_count=3,
+)
+assert result[:2] == ["__RARE__", "__RARE__"]
+```
 
-Leakage-safe target encoding is the most relevant alternative when the categorical
-space is large and many levels still matter. The safe version uses smoothing plus
-cross-fitting so each training row only sees target statistics from other folds.
-Without that discipline, target encoding leaks label information directly into the
-features.
+### Multi-column sklearn transformer
 
-CatBoost is a strong example of an algorithm with native categorical handling. Its
-ordered target statistics reduce the need for manual rare-category grouping, but the
-validation split still has to stay honest because incorrect evaluation can leak just
-as badly there.
+The optional adapter lives in a separate module, so it cannot add pandas or
+scikit-learn to the lightweight baseline import path.
+
+```python
+import pandas as pd
+from sklearn.pipeline import Pipeline
+
+from category_consolidation.sklearn import CategoryConsolidationTransformer
+
+training = pd.DataFrame(
+    {
+        "region": ["north", "north", "south", None],
+        "channel": ["web", "web", "store", "partner"],
+        "value": [1, 2, 3, 4],
+    }
+)
+pipeline = Pipeline(
+    [
+        (
+            "categories",
+            CategoryConsolidationTransformer(
+                columns=("region", "channel"),
+                threshold_percent=25.0,
+                min_count=2,
+            ),
+        )
+    ]
+).fit(training)
+transformed = pipeline.transform(training)
+```
+
+The transformer preserves the index, column order, non-selected columns, and
+feature names. It rejects ndarray input, duplicate column names, and missing,
+extra, or reordered inference columns because its supported contract is a complete
+DataFrame schema. These generic ndarray estimator checks do not apply; clone,
+parameters, pipeline, pandas output, feature names, and fitted-state behavior are
+covered directly.
+
+`transform_with_diagnostics` returns per-column unseen and fallback counts/rates
+plus the retained-category count. Transform never changes the training-fitted
+mapping.
+
+### Safe mapping artifact
+
+Portable mappings use strict JSON, never pickle:
+
+```python
+from category_consolidation.artifact import (
+    dump_mapping_artifact,
+    load_mapping_artifact,
+)
+
+artifact_json = dump_mapping_artifact(pipeline.named_steps["categories"])
+restored = load_mapping_artifact(artifact_json)
+```
+
+The artifact records schema version, thresholds, full feature schema, retained and
+observed categories, fallback labels, and a SHA-256 fingerprint. The scalar codec
+supports only `None`, booleans, integers, floats (including explicit NaN/infinity
+tags), strings, and the package missing sentinel. Unsupported types, duplicate JSON
+keys, corrupt fingerprints, invalid mappings, and unknown schema versions fail
+closed. Loading parses data only and never executes code.
+
+## Comparison report
+
+Generate both committed report formats from one sanitized evaluation object:
+
+```bash
+uv run python -m category_consolidation.evaluation \
+  --output-dir task-06-category-consolidation/reports
+```
+
+Outputs:
+
+- `reports/baseline-vs-extension.json` for the versioned machine contract;
+- `reports/baseline-vs-extension.md` generated directly from that JSON object.
+
+The report measures percent-only equivalence, per-column category/fallback/unseen
+statistics, `% + min_count` mapping differences, sklearn integration checks, safe
+artifact parity, and a bounded runtime/memory microbenchmark. Alias normalization
+is recorded as `not_implemented`; extension-only measures are not described as an
+improvement to the assignment baseline.
+
+## Verification
+
+```bash
+uv run pytest task-06-category-consolidation/tests
+uv run ruff check task-06-category-consolidation
+uv run mypy task-06-category-consolidation/src task-06-category-consolidation/tests
+```
+
+## Interpretation and limitations
+
+One-hot encoding gives each distinct category its own coefficient. Consolidating
+levels with weak training support reduces fragile sparse columns, but it does not
+prove that grouped categories are semantically equivalent. The transformer learns
+frequencies only from `fit` data and performs no target encoding, fuzzy matching,
+or alias inference.
+
+The committed fixture report is deterministic except for explicitly labeled local
+runtime/memory measurements. It is engineering evidence, not a universal
+performance promise. Real threshold and minimum-count choices remain owner policy.
+Reviewed explicit alias normalization is deferred and disabled.
+
+Leakage-safe target encoding with smoothing and cross-fitting is an alternative for
+large categorical spaces where many levels still matter. Models with native
+categorical handling, such as CatBoost, can also reduce manual grouping, but their
+validation split must remain equally leakage-safe.

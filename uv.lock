@@ -1176,6 +1176,19 @@ name = "siemens-category-consolidation"
 version = "0.1.0"
 source = { editable = "task-06-category-consolidation" }
 
+[package.optional-dependencies]
+sklearn = [
+    { name = "pandas" },
+    { name = "scikit-learn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pandas", marker = "extra == 'sklearn'", specifier = ">=2.3,<4" },
+    { name = "scikit-learn", marker = "extra == 'sklearn'", specifier = ">=1.7,<2" },
+]
+provides-extras = ["sklearn"]
+
 [[package]]
 name = "siemens-deployment-strategy"
 version = "0.1.0"

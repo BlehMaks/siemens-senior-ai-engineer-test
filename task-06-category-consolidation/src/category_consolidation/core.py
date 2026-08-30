@@ -11,6 +11,13 @@ class _MissingCategorySentinel:
     def __repr__(self) -> str:
         return "MISSING_CATEGORY"
 
+    def __copy__(self) -> _MissingCategorySentinel:
+        return self
+
+    def __deepcopy__(self, memo: dict[int, object]) -> _MissingCategorySentinel:
+        del memo
+        return self
+
 
 MISSING_CATEGORY = _MissingCategorySentinel()
 
@@ -39,6 +46,7 @@ class TransformResult:
 @dataclass(slots=True)
 class RareCategoryConsolidator:
     threshold_percent: float
+    min_count: int | None = field(default=None, kw_only=True)
     rare_label: Hashable = "__RARE__"
     missing_sentinel: Hashable = MISSING_CATEGORY
     observed_categories: frozenset[Hashable] = field(
@@ -52,6 +60,7 @@ class RareCategoryConsolidator:
 
     def __post_init__(self) -> None:
         self.threshold_percent = _validate_threshold(self.threshold_percent)
+        self.min_count = _validate_min_count(self.min_count)
         _assert_hashable(self.rare_label, label="rare_label")
         _assert_hashable(self.missing_sentinel, label="missing_sentinel")
         self.resolved_rare_label = self.rare_label
@@ -71,6 +80,7 @@ class RareCategoryConsolidator:
                 count=count,
                 total=len(validated_values),
                 threshold_percent=self.threshold_percent,
+                min_count=self.min_count,
             )
         )
         self.resolved_rare_label = resolved_rare_label
@@ -123,12 +133,14 @@ def consolidate_rare_categories(
     values: Iterable[object],
     threshold_percent: float,
     *,
+    min_count: int | None = None,
     rare_label: Hashable = "__RARE__",
     missing_sentinel: Hashable = MISSING_CATEGORY,
 ) -> list[Hashable]:
     return (
         RareCategoryConsolidator(
             threshold_percent=threshold_percent,
+            min_count=min_count,
             rare_label=rare_label,
             missing_sentinel=missing_sentinel,
         )
@@ -145,6 +157,16 @@ def _validate_threshold(threshold_percent: float) -> float:
     if not isfinite(threshold) or not 0.0 <= threshold <= 100.0:
         raise ValueError("threshold_percent must be a finite real number from 0 to 100")
     return threshold
+
+
+def _validate_min_count(min_count: int | None) -> int | None:
+    if min_count is None:
+        return None
+    if isinstance(min_count, bool) or not isinstance(min_count, int):
+        raise TypeError("min_count must be a non-negative integer or None")
+    if min_count < 0:
+        raise ValueError("min_count must be a non-negative integer or None")
+    return min_count
 
 
 def _validate_values(values: Iterable[object]) -> tuple[Hashable, ...]:
@@ -170,11 +192,17 @@ def _assert_hashable(value: object, *, label: str) -> None:
         raise TypeError(f"{label} must be hashable") from None
 
 
-def _meets_threshold(*, count: int, total: int, threshold_percent: float) -> bool:
+def _meets_threshold(
+    *,
+    count: int,
+    total: int,
+    threshold_percent: float,
+    min_count: int | None,
+) -> bool:
     # Either natural percentage operation order can differ by one float step.
     # Accept both exact boundary representations, without a general tolerance.
     boundary = max((count / total) * 100.0, (count * 100.0) / total)
-    return boundary >= threshold_percent
+    return boundary >= threshold_percent and (min_count is None or count >= min_count)
 
 
 def _resolve_rare_label(
