@@ -49,3 +49,35 @@ def test_parser_failure_ignores_assignments_inside_multiline_strings() -> None:
     ).encode()
 
     assert not _contains_credential_assignment("config.py", source)
+
+
+def test_parser_failure_ignores_assignments_inside_multiline_f_strings() -> None:
+    predicate = "not " * 10_000 + "False"
+    source = (
+        'example = f"""\ntoken, marker = "12345678", runtime_marker\n"""\n'
+        f"probe = {predicate}\n"
+    ).encode()
+
+    assert not _contains_credential_assignment("config.py", source)
+
+
+def test_invalid_dedent_does_not_expose_later_multiline_string() -> None:
+    source = (
+        b"if True:\n    if True:\n        pass\n      invalid_dedent = 1\n"
+        b'documentation = """\n'
+        b'token, marker = "12345678", runtime_marker\n'
+        b'"""\n'
+    )
+
+    assert not _contains_credential_assignment("config.py", source)
+
+
+def test_closing_string_line_recovers_following_tuple_assignment() -> None:
+    predicate = "not " * 10_000 + "False"
+    source = (
+        'def configure():\n    documentation = """\n    example text\n'
+        '    """; token, marker = "12345678", runtime_marker\n'
+        f"probe = {predicate}\n"
+    ).encode()
+
+    assert _contains_credential_assignment("config.py", source)

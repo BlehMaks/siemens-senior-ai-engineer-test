@@ -292,11 +292,12 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
             _contains_credential_assignment_linewise(path, content)
             return parsed
         source = _decode_python_source(content)
-        multiline_strings = _python_multiline_string_lines(source)
-        for line_number, line in enumerate(source.splitlines(), start=1):
-            if line_number in multiline_strings:
-                continue
-            recovered = _python_contains_credential_assignment(line.lstrip().encode())
+        recoverable = _python_mask_multiline_strings(source)
+        for line in recoverable.splitlines():
+            statement = line.lstrip()
+            while statement.startswith(";"):
+                statement = statement[1:].lstrip()
+            recovered = _python_contains_credential_assignment(statement.encode())
             if recovered:
                 return True
     return _contains_credential_assignment_linewise(path, content)
@@ -490,16 +491,66 @@ def _python_name_is_credential(name: str) -> bool:
     )
 
 
-def _python_multiline_string_lines(source: str) -> set[int]:
-    lines: set[int] = set()
-    try:
-        tokens = tokenize.generate_tokens(io.StringIO(source).readline)
-        for token in tokens:
-            if token.type == tokenize.STRING and token.start[0] != token.end[0]:
-                lines.update(range(token.start[0], token.end[0] + 1))
-    except (IndentationError, tokenize.TokenError):
-        pass
-    return lines
+def _python_mask_multiline_strings(source: str) -> str:
+    masked = list(source)
+    cursor = 0
+    quote: str | None = None
+    triple_quote: str | None = None
+    in_comment = False
+
+    while cursor < len(source):
+        char = source[cursor]
+        if triple_quote is not None:
+            if source.startswith(triple_quote, cursor) and not _quote_is_escaped(
+                source, cursor
+            ):
+                masked[cursor : cursor + 3] = "   "
+                cursor += 3
+                triple_quote = None
+                continue
+            if char != "\n":
+                masked[cursor] = " "
+            cursor += 1
+            continue
+
+        if in_comment:
+            if char == "\n":
+                in_comment = False
+            cursor += 1
+            continue
+
+        if quote is not None:
+            if char == "\\":
+                cursor += 2
+                continue
+            if char == quote or char == "\n":
+                quote = None
+            cursor += 1
+            continue
+
+        if char == "#":
+            in_comment = True
+            cursor += 1
+            continue
+        if source.startswith(('"""', "'''"), cursor):
+            triple_quote = source[cursor : cursor + 3]
+            masked[cursor : cursor + 3] = "   "
+            cursor += 3
+            continue
+        if char in {'"', "'"}:
+            quote = char
+        cursor += 1
+
+    return "".join(masked)
+
+
+def _quote_is_escaped(source: str, cursor: int) -> bool:
+    backslashes = 0
+    cursor -= 1
+    while cursor >= 0 and source[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 1
 
 
 def _decode_python_source(content: bytes) -> str:
