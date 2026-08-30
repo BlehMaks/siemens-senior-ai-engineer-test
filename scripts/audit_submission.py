@@ -287,9 +287,6 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
     if Path(path).suffix.lower() == ".py":
         parsed = _python_contains_credential_assignment(content)
         if parsed is not None:
-            # Keep exercising the conservative line parser: it remains the fallback
-            # for syntactically incomplete Python files and protects its regressions.
-            _contains_credential_assignment_linewise(path, content)
             return parsed
     return _contains_credential_assignment_linewise(path, content)
 

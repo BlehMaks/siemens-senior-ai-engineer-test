@@ -1,3 +1,4 @@
+import scripts.audit_submission as submission_audit
 from scripts.audit_submission import _contains_credential_assignment
 
 
@@ -27,3 +28,22 @@ def test_parser_resource_failure_fails_closed() -> None:
     source = f"runtime_value = {predicate}\n".encode()
 
     assert _contains_credential_assignment("config.py", source)
+
+
+def test_fail_closed_result_returns_without_linewise_rescan(monkeypatch) -> None:
+    monkeypatch.setattr(
+        submission_audit,
+        "_python_contains_credential_assignment",
+        lambda content: True,
+    )
+
+    def exhausted_memory(path: str, content: bytes) -> bool:
+        raise MemoryError("linewise scan also exhausted memory")
+
+    monkeypatch.setattr(
+        submission_audit,
+        "_contains_credential_assignment_linewise",
+        exhausted_memory,
+    )
+
+    assert _contains_credential_assignment("config.py", b"runtime_value = False\n")
