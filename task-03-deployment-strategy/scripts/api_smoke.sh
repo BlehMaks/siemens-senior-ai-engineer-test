@@ -31,6 +31,7 @@ validate_cancellation_response() {
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
+import re
 import sys
 
 
@@ -50,7 +51,13 @@ try:
         "requested_at",
     }:
         reject()
-    if payload["run_id"] != sys.argv[2] or type(payload["run_id"]) is not str:
+    run_id = payload["run_id"]
+    if (
+        run_id != sys.argv[2]
+        or type(run_id) is not str
+        or not 6 <= len(run_id) <= 64
+        or re.fullmatch(r"[a-z0-9]+(?:[-_][a-z0-9]+)*", run_id) is None
+    ):
         reject()
     if type(payload["state"]) is not str:
         reject()
@@ -63,7 +70,16 @@ try:
     if requested_at is not None:
         if type(requested_at) is not str:
             reject()
-        normalized = requested_at[:-1] + "+00:00" if requested_at.endswith("Z") else requested_at
+        if re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)",
+            requested_at,
+        ) is None:
+            reject()
+        normalized = (
+            requested_at[:-1] + "+00:00"
+            if requested_at.endswith("Z")
+            else requested_at
+        )
         parsed = datetime.fromisoformat(normalized)
         if parsed.utcoffset() != timedelta(0):
             reject()
