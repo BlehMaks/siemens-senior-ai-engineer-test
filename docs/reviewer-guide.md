@@ -33,7 +33,10 @@ request through the agent, API, and cloud boundary.
 Task 4 and Task 5 reports are committed, but the original assignment tables are
 not. Add them locally and use the environment variables shown in
 [release and operations](release-and-operations.md) to reproduce the
-data-dependent checks. Task 6 is fully deterministic and has no external input.
+data-dependent checks. Task 4 persists and parity-checks its fitted pipeline;
+Task 5 rebuilds one transparent TF-IDF index per catalog invocation and returns five
+labeled alternatives for every supplied row; Task 6 is a fitted deterministic
+transform, not a separately trained predictive model, and has no external input.
 
 ## Claims to avoid
 

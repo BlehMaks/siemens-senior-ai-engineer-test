@@ -48,7 +48,13 @@ uv run --locked pytest -q task-04-binary-classification/tests
 ```
 
 The recorded seed-42 run selected weighted logistic regression. Its grouped-CV mean
-PR-AUC is `0.5792`; untouched-holdout PR-AUC is `0.4230`. The selected `0.6700`
+PR-AUC is `0.5626`; untouched-holdout PR-AUC is `0.4230`. The selected `0.6713`
 threshold yields holdout recall `0.8545` and precision `0.4234`. Full results and
 limitations are in `reports/model-card.md`; machine-readable aggregates are in
 `reports/metrics.json`.
+
+Training writes `selected-model.pkl`, containing the fitted preprocessing pipeline,
+classifier, and schema. The evaluation command immediately reloads that exact
+artifact and verifies prediction parity. Inference should load this trusted artifact
+once and reuse it; the model is not retrained for each prediction. Re-run training
+only when producing a new version from a new or deliberately changed dataset.

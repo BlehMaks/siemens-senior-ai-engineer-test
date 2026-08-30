@@ -38,6 +38,13 @@ future label information back into model fitting.
 - `consolidate_rare_categories(values, threshold_percent, ...)` is a thin helper for
   the assignment's standalone-function framing.
 
+This is a fitted deterministic preprocessing transform, not a predictive ML model.
+Call `fit` once on the training split and reuse the same object for validation, test,
+and inference; calling the one-shot helper separately on each split would relearn
+frequencies and violate the leakage boundary. The assignment does not require a
+serialized Task 6 artifact, but a production pipeline must persist these fitted
+categories together with the downstream model rather than fitting them per request.
+
 ## Why this helps logistic regression
 
 One-hot encoding turns every distinct category into its own coefficient. Very rare
