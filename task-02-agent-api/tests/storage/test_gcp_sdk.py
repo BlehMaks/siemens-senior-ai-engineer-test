@@ -517,7 +517,7 @@ async def test_cloud_tasks_translate_already_exists_and_not_found() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cloud_tasks_ready_reports_queue_health() -> None:
+async def test_cloud_tasks_ready_reports_health_and_preserves_failures() -> None:
     client = FakeCloudTasksAsyncClient()
     queue = GoogleCloudTaskClient(
         cast(gcp_storage._CloudTasksClient, client),
@@ -528,7 +528,9 @@ async def test_cloud_tasks_ready_reports_queue_health() -> None:
     assert await queue.ready() is True
 
     client.raise_queue = NotFound("missing")  # type: ignore[no-untyped-call]
-    assert await queue.ready() is False
+    with pytest.raises(NotFound):
+        await queue.ready()
 
     client.raise_queue = InternalServerError("boom")  # type: ignore[no-untyped-call]
-    assert await queue.ready() is False
+    with pytest.raises(InternalServerError):
+        await queue.ready()

@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Protocol, cast
 
-from google.api_core.exceptions import AlreadyExists, GoogleAPICallError, NotFound
+from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud.firestore_v1.async_transaction import (
     AsyncTransaction,
     async_transactional,
@@ -207,10 +207,7 @@ class GoogleCloudTaskClient(CloudTaskClient):
         return True
 
     async def ready(self) -> bool:
-        try:
-            await self._client.get_queue(name=self._queue_name)
-        except (GoogleAPICallError, NotFound):
-            return False
+        await self._client.get_queue(name=self._queue_name)
         return True
 
 
