@@ -5,3 +5,8 @@ output "state_bucket_names" {
     scope => bucket.name
   }
 }
+
+output "project_number" {
+  description = "Numeric identifier resolved by Terraform for the target project."
+  value       = data.google_project.current.number
+}

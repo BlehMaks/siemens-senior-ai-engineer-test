@@ -37,10 +37,9 @@ invocation, or Cloud Run SSH.
 
 ## Secret handling
 
-Terraform tracks secret containers, not payloads. A `terraform_data` provisioner
-calls `scripts/seed_secret_version.sh`, which generates 48 random bytes and sends
-the encoded value to the Cloud SDK over stdin. Existing enabled versions make the
-step a no-op. The payload is absent from Terraform state and command arguments.
+Terraform generates both initial secret values and creates their Secret Manager
+versions. The values are sensitive and remain in the protected, versioned
+bootstrap state. They are absent from command arguments and GitHub variables.
 
 ## Operator commands
 

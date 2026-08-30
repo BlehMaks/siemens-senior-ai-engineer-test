@@ -51,24 +51,17 @@ suite still covers all six packages.
 The operator computer needs:
 
 - Terraform 1.9.8;
-- Google Cloud CLI authenticated to the existing project;
-- Application Default Credentials for the smoke operator;
+- Google credentials already available to the Terraform provider;
 - GitHub CLI authenticated to the target repository;
 - `git`, `jq`, and `openssl`;
 - the current `master` commit pushed before deployment dispatch.
 
-Confirm the two authenticated accounts without changing either platform:
+Confirm GitHub access without changing the repository:
 
 ```bash
-gcloud auth list
-gcloud config get-value project
-gcloud auth application-default print-access-token >/dev/null
 gh auth status
 gh repo view BlehMaks/siemens-senior-ai-engineer-test
 ```
-
-If the ADC check fails on a local workstation, run
-`gcloud auth application-default login` once and repeat it.
 
 The project and its billing relationship must already exist. Everything inside
 the project, plus the repository delivery boundary, is managed by Terraform.
@@ -81,9 +74,16 @@ deletion, force pushes, and non-linear history for every actor. The rule does no
 require a second reviewer, so a single-person assessment repository remains
 usable; GitHub Actions still runs all checks on every push and pull request.
 
-The linked billing account must use EUR. The wrapper checks that requirement and
-the alert mailbox before Terraform creates anything. It rejects service-account
-mailboxes and addresses without a complete domain.
+The linked billing account must use EUR. Supply its ID and at least one monitored
+human mailbox before planning:
+
+```bash
+export GCP_BILLING_ACCOUNT_ID=ABCDEF-123456-ABCDEF
+export GCP_BUDGET_NOTIFICATION_EMAILS='["operator@example.com"]'
+```
+
+The wrapper validates both values before Terraform creates anything. It rejects
+service-account mailboxes and addresses without a complete domain.
 
 ## What the bootstrap manages
 
@@ -103,9 +103,9 @@ deploy.yml
   -> Cloud Run API and worker, monitoring and budget resources
 ```
 
-Secret values are generated during the Terraform apply by a local provisioner.
-They are sent to `gcloud secrets versions add` over stdin, so the payloads do not
-appear in Terraform state, the process arguments, or GitHub variables.
+Terraform generates both initial secret values and writes their Secret Manager
+versions. The values are marked sensitive and remain in the protected,
+versioned bootstrap state; they never enter command arguments or GitHub variables.
 
 The assessment never adopts the project's `(default)` Firestore database. It
 creates `sai-dev` in `europe-west3`, passes that name to both Cloud Run services,
@@ -124,7 +124,7 @@ Review the first plan:
 
 ```bash
 ./task-03-deployment-strategy/scripts/bootstrap.sh plan \
-  liquidity-planning-platform \
+  siemens-senior-ai-engineer \
   BlehMaks/siemens-senior-ai-engineer-test \
   BlehMaks \
   europe-west3
@@ -136,7 +136,7 @@ the bootstrap without starting an application deployment:
 
 ```bash
 ./task-03-deployment-strategy/scripts/bootstrap.sh apply \
-  liquidity-planning-platform \
+  siemens-senior-ai-engineer \
   BlehMaks/siemens-senior-ai-engineer-test \
   BlehMaks \
   europe-west3
@@ -145,31 +145,32 @@ the bootstrap without starting an application deployment:
 The apply ends with a no-drift verification and checks the Terraform outputs,
 GitHub delivery variables, Cloud Tasks queue, and secret versions. It is safe to
 rerun after an interruption: existing secret versions are kept, remote state is
-reused, and a legacy combined state bucket is migrated before Terraform plans
-against the separated backends.
+reused, and Terraform refreshes each managed resource before planning. On a new
+computer that adopts existing state buckets, set `GCP_IMPORT_STATE_BUCKETS=true`
+for the first run.
 
 After the exact local commit is present on remote `master`, provision and start
 the protected delivery workflow with:
 
 ```bash
 ./task-03-deployment-strategy/scripts/bootstrap.sh deploy \
-  liquidity-planning-platform \
+  siemens-senior-ai-engineer \
   BlehMaks/siemens-senior-ai-engineer-test \
   BlehMaks \
   europe-west3
 ```
 
-The wrapper does not call `gcloud run deploy` or create cloud resources directly.
-It applies Terraform, verifies the result, compares local and remote revisions,
+Neither the wrapper nor the deployment workflow invokes the Google Cloud CLI.
+They apply Terraform, verify its outputs, compare local and remote revisions,
 then dispatches `.github/workflows/deploy.yml`. Each dispatch gets a random
 correlation ID and the verified commit SHA. The first workflow job compares that
 SHA with GitHub's resolved `master`; if the branch moved, the correlated run
 fails before tests, credentials, or deployment. The wrapper watches that exact
 run and reports the failure instead of following another revision.
 
-The wrapper reads the project's linked billing account and defaults the alert
-recipient to the active human `gcloud` account. The dev stack creates a EUR 5
-budget with early alerts. Both Cloud Run services scale to zero and have a
+The wrapper uses the explicit billing account and alert recipients supplied by
+the operator. The dev stack creates a EUR 5 budget with early alerts. Both Cloud
+Run services scale to zero and have a
 one-instance maximum; the queue accepts one concurrent delivery. After CI
 finishes, the wrapper reads the applied Terraform state and refuses success if
 those limits are absent. A Google Cloud budget sends alerts but does not stop
@@ -179,7 +180,7 @@ Run the bounded cloud smoke after the workflow succeeds:
 
 ```bash
 ./task-03-deployment-strategy/scripts/cloud_api_smoke.sh \
-  liquidity-planning-platform europe-west3 dev 1027058459333 review-001
+  siemens-senior-ai-engineer europe-west3 dev 163220015018 review-001
 ```
 
 The script discovers the service URL, creates two temporary tenant keys in
@@ -189,10 +190,10 @@ to mode `0600` files in its temporary directory, keeps it out of command
 arguments and output, and removes the directory on exit. The exact smoke-only
 IAM requirements are listed in the resource manifest.
 
-If a key-file write fails, the CLI clears the file and moves it into a mode
-`0700` `.api-key-cleanup-*` directory as an empty `owned` file. It leaves that
-directory in place rather than risk unlinking a path another process has
-replaced. The smoke script removes the temporary directory when it exits.
+If a key-file write fails, the CLI clears the file and moves it to a mode `0600`
+sibling named `.api-key-cleanup-*`. The requested path remains available for a
+safe retry, while any entry created there by another process is preserved. The
+smoke script removes its temporary directory when it exits.
 
 ## CI/CD path
 
@@ -215,7 +216,7 @@ Check the bootstrap at any time:
 
 ```bash
 ./task-03-deployment-strategy/scripts/bootstrap.sh verify \
-  liquidity-planning-platform \
+  siemens-senior-ai-engineer \
   BlehMaks/siemens-senior-ai-engineer-test \
   BlehMaks \
   europe-west3

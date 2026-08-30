@@ -1,14 +1,13 @@
-resource "terraform_data" "secret_version" {
+resource "random_password" "secret_version" {
   for_each = var.seed_secret_versions ? var.secret_ids : {}
 
-  triggers_replace = [google_secret_manager_secret.managed[each.key].id]
+  length  = 64
+  special = false
+}
 
-  provisioner "local-exec" {
-    command = "${path.module}/../../scripts/seed_secret_version.sh"
+resource "google_secret_manager_secret_version" "initial" {
+  for_each = var.seed_secret_versions ? var.secret_ids : {}
 
-    environment = {
-      GCP_PROJECT_ID = var.project_id
-      GCP_SECRET_ID  = google_secret_manager_secret.managed[each.key].secret_id
-    }
-  }
+  secret      = google_secret_manager_secret.managed[each.key].id
+  secret_data = random_password.secret_version[each.key].result
 }

@@ -56,7 +56,7 @@ case "$1 $2" in
     ;;
   "state show")
     address=$4
-    project=liquidity-planning-platform
+    project=siemens-senior-ai-engineer
     database=sai-dev
     if [[ $FAKE_SCENARIO == legacy_default ]]; then database='(default)'; fi
     if [[ $FAKE_SCENARIO == mixed_invalid ]]; then
@@ -82,7 +82,7 @@ esac
         [
             str(MIGRATION),
             str(terraform_root),
-            "liquidity-planning-platform",
+            "siemens-senior-ai-engineer",
             "sai-dev",
         ],
         check=False,

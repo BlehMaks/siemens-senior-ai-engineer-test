@@ -2,12 +2,12 @@
 
 This is the up-front change list for the Tasks 1 to 3 deployment. It describes
 the default `sai/dev` cell in `europe-west3`. With the supplied project, replace
-`PROJECT_ID` with `liquidity-planning-platform` and `PROJECT_NUMBER` with
-`1027058459333`.
+`PROJECT_ID` with `siemens-senior-ai-engineer` and `PROJECT_NUMBER` with
+`163220015018`.
 
-The wrapper does not create any of these resources with ad-hoc `gcloud`
-commands. It supplies inputs to the three Terraform roots and uses `gcloud` only
-for discovery, secret payload transport, and verification.
+The wrapper and deployment workflow use Terraform for every Google Cloud create,
+read, update, and verification step. The Google Cloud CLI is not part of the
+deployment path.
 
 ## Access needed before the first run
 
@@ -43,10 +43,9 @@ identity needs `roles/run.viewer` on the project,
 these three grants. An existing project owner already has the required
 permissions; a separate smoke operator should receive only this access.
 
-The linked billing account must use EUR. The wrapper reads `currencyCode` before
-the first Terraform mutation and stops if it is not `EUR`, because the test
-budget is fixed at EUR 5. The budget recipient must be a monitored human mailbox
-with a complete domain; service-account addresses are rejected.
+The linked billing account must use EUR because the test budget is fixed at EUR
+5. The operator supplies its ID and a monitored human mailbox before the first
+plan. Service-account addresses are rejected.
 
 ## Google Cloud entities
 
@@ -64,7 +63,7 @@ with a complete domain; service-account addresses are rejected.
 | Artifact Registry | `assessment-images` | Immutable Docker tags and digest-pinned deployment |
 | Cloud Run services | `sai-dev-api`, `sai-dev-worker` | Both scale to zero and are capped at one instance in the test cell |
 | Logging bucket | `assessment-app` | Regional application logs with 30-day retention |
-| Monitoring channel | One channel per configured email | The wrapper defaults to the active human `gcloud` account |
+| Monitoring channel | One channel per configured email | Recipients are explicit bootstrap inputs |
 | Billing budget | `sai-dev-assessment-budget` | EUR 5 project budget with 20%, 50%, 80%, and 100% alerts |
 | Project custom role | `sai_dev_terraform_deployer` | Database and named Cloud Run lifecycle operations not covered by the selected predefined roles |
 | GitHub branch protection | `master` | Rejects deletion, force pushes, and non-linear history, including for administrators |

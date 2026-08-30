@@ -292,9 +292,12 @@ def test_secrets_and_runtime_access_stay_in_human_bootstrap() -> None:
     assert 'resource "google_secret_manager_secret" "managed"' in main_tf
     assert 'resource "google_secret_manager_secret_version"' not in main_tf
     assert "secret_data" not in main_tf
-    assert "secret_data" not in secret_versions_tf
-    assert 'resource "terraform_data" "secret_version"' in secret_versions_tf
-    assert "seed_secret_version.sh" in secret_versions_tf
+    assert 'resource "random_password" "secret_version"' in secret_versions_tf
+    assert (
+        'resource "google_secret_manager_secret_version" "initial"'
+        in secret_versions_tf
+    )
+    assert "random_password.secret_version[each.key].result" in secret_versions_tf
     assert "deletion_protection = true" in main_tf
     assert "user_managed" in main_tf
     assert (
@@ -313,6 +316,7 @@ def test_secrets_and_runtime_access_stay_in_human_bootstrap() -> None:
         assert 'for_each = toset(["api", "worker"])' in resource
     assert main_tf.count('role      = "roles/secretmanager.secretAccessor"') == 2
     assert 'output "secret_containers"' in outputs_tf
+    assert 'output "secret_version_count"' in outputs_tf
     assert 'output "secret_accessors"' in outputs_tf
 
 

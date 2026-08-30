@@ -51,13 +51,13 @@ Terraform for every GCP and GitHub configuration change. A normal first run is:
 export TERRAFORM_BIN=/absolute/path/to/terraform
 
 ./task-03-deployment-strategy/scripts/bootstrap.sh plan \
-  liquidity-planning-platform \
+  siemens-senior-ai-engineer \
   BlehMaks/siemens-senior-ai-engineer-test \
   BlehMaks \
   europe-west3
 
 ./task-03-deployment-strategy/scripts/bootstrap.sh deploy \
-  liquidity-planning-platform \
+  siemens-senior-ai-engineer \
   BlehMaks/siemens-senior-ai-engineer-test \
   BlehMaks \
   europe-west3

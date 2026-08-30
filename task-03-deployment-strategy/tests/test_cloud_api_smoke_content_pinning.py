@@ -25,7 +25,7 @@ set -euo pipefail
 printf 'gcloud %s\\n' "$*" >> "$FAKE_COMMAND_LOG"
 if [[ "$1 $2" == "projects describe" ]]; then
   {replacement}
-  printf '1027058459333\\n'
+  printf '163220015018\\n'
   exit 0
 fi
 printf 'unexpected gcloud command: %s\\n' "$*" >&2

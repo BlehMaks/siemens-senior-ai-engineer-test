@@ -83,13 +83,13 @@ static credential, mutable image tag, local application state, or rebuild of an
 older revision.
 
 The bootstrap is safe to rerun after a partial failure. Terraform reuses remote
-state, migrates the old combined backend when needed, keeps existing enabled
-secret versions, and dispatches deployment only after verification succeeds.
+state, keeps existing secret versions, and dispatches deployment only after
+verification succeeds.
 
-The wrapper discovers the linked billing account and defaults the recipient to
-the active human account. Terraform grants the deployer
+The operator supplies the linked billing account and alert recipients explicitly.
+Terraform grants the deployer
 `roles/billing.costsManager` on that account and creates the EUR 5 alert during
-the application apply. Before any mutation, the wrapper also requires the
-account currency to be EUR and rejects service-account or incomplete recipient
-addresses. The operator must already have billing-account administration
-permission for the first bootstrap.
+the application apply. Before any mutation, the wrapper rejects malformed
+billing IDs and service-account or incomplete recipient addresses. The operator
+must already have billing-account administration permission for the first
+bootstrap.

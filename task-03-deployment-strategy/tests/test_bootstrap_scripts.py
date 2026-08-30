@@ -25,14 +25,11 @@ def test_bootstrap_routes_all_cloud_mutations_through_terraform() -> None:
         'TF_VAR_application_state_bucket_name="${project_id}-sai-app-tf-state"'
         in source
     )
-    assert 'legacy_state_bucket_name="${project_id}-sai-tf-state"' in source
-    assert "-migrate-state" in source
-    assert "-force-copy" in source
-    assert "discover_existing_state_buckets" in source
-    assert "for scope in bootstrap application" in source
+    assert "GCP_IMPORT_STATE_BUCKETS" in source
+    assert "TF_VAR_existing_state_buckets" in source
+    assert "output -raw project_number" in source
     assert "resolve_budget_coordinates" in source
-    assert "gcloud billing projects describe" in source
-    assert "gcloud billing accounts describe" in source
+    assert "GCP_BILLING_ACCOUNT_ID must be the linked billing account ID" in source
     assert "GCP_BUDGET_NOTIFICATION_EMAILS" in source
     assert "verify_application_cost_controls" in source
     assert '.budget.amount_units == "5"' in source
@@ -43,18 +40,11 @@ def test_bootstrap_routes_all_cloud_mutations_through_terraform() -> None:
     assert 'run_title="sai-deploy-$dispatch_id"' in source
     assert 'gh run watch "$run_id"' in source
     assert "TF_VAR_enable_runtime_policy=true" in source
-    assert "verify_secret_versions" in source
+    assert "output -raw secret_version_count" in source
     assert "gh workflow run deploy.yml" in source
     assert ".branch_protection.admin_enforcement == true" in source
     assert ".firestore_database_name == $database" in source
-    for direct_mutation in (
-        "gcloud run deploy",
-        "gcloud run services update",
-        "gcloud iam service-accounts create",
-        "gcloud secrets create",
-        "gcloud tasks queues create",
-    ):
-        assert direct_mutation not in source
+    assert "gcloud" not in source
 
 
 def test_secret_seed_is_idempotent_and_keeps_payload_off_command_line(

@@ -5,6 +5,10 @@ locals {
   }
 }
 
+data "google_project" "current" {
+  project_id = var.project_id
+}
+
 import {
   for_each = var.existing_state_buckets
 

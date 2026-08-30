@@ -33,7 +33,7 @@ def _fixture(tmp_path: Path, *, smoke_exit: int = 0) -> tuple[Path, dict[str, st
 set -euo pipefail
 printf 'gcloud %s\n' "$*" >> "$FAKE_COMMAND_LOG"
 case "$1 $2" in
-  "projects describe") printf '1027058459333\n' ;;
+  "projects describe") printf '163220015018\n' ;;
   "run services") printf 'https://sai-dev-api-example.run.app\n' ;;
   "secrets versions") printf 'test-pepper-value\n' ;;
   *) printf 'unexpected gcloud command: %s\n' "$*" >&2; exit 9 ;;
@@ -104,10 +104,10 @@ def _run(
     return subprocess.run(
         [
             str(wrapper),
-            "liquidity-planning-platform",
+            "siemens-senior-ai-engineer",
             "europe-west3",
             "dev",
-            "1027058459333",
+            "163220015018",
             "review-001",
         ],
         check=False,
@@ -188,10 +188,10 @@ def test_cloud_smoke_anchors_uv_to_the_repository(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             str(wrapper),
-            "liquidity-planning-platform",
+            "siemens-senior-ai-engineer",
             "europe-west3",
             "dev",
-            "1027058459333",
+            "163220015018",
             "review-001",
         ],
         cwd=unrelated,
@@ -221,10 +221,10 @@ def test_cloud_smoke_rejects_a_wrong_boundary(
 ) -> None:
     wrapper, environment = _fixture(tmp_path)
     arguments = [
-        "liquidity-planning-platform",
+        "siemens-senior-ai-engineer",
         "europe-west3",
         "dev",
-        "1027058459333",
+        "163220015018",
         "review-001",
     ]
     arguments[argument_index] = value

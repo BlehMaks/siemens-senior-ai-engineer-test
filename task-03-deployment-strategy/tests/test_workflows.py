@@ -73,7 +73,8 @@ def test_deploy_promotes_the_tested_artifact_by_digest() -> None:
     assert "needs: verify" in source
     assert "docker save --output release-image.tar" in source
     assert "docker load --input release-image.tar" in source
-    assert "gcloud artifacts docker images describe" in source
+    assert "docker buildx imagetools inspect" in source
+    assert "oauth2accesstoken" in source
     assert '"$registry_digest" != "$push_digest"' in source
     assert "^sha256:[a-f0-9]{64}$" in source
     assert "TF_VAR_image_digest: ${{ steps.image.outputs.digest }}" in source
@@ -83,6 +84,7 @@ def test_deploy_promotes_the_tested_artifact_by_digest() -> None:
     assert "needs.plan.outputs.image_digest" in source
     assert "AGENT_API_KEY_PEPPER" not in source
     assert "AGENT_API_TASK_SIGNING_HMAC" not in source
+    assert "gcloud" not in source
 
 
 def test_remote_state_and_secret_container_inputs_fail_closed() -> None:

@@ -37,6 +37,11 @@ output "secret_containers" {
   }
 }
 
+output "secret_version_count" {
+  description = "Number of initial secret versions managed by Terraform."
+  value       = length(google_secret_manager_secret_version.initial)
+}
+
 output "secret_accessors" {
   description = "Runtime identities with resource-scoped access to each bootstrap-owned secret."
   value = {

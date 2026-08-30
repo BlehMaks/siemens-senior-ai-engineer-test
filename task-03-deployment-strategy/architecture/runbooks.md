@@ -39,7 +39,7 @@ needs no cleanup.
 
 ```bash
 task-03-deployment-strategy/scripts/cloud_api_smoke.sh \
-  liquidity-planning-platform europe-west3 dev 1027058459333 review-001
+  siemens-senior-ai-engineer europe-west3 dev 163220015018 review-001
 ```
 
 The wrapper reads the Cloud Run URL and API-key pepper, creates keys for two
