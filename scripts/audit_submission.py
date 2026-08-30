@@ -84,7 +84,7 @@ SHELL_INTERPOLATION = re.compile(
     r"`[^`\r\n]+`"
     r")"
 )
-TEMPLATE_INTERPOLATION = re.compile(r"(?<!\$)(?:\$\{\{[^{}\r\n]+\}\}|\$\{[^{}\r\n]+\})")
+TEMPLATE_INTERPOLATION = re.compile(r"(?<!\$)(?:\$\{\{[^\r\n]*\}\}|\$\{[^{}\r\n]+\})")
 TERRAFORM_INTERPOLATION = TEMPLATE_INTERPOLATION
 BRACED_INTERPOLATION = re.compile(r"\{[A-Za-z_][^{}\r\n]*\}")
 PYTHON_REFERENCE = r"[A-Za-z_][A-Za-z0-9_.]*(?:\[[^\]\r\n]+\])*"
@@ -291,8 +291,12 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
             # for syntactically incomplete Python files and protects its regressions.
             _contains_credential_assignment_linewise(path, content)
             return parsed
-        for line in _decode_python_source(content).splitlines():
-            recovered = _python_contains_credential_assignment(line.encode())
+        source = _decode_python_source(content)
+        multiline_strings = _python_multiline_string_lines(source)
+        for line_number, line in enumerate(source.splitlines(), start=1):
+            if line_number in multiline_strings:
+                continue
+            recovered = _python_contains_credential_assignment(line.lstrip().encode())
             if recovered:
                 return True
     return _contains_credential_assignment_linewise(path, content)
@@ -484,6 +488,18 @@ def _python_name_is_credential(name: str) -> bool:
         )
         is not None
     )
+
+
+def _python_multiline_string_lines(source: str) -> set[int]:
+    lines: set[int] = set()
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+        for token in tokens:
+            if token.type == tokenize.STRING and token.start[0] != token.end[0]:
+                lines.update(range(token.start[0], token.end[0] + 1))
+    except (IndentationError, tokenize.TokenError):
+        pass
+    return lines
 
 
 def _decode_python_source(content: bytes) -> str:
