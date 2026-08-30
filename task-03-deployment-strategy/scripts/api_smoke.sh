@@ -25,6 +25,68 @@ request_status() {
     --output "$output" --write-out '%{http_code}' "$@"
 }
 
+validate_cancellation_response() {
+  local response_path=$1 expected_run_id=$2 python_bin=${PYTHON_BIN:-python3}
+  "$python_bin" - "$response_path" "$expected_run_id" <<'PY'
+from datetime import datetime, timedelta
+import json
+from pathlib import Path
+import sys
+
+
+def reject() -> None:
+    raise SystemExit(1)
+
+
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    if type(payload) is not dict:
+        reject()
+    if set(payload) != {
+        "run_id",
+        "state",
+        "cancellation_requested",
+        "changed",
+        "requested_at",
+    }:
+        reject()
+    if payload["run_id"] != sys.argv[2] or type(payload["run_id"]) is not str:
+        reject()
+    if type(payload["state"]) is not str:
+        reject()
+    if type(payload["cancellation_requested"]) is not bool:
+        reject()
+    if type(payload["changed"]) is not bool:
+        reject()
+
+    requested_at = payload["requested_at"]
+    if requested_at is not None:
+        if type(requested_at) is not str:
+            reject()
+        normalized = requested_at[:-1] + "+00:00" if requested_at.endswith("Z") else requested_at
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.utcoffset() != timedelta(0):
+            reject()
+
+    active_cancellation = (
+        payload["cancellation_requested"] is True
+        and payload["changed"] is True
+        and requested_at is not None
+        and payload["state"] in {"cancelled", "running", "waiting_for_tool"}
+    )
+    terminal_race = (
+        payload["cancellation_requested"] is False
+        and payload["changed"] is False
+        and requested_at is None
+        and payload["state"] in {"completed", "failed", "expired"}
+    )
+    if not (active_cancellation or terminal_race):
+        reject()
+except (KeyError, OSError, UnicodeError, ValueError, json.JSONDecodeError):
+    reject()
+PY
+}
+
 main() {
   [[ $# -eq 2 ]] || fail "usage: api_smoke.sh BASE_URL SMOKE_ID"
   local base_url=${1%/} smoke_id=$2 tmp_dir auth_a auth_b status session_id run_id cancel_run_id sse_code sse_status
@@ -34,6 +96,7 @@ main() {
   [[ $SMOKE_API_KEY_A != *[$'\r\n"']* && $SMOKE_API_KEY_B != *[$'\r\n"']* ]] || fail "smoke API keys contain unsupported characters"
   command -v curl >/dev/null 2>&1 || fail "curl is required"
   command -v jq >/dev/null 2>&1 || fail "jq is required"
+  command -v "${PYTHON_BIN:-python3}" >/dev/null 2>&1 || fail "python3 is required"
 
   umask 077
   tmp_dir=$(mktemp -d -t api-smoke.XXXXXX)
@@ -96,21 +159,7 @@ main() {
   cancel_run_id=$(jq -er '.run_id | strings' "$tmp_dir/cancel-run.json")
   status=$(request_status "$tmp_dir/cancel.json" --request POST --config "$auth_a" "$base_url/v1/runs/$cancel_run_id/cancel")
   expect_status 202 "$status" "run cancellation"
-  jq -e --arg run_id "$cancel_run_id" '
-    .run_id == $run_id and (
-      (
-        .cancellation_requested == true and
-        .changed == true and
-        (.requested_at | type) == "string" and
-        (.state == "cancelled" or .state == "running" or .state == "waiting_for_tool")
-      ) or (
-        .cancellation_requested == false and
-        .changed == false and
-        .requested_at == null and
-        (.state == "completed" or .state == "failed" or .state == "expired")
-      )
-    )
-  ' "$tmp_dir/cancel.json" >/dev/null ||
+  validate_cancellation_response "$tmp_dir/cancel.json" "$cancel_run_id" ||
     fail "run cancellation response violated the active-or-terminal race contract"
 
   status=$(request_status "$tmp_dir/delete.json" --request DELETE --config "$auth_a" "$base_url/v1/sessions/$session_id")

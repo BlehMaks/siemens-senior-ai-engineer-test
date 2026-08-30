@@ -417,6 +417,8 @@ class SmokeHandler(BaseHTTPRequestHandler):
     run_count: ClassVar[int] = 0
     leak_cross_tenant: ClassVar[bool] = False
     terminal_cancel_race: ClassVar[bool] = False
+    malformed_cancel_timestamp: ClassVar[bool] = False
+    extra_terminal_cancel_field: ClassVar[bool] = False
 
     def log_message(self, format: str, *args: object) -> None:
         del format, args
@@ -471,15 +473,18 @@ class SmokeHandler(BaseHTTPRequestHandler):
             self._json(202, {"run_id": run_id})
         elif self.path == "/v1/runs/run-cancel/cancel":
             if self.terminal_cancel_race:
+                payload: dict[str, object] = {
+                    "run_id": "run-cancel",
+                    "state": "completed",
+                    "cancellation_requested": False,
+                    "changed": False,
+                    "requested_at": None,
+                }
+                if self.extra_terminal_cancel_field:
+                    payload["unexpected"] = "field"
                 self._json(
                     202,
-                    {
-                        "run_id": "run-cancel",
-                        "state": "completed",
-                        "cancellation_requested": False,
-                        "changed": False,
-                        "requested_at": None,
-                    },
+                    payload,
                 )
             else:
                 self._json(
@@ -489,7 +494,11 @@ class SmokeHandler(BaseHTTPRequestHandler):
                         "state": "cancelled",
                         "cancellation_requested": True,
                         "changed": True,
-                        "requested_at": "2026-08-30T16:00:00Z",
+                        "requested_at": (
+                            "not-a-timestamp"
+                            if self.malformed_cancel_timestamp
+                            else "2026-08-30T16:00:00Z"
+                        ),
                     },
                 )
         else:
@@ -505,12 +514,18 @@ class SmokeHandler(BaseHTTPRequestHandler):
 
 
 def _run_api_smoke(
-    *, leak_cross_tenant: bool, terminal_cancel_race: bool = False
+    *,
+    leak_cross_tenant: bool,
+    terminal_cancel_race: bool = False,
+    malformed_cancel_timestamp: bool = False,
+    extra_terminal_cancel_field: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     SmokeHandler.requests = []
     SmokeHandler.run_count = 0
     SmokeHandler.leak_cross_tenant = leak_cross_tenant
     SmokeHandler.terminal_cancel_race = terminal_cancel_race
+    SmokeHandler.malformed_cancel_timestamp = malformed_cancel_timestamp
+    SmokeHandler.extra_terminal_cancel_field = extra_terminal_cancel_field
     server = ThreadingHTTPServer(("127.0.0.1", 0), SmokeHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -557,6 +572,25 @@ def test_api_smoke_accepts_run_that_finishes_before_cancellation() -> None:
 
     assert result.returncode == 0, result.stderr
     assert "API smoke passed" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "smoke_options",
+    [
+        {"malformed_cancel_timestamp": True},
+        {
+            "terminal_cancel_race": True,
+            "extra_terminal_cancel_field": True,
+        },
+    ],
+)
+def test_api_smoke_rejects_invalid_cancellation_contract(
+    smoke_options: dict[str, bool],
+) -> None:
+    result = _run_api_smoke(leak_cross_tenant=False, **smoke_options)
+
+    assert result.returncode != 0
+    assert "active-or-terminal race contract" in result.stderr
 
 
 def test_api_smoke_fails_on_cross_tenant_visibility() -> None:
