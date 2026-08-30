@@ -32,6 +32,7 @@ build/
 
 # Local planning and review state
 /.local/
+task-02-agent-api/tests/adversarial_memory_indicator.mjs
 
 # Generated runtime state and heavyweight artifacts
 /artifacts/
