@@ -398,24 +398,26 @@ def _contains_credential_assignment_linewise(path: str, content: bytes) -> bool:
 
 
 def _python_contains_credential_assignment(content: bytes) -> bool | None:
-    source = content.decode("utf-8", errors="replace")
+    source = content.decode("utf-8-sig", errors="replace")
     try:
-        tree = ast.parse(source)
+        tree = ast.parse(content)
     except SyntaxError:
         return None
 
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if (
-                any(
-                    _python_target_is_credential(target)
-                    for target in targets
-                    if target is not None
-                )
-                and node.value is not None
-                and _python_value_contains_literal(node.value, source)
+        if isinstance(node, ast.Assign):
+            if any(
+                _python_assignment_contains_literal(target, node.value, source)
+                for target in node.targets
             ):
+                return True
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)):
+            if node.value is not None and _python_assignment_contains_literal(
+                node.target, node.value, source
+            ):
+                return True
+        elif isinstance(node, ast.AugAssign):
+            if _python_assignment_contains_literal(node.target, node.value, source):
                 return True
         elif isinstance(node, ast.keyword):
             if (
@@ -477,7 +479,32 @@ def _python_target_is_credential(target: ast.expr) -> bool:
         )
     if isinstance(target, (ast.List, ast.Tuple)):
         return any(_python_target_is_credential(item) for item in target.elts)
+    if isinstance(target, ast.Starred):
+        return _python_target_is_credential(target.value)
     return False
+
+
+def _python_assignment_contains_literal(
+    target: ast.expr, value: ast.expr, source: str
+) -> bool:
+    if isinstance(target, (ast.List, ast.Tuple)) and isinstance(
+        value, (ast.List, ast.Tuple)
+    ):
+        if len(target.elts) == len(value.elts) and not any(
+            isinstance(item, ast.Starred) for item in target.elts
+        ):
+            return any(
+                _python_assignment_contains_literal(item, assigned, source)
+                for item, assigned in zip(target.elts, value.elts, strict=True)
+            )
+        if any(
+            isinstance(item, ast.Starred) and _python_target_is_credential(item.value)
+            for item in target.elts
+        ):
+            return _python_value_contains_literal(value, source)
+    return _python_target_is_credential(target) and _python_value_contains_literal(
+        value, source
+    )
 
 
 def _python_value_contains_literal(value: ast.expr, source: str) -> bool:
@@ -504,6 +531,16 @@ def _python_value_contains_literal(value: ast.expr, source: str) -> bool:
                 if isinstance(item, ast.Constant) and isinstance(item.value, str)
             )
             >= 8
+        )
+    if isinstance(value, ast.IfExp):
+        return _python_value_contains_literal(
+            value.body, source
+        ) or _python_value_contains_literal(value.orelse, source)
+    if isinstance(value, (ast.BoolOp, ast.BinOp, ast.UnaryOp)):
+        return any(
+            _python_value_contains_literal(child, source)
+            for child in ast.iter_child_nodes(value)
+            if isinstance(child, ast.expr)
         )
     return False
 

@@ -97,3 +97,72 @@ def test_unannotated_none_default_with_later_syntax_is_not_literal() -> None:
     compile(content, "config.py", "exec")
 
     assert not _contains_credential_assignment("config.py", content)
+
+
+def test_augmented_assignment_literal_is_detected() -> None:
+    content = _seed(
+        "tok",
+        "en = runtime_token\n",
+        "tok",
+        'en += "12345678"\n',
+    )
+    compile(content, "config.py", "exec")
+
+    assert _contains_credential_assignment("config.py", content)
+
+
+@pytest.mark.parametrize("literal", ['"12345678"', 'b"12345678"'])
+def test_literal_conditional_branch_is_detected(literal: str) -> None:
+    content = _seed("tok", f"en = {literal} if enabled else runtime_token\n")
+    compile(content, "config.py", "exec")
+
+    assert _contains_credential_assignment("config.py", content)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        _seed(
+            "harmless, tok",
+            'en = "12345678", runtime_token\n',
+        ),
+        _seed(
+            "tok",
+            'en, harmless = runtime_token, "12345678"\n',
+        ),
+    ],
+)
+def test_parallel_assignment_preserves_target_value_pairing(content: bytes) -> None:
+    compile(content, "config.py", "exec")
+
+    assert not _contains_credential_assignment("config.py", content)
+
+
+def test_starred_credential_target_is_detected() -> None:
+    content = _seed("*api_k", 'ey, tail = ("12345678", "tail")\n')
+    compile(content, "config.py", "exec")
+
+    assert _contains_credential_assignment("config.py", content)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            _seed(
+                "result = call(\n    index_tok",
+                'en=(\n        "12345678",\n    ),\n)\n',
+            ),
+            True,
+        ),
+        (_seed("call(\n    index_tok", "en=(runtime_token))\n"), False),
+        (_seed("call(\n    index_tok", "en=(build_token()))\n"), False),
+    ],
+)
+def test_utf8_bom_uses_structured_python_detection(
+    source: bytes, expected: bool
+) -> None:
+    content = b"\xef\xbb\xbf" + source
+    compile(content, "config.py", "exec")
+
+    assert _contains_credential_assignment("config.py", content) is expected
