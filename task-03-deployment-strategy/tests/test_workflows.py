@@ -85,6 +85,7 @@ def test_deploy_promotes_the_tested_artifact_by_digest() -> None:
     assert "AGENT_API_KEY_PEPPER" not in source
     assert "AGENT_API_TASK_SIGNING_HMAC" not in source
     assert "gcloud" not in source
+    assert 'terraform -chdir="$environment_root" refresh' not in source
 
 
 def test_remote_state_and_secret_container_inputs_fail_closed() -> None:

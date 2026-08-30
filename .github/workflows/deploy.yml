@@ -386,11 +386,10 @@ jobs:
           -lock-timeout=60s
           $RUNNER_TEMP/reviewed-plan/dev.tfplan
 
-      - name: Record the Terraform-refreshed service contract
+      - name: Record the applied Terraform service contract
         shell: bash
         run: |
           environment_root=task-03-deployment-strategy/terraform/environments/dev
-          terraform -chdir="$environment_root" refresh -input=false
           terraform -chdir="$environment_root" output -json execution_plane | jq -e '
             .api_service.name == "sai-dev-api" and
             .worker_service.name == "sai-dev-worker" and
