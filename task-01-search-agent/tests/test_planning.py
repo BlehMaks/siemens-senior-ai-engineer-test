@@ -306,7 +306,7 @@ async def test_planner_rejects_generic_token_scope_bypass(
 
 @pytest.mark.asyncio
 async def test_planner_accepts_exact_unicode_scope() -> None:
-    request = "сравнить отчёт устойчивого развития"
+    request = "compare the sustainability report"
     provider = FakeStructuredChatProvider(
         responses=[
             {

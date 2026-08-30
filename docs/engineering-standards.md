@@ -18,6 +18,9 @@ publication, or tool use; those actions require the repository owner's instructi
 - Architecture decisions with meaningful alternatives are recorded as short decision notes.
 - Examples use sanitized, reproducible inputs and show expected outputs.
 - Generated outputs are never presented as evidence without the command and configuration that produced them.
+- Repository source, comments, documentation, fixtures, CLI text, diagrams, and
+  editable report sources use English. `make audit-language` enforces the policy;
+  binary artifacts are reviewed through their editable source.
 
 ## Verification loop
 

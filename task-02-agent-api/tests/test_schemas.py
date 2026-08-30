@@ -471,7 +471,7 @@ def test_default_ignorable_boundaries_cannot_split_sensitive_markers(
     [
         "Cafe\u0301 and re\u0301sume\u0301 evidence are public.",
         "Résumé naïve façade: documented public evidence.",
-        "Исследование подтверждено открытыми источниками.",
+        "The research is supported by public sources.",
         "अनुसंधान सार्वजनिक स्रोतों से समर्थित है।",
         "إجابةٌ عامةٌ مدعومةٌ بمصادرَ منشورةٍ.",
         "公開情報に基づく回答です。",

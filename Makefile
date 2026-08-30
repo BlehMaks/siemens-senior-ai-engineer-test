@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: sync lock-check format-check lint type test local-acceptance local-submission audit-submission check
+.PHONY: sync lock-check format-check lint type test local-acceptance local-submission audit-language audit-submission check
 
 sync:
 	$(UV) sync --locked --all-packages --dev
@@ -29,4 +29,7 @@ local-submission:
 audit-submission:
 	$(UV) run python scripts/audit_submission.py
 
-check: lock-check format-check lint type test audit-submission
+audit-language:
+	$(UV) run python scripts/audit_language.py
+
+check: lock-check format-check lint type test audit-language audit-submission
