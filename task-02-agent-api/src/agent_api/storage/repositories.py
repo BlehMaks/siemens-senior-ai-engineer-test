@@ -1040,13 +1040,27 @@ class SQLiteWorkQueue(_PathRepository):
             )
             return cursor.rowcount == 1
 
-    async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int:
+    async def cancel(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        run_id: OpaqueId,
+        generation_id: OpaqueId | None = None,
+    ) -> int:
         scope = (_scope_id(tenant_id), _scope_id(run_id))
+        checked_generation = None if generation_id is None else _scope_id(generation_id)
         async with _connection(self._path, write=True) as connection:
-            cursor = await connection.execute(
-                "DELETE FROM work_items WHERE tenant_id = ? AND run_id = ?",
-                scope,
-            )
+            if checked_generation is None:
+                cursor = await connection.execute(
+                    "DELETE FROM work_items WHERE tenant_id = ? AND run_id = ?",
+                    scope,
+                )
+            else:
+                cursor = await connection.execute(
+                    "DELETE FROM work_items WHERE tenant_id = ? AND run_id = ? "
+                    "AND generation_id = ?",
+                    (*scope, checked_generation),
+                )
             return cursor.rowcount
 
     async def receive(

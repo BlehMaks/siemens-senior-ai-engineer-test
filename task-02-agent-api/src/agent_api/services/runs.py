@@ -148,7 +148,11 @@ class RunService:
         # and a retry or worker delivery repairs cleanup without changing the result.
         if run.state is RunState.CANCELLED:
             with contextlib.suppress(Exception):
-                await self._queue.cancel(tenant_id=tenant_id, run_id=run_id)
+                await self._queue.cancel(
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    generation_id=run.generation_id,
+                )
         return CancellationResponse(
             run_id=run.run_id,
             state=run.state,

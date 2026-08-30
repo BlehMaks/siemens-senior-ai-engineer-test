@@ -605,6 +605,14 @@ class WorkItem(StrictModel):
     tenant_id: OpaqueId
     run_id: OpaqueId
     generation_id: OpaqueId | None = None
+    delivery_task_name: str | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+        min_length=1,
+        max_length=1024,
+        pattern=r"^[^\x00\r\n]+$",
+    )
     enqueued_at: datetime
     not_before: datetime
 
@@ -628,7 +636,10 @@ class EnqueueResult(StrictModel):
             return WorkItem.model_validate(value)
         if type(value) is not WorkItem:
             raise ValueError("work item has the wrong concrete type")
-        return WorkItem.model_validate(value.model_dump(mode="python"))
+        checked = WorkItem.model_validate(value.model_dump(mode="python"))
+        return checked.model_copy(
+            update={"delivery_task_name": value.delivery_task_name}
+        )
 
 
 class WorkQueue(Protocol):
@@ -644,7 +655,13 @@ class WorkQueue(Protocol):
 
     async def discard(self, item: WorkItem) -> bool: ...
 
-    async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int: ...
+    async def cancel(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        run_id: OpaqueId,
+        generation_id: OpaqueId | None = None,
+    ) -> int: ...
 
 
 class IdempotencyConflictError(ValueError):

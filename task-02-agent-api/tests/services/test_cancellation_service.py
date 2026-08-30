@@ -29,11 +29,21 @@ class FailFirstCancellationQueue:
     async def enqueue(self, item: WorkItem) -> EnqueueResult:
         return await self._delegate.enqueue(item)
 
-    async def cancel(self, *, tenant_id: str, run_id: str) -> int:
+    async def cancel(
+        self,
+        *,
+        tenant_id: str,
+        run_id: str,
+        generation_id: str | None = None,
+    ) -> int:
         if not self._failed:
             self._failed = True
             raise StorageError("private queue cancellation failure")
-        return await self._delegate.cancel(tenant_id=tenant_id, run_id=run_id)
+        return await self._delegate.cancel(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            generation_id=generation_id,
+        )
 
 
 @pytest.mark.asyncio

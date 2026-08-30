@@ -128,7 +128,8 @@ def _checked_update(value: StateUpdate) -> StateUpdate:
 def _checked_item(value: WorkItem) -> WorkItem:
     if type(value) is not WorkItem:
         raise ValueError("storage value has the wrong concrete type")
-    return WorkItem.model_validate(value.model_dump(mode="python"))
+    checked = WorkItem.model_validate(value.model_dump(mode="python"))
+    return checked.model_copy(update={"delivery_task_name": value.delivery_task_name})
 
 
 def _checked_session(value: SessionRecord) -> SessionRecord:
@@ -1143,7 +1144,10 @@ class CloudTasksWorkQueue:
                 raise QueueConflictError("work item belongs to another run generation")
             bound = _checked_item(
                 checked.model_copy(
-                    update={"generation_id": observed_parent.generation_id}
+                    update={
+                        "generation_id": observed_parent.generation_id,
+                        "delivery_task_name": None,
+                    }
                 )
             )
             if stored is not None:
@@ -1163,19 +1167,12 @@ class CloudTasksWorkQueue:
                 remote = await self._tasks.get(name=task_name)
                 if remote is not None:
                     self._validate_remote_task(remote, stored)
-                    refreshed_token = secrets.token_hex(16)
-                    if await self._store.transaction(
-                        partial(
-                            _refresh_work_index,
-                            document_id=_document_id(stored.work_id),
-                            expected=stored,
-                            task_name=task_name,
-                            index_token=index_token,
-                            refreshed_token=refreshed_token,
-                        )
-                    ):
-                        return EnqueueResult(item=stored, created=False)
-                    continue
+                    return EnqueueResult(
+                        item=stored.model_copy(
+                            update={"delivery_task_name": task_name}
+                        ),
+                        created=False,
+                    )
                 if not await self._store.transaction(
                     partial(
                         _delete_matching_work,
@@ -1233,8 +1230,11 @@ class CloudTasksWorkQueue:
             if not indexed_by_us:
                 if physical_created:
                     await self._tasks.delete(name=task_name)
-                return EnqueueResult(item=indexed, created=False)
-            return EnqueueResult(item=indexed, created=not repaired_existing)
+                continue
+            return EnqueueResult(
+                item=indexed.model_copy(update={"delivery_task_name": task_name}),
+                created=not repaired_existing,
+            )
         raise StorageError("work enqueue contention exceeded retry limit")
 
     async def discard(self, item: WorkItem) -> bool:
@@ -1247,11 +1247,16 @@ class CloudTasksWorkQueue:
         task_name = _require_text(row, "task_name")
         index_token = _optional_text(row, "index_token")
         if (
-            stored != checked
+            stored.model_dump(mode="python") != checked.model_dump(mode="python")
             or _require_text(row, "document_id") != document_id
             or _require_text(row, "work_id") != checked.work_id
             or _require_text(row, "tenant_id") != checked.tenant_id
             or _require_text(row, "run_id") != checked.run_id
+        ):
+            return False
+        if (
+            checked.delivery_task_name is not None
+            and checked.delivery_task_name != task_name
         ):
             return False
         if not self._is_task_name(task_name, checked.work_id, checked.generation_id):
@@ -1264,6 +1269,8 @@ class CloudTasksWorkQueue:
                     index_token=index_token,
                 )
             )
+        if checked.delivery_task_name is None:
+            return False
         removed = await self._store.transaction(
             partial(
                 _delete_matching_work,
@@ -1278,9 +1285,16 @@ class CloudTasksWorkQueue:
         deleted = await self._tasks.delete(name=task_name)
         return deleted or await self._tasks.get(name=task_name) is None
 
-    async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int:
+    async def cancel(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        run_id: OpaqueId,
+        generation_id: OpaqueId | None = None,
+    ) -> int:
         checked_tenant = _scope_id(tenant_id)
         checked_run = _scope_id(run_id)
+        checked_generation = None if generation_id is None else _scope_id(generation_id)
         rows = await self._store.list(
             collection=_WORK_ITEMS,
             filters={"tenant_id": checked_tenant, "run_id": checked_run},
@@ -1291,6 +1305,11 @@ class CloudTasksWorkQueue:
             document_id = _require_text(row, "document_id")
             index_token = _optional_text(row, "index_token")
             expected = _decode_work_document(row)
+            if (
+                checked_generation is not None
+                and expected.generation_id != checked_generation
+            ):
+                continue
             index_identity_is_valid = (
                 expected.tenant_id == checked_tenant
                 and expected.run_id == checked_run
@@ -1352,7 +1371,12 @@ class CloudTasksWorkQueue:
         )
         if not self._is_task_name(canonical_task, item.work_id, item.generation_id):
             raise TaskDeliveryAuthError("task delivery name is invalid")
-        return item
+        if (
+            item.delivery_task_name is not None
+            and item.delivery_task_name != canonical_task
+        ):
+            raise TaskDeliveryAuthError("task delivery name is invalid")
+        return item.model_copy(update={"delivery_task_name": canonical_task})
 
     def _task_name(
         self,
@@ -1387,7 +1411,7 @@ class CloudTasksWorkQueue:
             task_name=task.name,
             queue_name=self._queue_name,
         )
-        if decoded != expected:
+        if decoded.model_dump(mode="python") != expected.model_dump(mode="python"):
             raise StorageError("remote task payload disagrees with the work index")
 
 
@@ -1643,7 +1667,7 @@ def _work_document(
         "run_id": item.run_id,
         "task_name": task_name,
         "index_token": index_token,
-        "payload": item.model_dump_json(),
+        "payload": item.model_dump_json(exclude={"delivery_task_name"}),
     }
 
 
@@ -1652,35 +1676,6 @@ def _decode_work_document(document: Mapping[str, object]) -> WorkItem:
         return WorkItem.model_validate_json(_require_text(document, "payload"))
     except ValueError as exc:
         raise StorageError("stored work item failed validation") from exc
-
-
-async def _refresh_work_index(
-    tx: DocumentStoreTransaction,
-    *,
-    document_id: str,
-    expected: WorkItem,
-    task_name: str,
-    index_token: str | None,
-    refreshed_token: str,
-) -> bool:
-    current = await tx.get(collection=_WORK_ITEMS, document_id=document_id)
-    if (
-        current is None
-        or _decode_work_document(current) != expected
-        or _require_text(current, "task_name") != task_name
-        or _optional_text(current, "index_token") != index_token
-    ):
-        return False
-    await tx.set(
-        collection=_WORK_ITEMS,
-        document_id=document_id,
-        document=_work_document(
-            expected,
-            task_name=task_name,
-            index_token=refreshed_token,
-        ),
-    )
-    return True
 
 
 async def _persist_work_index(
@@ -1739,7 +1734,8 @@ async def _delete_matching_work(
     current = await tx.get(collection=_WORK_ITEMS, document_id=document_id)
     if (
         current is None
-        or _decode_work_document(current) != expected
+        or _decode_work_document(current).model_dump(mode="python")
+        != expected.model_dump(mode="python")
         or _require_text(current, "tenant_id") != expected.tenant_id
         or _require_text(current, "run_id") != expected.run_id
         or _require_text(current, "work_id") != expected.work_id

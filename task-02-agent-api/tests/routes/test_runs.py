@@ -39,8 +39,14 @@ class UnavailableQueue:
         del item
         raise StorageError("private queue dependency detail")
 
-    async def cancel(self, *, tenant_id: str, run_id: str) -> int:
-        del tenant_id, run_id
+    async def cancel(
+        self,
+        *,
+        tenant_id: str,
+        run_id: str,
+        generation_id: str | None = None,
+    ) -> int:
+        del tenant_id, run_id, generation_id
         return 0
 
 

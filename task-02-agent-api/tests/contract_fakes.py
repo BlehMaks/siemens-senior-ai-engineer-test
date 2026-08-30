@@ -373,7 +373,13 @@ class FakeWorkQueue:
             self._items[checked.work_id] = checked
             return EnqueueResult(item=checked, created=True)
 
-    async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int:
+    async def cancel(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        run_id: OpaqueId,
+        generation_id: OpaqueId | None = None,
+    ) -> int:
         checked_tenant = _scope_id(tenant_id)
         checked_run = _scope_id(run_id)
         async with self._lock:
@@ -381,6 +387,7 @@ class FakeWorkQueue:
                 work_id
                 for work_id, item in self._items.items()
                 if (item.tenant_id, item.run_id) == (checked_tenant, checked_run)
+                and (generation_id is None or item.generation_id == generation_id)
             ]
             for work_id in keys:
                 del self._items[work_id]

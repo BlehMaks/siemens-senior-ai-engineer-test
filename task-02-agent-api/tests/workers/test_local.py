@@ -109,7 +109,13 @@ class FakeQueue:
             )
             return item
 
-    async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int:
+    async def cancel(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        run_id: OpaqueId,
+        generation_id: OpaqueId | None = None,
+    ) -> int:
         async with self._lock:
             if self._cancel_error is not None:
                 error, self._cancel_error = self._cancel_error, None
@@ -117,7 +123,9 @@ class FakeQueue:
             keys = [
                 work_id
                 for work_id, item in self._items.items()
-                if item.tenant_id == tenant_id and item.run_id == run_id
+                if item.tenant_id == tenant_id
+                and item.run_id == run_id
+                and (generation_id is None or item.generation_id == generation_id)
             ]
             for key in keys:
                 del self._items[key]

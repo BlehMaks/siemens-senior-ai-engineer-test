@@ -42,7 +42,13 @@ class QueueReceiver(Protocol):
 
     async def discard(self, item: WorkItem) -> bool: ...
 
-    async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int: ...
+    async def cancel(
+        self,
+        *,
+        tenant_id: OpaqueId,
+        run_id: OpaqueId,
+        generation_id: OpaqueId | None = None,
+    ) -> int: ...
 
 
 class RunExecutor(Protocol):
@@ -307,7 +313,9 @@ class LocalWorker:
                 await _drain_cancelled(task, timeout=self._cancellation_drain_seconds)
                 if lease.run is not None and lease.run.state in TERMINAL_RUN_STATES:
                     await self._queue.cancel(
-                        tenant_id=item.tenant_id, run_id=item.run_id
+                        tenant_id=item.tenant_id,
+                        run_id=item.run_id,
+                        generation_id=item.generation_id,
                     )
                     return True
                 return False
@@ -377,10 +385,18 @@ class LocalWorker:
     ) -> RunRecord | None:
         current = await self._repository.get(tenant_id=run.tenant_id, run_id=run.run_id)
         if current is None:
-            await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
+            await self._queue.cancel(
+                tenant_id=item.tenant_id,
+                run_id=item.run_id,
+                generation_id=item.generation_id,
+            )
             return None
         if current.state in TERMINAL_RUN_STATES:
-            await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
+            await self._queue.cancel(
+                tenant_id=item.tenant_id,
+                run_id=item.run_id,
+                generation_id=item.generation_id,
+            )
             return None
         if current.cancellation_requested_at is not None:
             await self._finish_cancellation(item, current)
@@ -391,7 +407,11 @@ class LocalWorker:
 
     async def _finish_cancellation(self, item: WorkItem, run: RunRecord) -> None:
         if run.state in TERMINAL_RUN_STATES:
-            await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
+            await self._queue.cancel(
+                tenant_id=item.tenant_id,
+                run_id=item.run_id,
+                generation_id=item.generation_id,
+            )
             return
         if not _owns(run, worker_id=self._worker_id, lease_id=_lease_id(run)):
             return
@@ -410,9 +430,17 @@ class LocalWorker:
         if write.disposition is WriteDisposition.APPLIED:
             assert write.run is not None
             await self._observe_terminal(write.run, usage=None)
-            await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
+            await self._queue.cancel(
+                tenant_id=item.tenant_id,
+                run_id=item.run_id,
+                generation_id=item.generation_id,
+            )
         elif write.run is not None and write.run.state in TERMINAL_RUN_STATES:
-            await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
+            await self._queue.cancel(
+                tenant_id=item.tenant_id,
+                run_id=item.run_id,
+                generation_id=item.generation_id,
+            )
 
     async def _finish_terminal(
         self,
@@ -440,7 +468,11 @@ class LocalWorker:
         if write.disposition is WriteDisposition.APPLIED:
             assert write.run is not None
             await self._observe_terminal(write.run, usage=usage)
-            await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
+            await self._queue.cancel(
+                tenant_id=item.tenant_id,
+                run_id=item.run_id,
+                generation_id=item.generation_id,
+            )
             return write.run
         if (
             write.run is not None
@@ -454,7 +486,11 @@ class LocalWorker:
             await self._finish_cancellation(item, write.run)
             return None
         if write.run is not None and write.run.state in TERMINAL_RUN_STATES:
-            await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
+            await self._queue.cancel(
+                tenant_id=item.tenant_id,
+                run_id=item.run_id,
+                generation_id=item.generation_id,
+            )
         return None
 
     def _observe_work(self, item: WorkItem, outcome: str) -> None:

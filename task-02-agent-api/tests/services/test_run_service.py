@@ -41,8 +41,18 @@ class FailOnceQueue:
             raise StorageError("simulated queue outage")
         return await self._delegate.enqueue(item)
 
-    async def cancel(self, *, tenant_id: str, run_id: str) -> int:
-        return await self._delegate.cancel(tenant_id=tenant_id, run_id=run_id)
+    async def cancel(
+        self,
+        *,
+        tenant_id: str,
+        run_id: str,
+        generation_id: str | None = None,
+    ) -> int:
+        return await self._delegate.cancel(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            generation_id=generation_id,
+        )
 
 
 async def _service_storage(path: Path) -> tuple[SQLiteRunRepository, SQLiteWorkQueue]:
