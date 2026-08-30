@@ -51,7 +51,11 @@ class FakeDocumentReference:
         self.collection = collection
         self.document_id = document_id
 
-    async def get(self) -> FakeSnapshot:
+    async def get(
+        self, *, transaction: FakeAsyncTransaction | None = None
+    ) -> FakeSnapshot:
+        if transaction is not None:
+            transaction.reads += 1
         return FakeSnapshot(
             self._store.documents.get(self.collection, {}).get(self.document_id),
             self.document_id,
@@ -139,13 +143,9 @@ class FakeAsyncTransaction:
     ) -> AsyncIterator[FakeSnapshot]:
         self.reads += 1
         if isinstance(ref_or_query, FakeDocumentReference):
-            yield FakeSnapshot(
-                self._store.documents.get(ref_or_query.collection, {}).get(
-                    ref_or_query.document_id
-                ),
-                ref_or_query.document_id,
+            raise TypeError(
+                "the Firestore SDK cannot await its document get_all iterator"
             )
-            return
         for row in self._store.query_rows(ref_or_query):
             yield FakeSnapshot(row)
 
@@ -393,6 +393,8 @@ async def test_firestore_transaction_get_and_delete_translate_missing_documents(
 
     assert found is None
     assert deleted is False
+    assert client.last_transaction is not None
+    assert client.last_transaction.reads == 1
 
 
 @pytest.mark.asyncio

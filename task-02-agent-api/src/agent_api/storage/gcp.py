@@ -89,15 +89,13 @@ class _GoogleFirestoreTransaction(DocumentStoreTransaction):
     ) -> dict[str, object] | None:
         key = (collection, document_id)
         document = self._client.collection(collection).document(document_id)
-        async for snapshot in _stream_items(self._transaction.get(document)):
-            decoded = _snapshot_document(snapshot)
-            if decoded is None:
-                self._missing_documents.add(key)
-            else:
-                self._known_documents.add(key)
-            return decoded
-        self._missing_documents.add(key)
-        return None
+        snapshot = await document.get(transaction=self._transaction)
+        decoded = _snapshot_document(snapshot)
+        if decoded is None:
+            self._missing_documents.add(key)
+        else:
+            self._known_documents.add(key)
+        return decoded
 
     async def set(
         self, *, collection: str, document_id: str, document: Mapping[str, object]
@@ -117,15 +115,13 @@ class _GoogleFirestoreTransaction(DocumentStoreTransaction):
             return True
         if key in self._missing_documents:
             return False
-        async for snapshot in _stream_items(self._transaction.get(reference)):
-            if not snapshot.exists:
-                self._missing_documents.add(key)
-                return False
-            self._transaction.delete(reference)
+        snapshot = await reference.get(transaction=self._transaction)
+        if not snapshot.exists:
             self._missing_documents.add(key)
-            return True
+            return False
+        self._transaction.delete(reference)
         self._missing_documents.add(key)
-        return False
+        return True
 
     async def delete_known(self, *, collection: str, document_id: str) -> None:
         reference = self._client.collection(collection).document(document_id)
@@ -309,7 +305,9 @@ async def _stream_items(
 
 
 class _FirestoreDocumentReference(Protocol):
-    async def get(self) -> _Snapshot: ...
+    async def get(
+        self, *, transaction: _FirestoreTransaction | None = None
+    ) -> _Snapshot: ...
 
 
 class _FirestoreQuery(Protocol):
