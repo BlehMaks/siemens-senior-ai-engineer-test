@@ -63,6 +63,13 @@ the operator uses:
   PROJECT_ID OWNER/REPOSITORY REVIEWER REGION
 ```
 
+The wrapper prints the correlated Actions URL and keeps watching it. For every
+protected job that enters `Waiting`, open that run, choose **Review deployments**,
+select `gcp-dev`, and choose **Approve and deploy**. Digest promotion and apply
+both use this Environment, so GitHub can ask for two reviews in one deployment.
+The approval only releases the next Terraform job; it is not permission to run a
+separate cloud deployment by hand.
+
 The wrapper verifies Terraform and dispatches `deploy.yml` with the exact remote
 commit SHA and a random correlation ID. The first job checks GitHub's resolved
 `master` against that SHA. A branch movement makes the correlated run fail before

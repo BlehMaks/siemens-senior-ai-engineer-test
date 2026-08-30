@@ -48,6 +48,11 @@ gcloud auth application-default set-quota-project PROJECT_ID
   PROJECT_ID OWNER/REPOSITORY REVIEWER europe-west3
 ```
 
+When the correlated Actions run shows `Waiting`, open that run and choose
+**Review deployments**, select `gcp-dev`, and choose **Approve and deploy**.
+Repeat the review if the protected apply job asks again. The wrapper remains the
+operator process and Terraform remains the only provisioning engine.
+
 The first Terraform root creates separate private buckets for privileged
 bootstrap state and application delivery state. The main bootstrap then uses its
 GCS backend to configure APIs, identities, IAM, direct GitHub-to-deployer WIF,

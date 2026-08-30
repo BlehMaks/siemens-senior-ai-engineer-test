@@ -83,7 +83,11 @@ Successful ADC setup is confirmed when `bootstrap.sh plan` reads project number
 
 `deploy` applies the reviewed Terraform bootstrap, verifies it, and then
 dispatches the protected GitHub workflow for the exact pushed `master` commit.
-The wrapper refuses to dispatch when local and remote revisions differ.
+The wrapper refuses to dispatch when local and remote revisions differ. When the
+correlated Actions run pauses, open it, choose **Review deployments**, select
+`gcp-dev`, and choose **Approve and deploy**. GitHub may request this once for
+digest promotion and again for application apply. Keep the wrapper running; the
+approval releases a protected Terraform job and is not a manual cloud deployment.
 
 The full clean-machine, provisioning, verification, and recovery procedure is in
 [release and operations](docs/release-and-operations.md). The exact resource and

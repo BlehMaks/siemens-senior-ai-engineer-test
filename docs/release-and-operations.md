@@ -194,9 +194,24 @@ the protected delivery workflow with:
   europe-west3
 ```
 
+The workflow pauses before a protected `gcp-dev` job. When the wrapper reports
+that the run is waiting:
+
+1. Open the exact GitHub Actions run printed by the wrapper.
+2. Select **Review deployments**.
+3. Select `gcp-dev` and choose **Approve and deploy**.
+4. Leave the wrapper running. It will observe the approval and continue.
+
+Both digest promotion and application apply use the protected Environment, so
+GitHub can request the same review again when the apply job becomes ready. Approve
+each request only after confirming that it belongs to the expected repository,
+`master` revision, and correlated run. This review does not provision a resource
+and does not replace Terraform. It only releases the next protected Terraform
+job. Do not run an equivalent `gcloud` deployment while the workflow is waiting.
+
 Neither the wrapper nor the deployment workflow invokes the Google Cloud CLI.
 They apply Terraform, verify its outputs, compare local and remote revisions,
-then dispatches `.github/workflows/deploy.yml`. Each dispatch gets a random
+then dispatch `.github/workflows/deploy.yml`. Each dispatch gets a random
 correlation ID and the verified commit SHA. The first workflow job compares that
 SHA with GitHub's resolved `master`; if the branch moved, the correlated run
 fails before tests, credentials, or deployment. The wrapper watches that exact
@@ -310,8 +325,9 @@ Terraform starts only after an operator has completed these account-level steps:
    commands in the prerequisites section.
 4. Create the GitHub repository and push `master` once. Terraform can then manage
    its rules, variables, environment, and Workload Identity Federation boundary.
-5. Approve a protected GitHub Environment deployment when GitHub asks for human
-   review. Terraform cannot approve its own run.
+5. In the correlated Actions run, use **Review deployments**, select `gcp-dev`,
+   and choose **Approve and deploy** whenever a protected job waits. Terraform
+   cannot approve its own run.
 
 Corporate identity, data residency, retention, production SLOs, model licensing,
 and final capacity also require decisions from the owning teams. The assessment
