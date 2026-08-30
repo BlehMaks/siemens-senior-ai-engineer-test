@@ -24,6 +24,12 @@ The assessment profile uses:
 The LLM engine is not deployed. Deterministic fake inference is the CI and cloud
 smoke default. Local Ollama remains the real-model development path.
 
+The submission also includes a separate, disabled-by-default production model
+plane. It can provision a private Cloud Run L4 service from an approved,
+digest-pinned Ollama-compatible image. It is not referenced by the assessment
+workflow and requires an explicit GPU cost acknowledgement before apply. See
+[the production model-plane root](terraform/environments/production-model-plane/README.md).
+
 ## Provisioning entry point
 
 All GCP and GitHub configuration changes begin with
@@ -50,6 +56,11 @@ versions, and the authenticated queue. The protected GitHub workflow builds and
 applies the application stack. Its first job binds the dispatch to the exact
 verified `master` SHA and fails before cloud authentication if the branch moved.
 
+The one-time ADC login succeeds when the plan reads
+`projects/siemens-senior-ai-engineer`, reports project number `163220015018`,
+and shows the two state buckets on an empty project. A project permission error
+usually means ADC was created for another Google account.
+
 See [release and operations](../docs/release-and-operations.md) for the complete
 clean-machine and cloud procedure. The [resource and IAM manifest](../docs/cloud-resource-manifest.md)
 lists the exact changes made by the default deployment.
@@ -61,6 +72,7 @@ lists the exact changes made by the default deployment.
 - [Production-scale gates](architecture/production-scale.md)
 - [GCP profile decision record](architecture/adr/0001-gcp-reference-profiles.md)
 - [Bootstrap Terraform](terraform/bootstrap/README.md)
+- [Gated production model plane](terraform/environments/production-model-plane/README.md)
 - [CI/CD contract](operations/ci-cd.md)
 - [Assessment-cell runbooks](architecture/runbooks.md)
 

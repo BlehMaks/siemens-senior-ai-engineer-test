@@ -9,6 +9,10 @@ The wrapper and deployment workflow use Terraform for every Google Cloud create,
 read, update, and verification step. The Google Cloud CLI is not part of the
 deployment path.
 
+The separate production model-plane root is disabled by default and is not part
+of the Tasks 1 to 3 test apply. Its optional entities and roles are listed below
+so they can be reviewed before a later production plan.
+
 ## Access needed before the first run
 
 The Google Cloud project, its billing link, the GitHub repository, and the human
@@ -171,3 +175,37 @@ GCP_WORKLOAD_IDENTITY_PROVIDER
 
 These are identifiers, not credentials. GitHub receives no service-account key
 and no Secret Manager payload.
+
+## Optional production model plane
+
+`terraform/environments/production-model-plane` defaults to `assessment` and
+creates nothing. Setting `model_plane_profile = "cloud_run_gpu"` is a separate
+production action. The normal `gcp-dev` workflows set the assessment value
+directly, so they cannot create GPU capacity.
+
+The production apply creates these additional entities:
+
+| Kind | Name | Purpose |
+|---|---|---|
+| Service account | `sai-prod-model` | Runtime identity for model serving; it receives no project role by default |
+| Cloud Run GPU service | `sai-prod-model` | Private Ollama-compatible model backend with one L4 GPU per instance |
+| Remote-state prefix | `production/model-plane` | Separate state inside the supplied production state bucket |
+
+Terraform grants `roles/iam.serviceAccountUser` on `sai-prod-model` to the
+specified deployer and `roles/run.invoker` on the model service to the specified
+worker. It does not grant access to the API identity or `allUsers`. The service
+uses deletion protection, internal/load-balancer ingress, one request per
+instance, and bounded `min=0`, `max=1` defaults.
+
+The operator applying this root needs `roles/serviceusage.serviceUsageAdmin`,
+`roles/iam.serviceAccountAdmin`, and `roles/run.admin` in the production cell,
+plus write access to the chosen Terraform state bucket. The approved model image
+must already exist in the same project's regional Artifact Registry and be
+pinned by digest.
+
+Several production prerequisites remain manual because they are organizational
+decisions rather than safe Terraform defaults: accept model license and provider
+terms, approve the data classes and region, obtain Cloud Run GPU quota, approve
+the operating budget, publish the reviewed model image, and approve the gateway
+adapter and load evidence. Apply is blocked until the operator sets
+`MODEL_PLANE_COST_ACKNOWLEDGEMENT=I_ACCEPT_GPU_COSTS`.

@@ -43,6 +43,11 @@ The cloud path provisions the agent, API, worker, storage, queue, secrets,
 identity, observability, container registry, and CI/CD boundary. It does not
 deploy Tasks 4 to 6 or an LLM engine.
 
+Task 3 also contains a separate production model-plane reference. It is disabled
+by default and cannot be enabled by the assessment workflow. The opt-in profile
+uses a private, digest-pinned Cloud Run GPU service and has its own cost gate;
+it is included as production infrastructure design, not part of this cloud test.
+
 The operator entry point is
 [`bootstrap.sh`](task-03-deployment-strategy/scripts/bootstrap.sh). It uses
 Terraform for every GCP and GitHub configuration change. A normal first run is:
@@ -71,6 +76,8 @@ The login creates Application Default Credentials for the Terraform provider. It
 does not provision or change cloud resources. The project, billing link, account
 terms, MFA, and any protected-environment approval remain manual prerequisites.
 The deployment guide lists each manual step and its expected result.
+Successful ADC setup is confirmed when `bootstrap.sh plan` reads project number
+`163220015018` and returns the two state buckets without a project-access error.
 
 `deploy` applies the reviewed Terraform bootstrap, verifies it, and then
 dispatches the protected GitHub workflow for the exact pushed `master` commit.

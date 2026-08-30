@@ -78,6 +78,14 @@ must read project number `163220015018` and show only the two state buckets on a
 clean project. A `data.google_project.current` permission error means that the ADC
 identity still lacks access or belongs to a different account.
 
+A successful login is confirmed by a plan that contains:
+
+```text
+data.google_project.current: Read complete
+project_number = "163220015018"
+Plan: 2 to add, 0 to change, 0 to destroy.
+```
+
 The project and its billing relationship must already exist. Everything inside
 the project, plus the repository delivery boundary, is managed by Terraform.
 Read the [cloud resource and IAM manifest](cloud-resource-manifest.md) before the
@@ -190,6 +198,41 @@ one-instance maximum; the queue accepts one concurrent delivery. After CI
 finishes, the wrapper reads the applied Terraform state and refuses success if
 those limits are absent. A Google Cloud budget sends alerts but does not stop
 charges by itself.
+
+## Production model-plane reference
+
+The assessment deployment above always sets
+`TF_VAR_model_plane_profile=assessment`; it cannot create an LLM service. A
+separate root and wrapper are included for the production design:
+
+```bash
+cp task-03-deployment-strategy/terraform/environments/production-model-plane/terraform.tfvars.example \
+  /absolute/private/path/model-plane.tfvars
+
+./task-03-deployment-strategy/scripts/model_plane.sh plan \
+  /absolute/private/path/model-plane.tfvars \
+  PRODUCTION_TERRAFORM_STATE_BUCKET
+```
+
+Replace every placeholder before planning. The configuration requires a
+same-project, same-region Artifact Registry image pinned by digest. That image
+must contain the reviewed model and expose an Ollama-compatible API; the service
+does not download models during startup.
+
+Before apply, complete the model evaluation, license and data review, Cloud Run
+GPU quota check, regional capacity check, load test, gateway integration, and
+cost approval. Then acknowledge the paid capacity explicitly:
+
+```bash
+export MODEL_PLANE_COST_ACKNOWLEDGEMENT=I_ACCEPT_GPU_COSTS
+./task-03-deployment-strategy/scripts/model_plane.sh apply \
+  /absolute/private/path/model-plane.tfvars \
+  PRODUCTION_TERRAFORM_STATE_BUCKET
+```
+
+The production wrapper calls Terraform only. The default configuration scales
+to zero and caps the service at one L4 instance, but GPU use can still exceed the
+assessment's EUR 5 envelope. Do not run this apply for the assignment smoke test.
 
 Run the bounded cloud smoke after the workflow succeeds:
 

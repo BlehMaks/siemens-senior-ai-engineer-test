@@ -199,6 +199,13 @@ context, and cost; enforces size/concurrency/token/model limits; returns structu
 output and usage; supports canary/rollback; and degrades only to an approved smaller
 model, evidence-only response, deferred work, or explicit failure.
 
+The repository contains the Terraform reference for the first Cloud Run GPU
+option. It creates a private, worker-invoked Ollama-compatible service from an
+immutable same-cell image, with a dedicated identity and bounded L4 capacity.
+The profile is disabled in assessment CI. Model artifact promotion, gateway
+wiring, quota, license, data terms, load evidence, and cost approval remain
+promotion gates rather than Terraform defaults.
+
 ## Requirements-to-component map
 
 | Requirement | Assessment component | Enterprise control | Verification owner |

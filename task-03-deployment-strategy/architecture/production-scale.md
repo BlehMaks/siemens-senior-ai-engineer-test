@@ -53,6 +53,26 @@ The GCP choice remains conditional under [ADR-0001](adr/0001-gcp-reference-profi
 approved Azure or AWS landing-zone, identity, model, region, or commercial constraints
 trigger a provider re-score before production commitment.
 
+### Model-plane promotion sequence
+
+The repository implements the Cloud Run GPU branch as a disabled Terraform
+reference. Promotion follows this order:
+
+1. evaluate and approve one immutable model version, license, data terms, and
+   structured-output contract;
+2. build and scan an Ollama-compatible image with the model artifact baked in,
+   then copy the digest-pinned image into the target regional cell;
+3. approve regional L4 quota, load and cold-start evidence, fallback behavior,
+   budget, and `min`/`max` instance values;
+4. review the separate model-plane plan and apply it with the explicit GPU cost
+   acknowledgement;
+5. release the regional gateway adapter, grant invocation only to the worker,
+   run quality/latency/security smoke tests, and then shift a bounded canary.
+
+Failure at any gate leaves the assessment/fake path unchanged. Rollback routes
+the gateway to an existing approved model backend or an explicit degraded mode;
+it does not rebuild an old model image or rewrite source history.
+
 ## SLO and disaster-recovery contract
 
 These are planning hypotheses for discovery, not external commitments. Business
@@ -160,7 +180,8 @@ boundaries, and which evidence proves each boundary rather than merely naming it
 ## Explicit non-claims
 
 The repository does not claim that Apigee, Spanner, AlloyDB, Pub/Sub, GKE, Vertex
-AI, Cloud Run GPU, active-active routing, corporate IdP integration, VPC Service
+AI, Cloud Run GPU capacity, active-active routing, corporate IdP integration, VPC Service
 Controls, CMEK, enterprise SIEM, internal connectors, or OT integration were
-deployed or approved. They are gated production options. The tested public artifact
-is the bounded assessment cell and its shared application contracts.
+deployed or approved. Cloud Run GPU has a validated, disabled Terraform profile;
+the other items remain design options. The tested public artifact is the bounded
+assessment cell and its shared application contracts.

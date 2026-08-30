@@ -23,6 +23,10 @@ enterprise discovery.
   the default real-model development path. No GPU is provisioned by default.
 - A cloud GPU path remains disabled until an explicit budget, quota, model-license,
   load, latency, security, and data-residency gate passes.
+- The deployable GPU reference lives in a separate Terraform root. Its
+  `assessment` profile creates nothing. `cloud_run_gpu` requires a same-region,
+  digest-pinned serving image with the reviewed model baked in and an explicit
+  cost acknowledgement. The normal `gcp-dev` workflow is fixed to `assessment`.
 - The enterprise target uses independent jurisdictional cells, corporate identity,
   governed ingress, isolated retrieval planes, Pub/Sub eventing, regional state,
   and a model gateway. Cloud Run, GKE, Vertex AI, and on-premises inference are
@@ -47,3 +51,8 @@ One low-cost GCP cell will be implemented and tested; the enterprise topology st
 a design until later delivery gates provide capacity, security, recovery, and cost
 evidence. Provider-specific code must remain behind identity, queue, repository,
 observability, and model-gateway ports.
+
+The production model-plane Terraform proves resource, IAM, image, ingress, and
+scaling contracts. It does not prove model quality or production readiness. A
+release still needs a compatible gateway adapter, regional quota, load evidence,
+license and data approval, and an operating budget.

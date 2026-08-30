@@ -45,6 +45,8 @@ is committed.
   dev root creates a EUR 5 budget, alerts at 20%, 50%, 80%, and 100%, and disables
   broad default-IAM recipients;
 - API and worker both scale to zero and are capped at one instance;
+- `model_plane_profile` is fixed to `assessment`; this root cannot create GPU or
+  model-serving resources. The optional production root is validated separately;
 - the API and worker run as distinct Cloud Run services with separate service
   accounts and immutable image digests;
 - Cloud Tasks uses a dedicated caller identity, bounded retry/rate settings,
