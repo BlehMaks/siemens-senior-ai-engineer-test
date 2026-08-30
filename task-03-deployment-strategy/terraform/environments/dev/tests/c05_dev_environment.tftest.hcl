@@ -36,6 +36,11 @@ run "dev_environment_plans_with_reviewed_contract" {
     condition     = output.execution_plane.worker_service.max_instances == 1
     error_message = "The test worker must be capped at one scale-to-zero instance."
   }
+
+  assert {
+    condition     = output.execution_plane.worker_service.image == output.execution_plane.api_service.image
+    error_message = "Both execution-plane service contracts must expose the promoted immutable image."
+  }
 }
 
 run "tasks_identity_cannot_collapse_into_deployer" {

@@ -29,6 +29,7 @@ output "worker_service" {
     dispatch_path   = var.worker_dispatch_path
     invoker_members = ["serviceAccount:${var.tasks_service_account_email}"]
     invoker_role    = "roles/run.invoker"
+    image           = local.image
   }
 }
 

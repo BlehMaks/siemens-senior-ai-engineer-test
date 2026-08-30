@@ -99,6 +99,11 @@ run "default_contract_is_bounded_and_digest_pinned" {
     condition     = output.api_service.image == "europe-west3-docker.pkg.dev/contract-assignment-dev/assessment-images/siemens-agent-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     error_message = "Cloud Run must reference the immutable image digest."
   }
+
+  assert {
+    condition     = output.worker_service.image == output.api_service.image
+    error_message = "The worker contract must expose the same immutable image digest as the API."
+  }
 }
 
 run "hardened_api_mode_blocks_url_bypass_and_keeps_lb_usable" {
