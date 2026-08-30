@@ -85,6 +85,46 @@ printf '%s\n' "$TF_VAR_enable_runtime_policy"
     assert completed.stdout == "true\n"
 
 
+def test_runtime_policy_detection_stops_when_state_read_fails(
+    tmp_path: Path,
+) -> None:
+    fake_terraform = tmp_path / "terraform"
+    _executable(
+        fake_terraform,
+        """#!/usr/bin/env bash
+set -euo pipefail
+[[ ${2:-} == state && ${3:-} == list ]]
+printf '%s\n' 'backend unavailable' >&2
+exit 23
+""",
+    )
+    script_prefix = BOOTSTRAP.read_text(encoding="utf-8").rsplit(
+        '\nmain "$@"', maxsplit=1
+    )[0]
+    probe = tmp_path / "probe.sh"
+    _executable(
+        probe,
+        script_prefix
+        + """
+TERRAFORM_BIN=$1
+terraform_root=unused
+select_runtime_policy_mode
+printf '%s\n' reached-plan
+""",
+    )
+
+    completed = subprocess.run(
+        [str(probe), str(fake_terraform)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "reached-plan" not in completed.stdout
+    assert "Terraform could not read bootstrap state" in completed.stderr
+
+
 def test_secret_seed_is_idempotent_and_keeps_payload_off_command_line(
     tmp_path: Path,
 ) -> None:

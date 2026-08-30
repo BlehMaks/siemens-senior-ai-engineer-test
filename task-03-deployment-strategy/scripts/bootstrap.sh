@@ -136,8 +136,10 @@ verify_application_cost_controls() {
 }
 
 select_runtime_policy_mode() {
-  if "$TERRAFORM_BIN" -chdir="$terraform_root" state list 2>/dev/null |
-    grep '^google_cloud_run_v2_service_iam_' >/dev/null; then
+  local state_resources
+  state_resources=$("$TERRAFORM_BIN" -chdir="$terraform_root" state list) ||
+    fail "Terraform could not read bootstrap state"
+  if grep '^google_cloud_run_v2_service_iam_' <<<"$state_resources" >/dev/null; then
     export TF_VAR_enable_runtime_policy=true
   else
     export TF_VAR_enable_runtime_policy=false
