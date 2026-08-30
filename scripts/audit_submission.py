@@ -590,12 +590,19 @@ def _python_rebound_names(values: list[ast.expr]) -> set[str]:
 
 
 def _python_static_truth(value: ast.expr) -> bool | None:
-    if isinstance(value, ast.Constant):
-        return bool(value.value)
-    if isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.Not):
-        operand = _python_static_truth(value.operand)
-        return None if operand is None else not operand
-    return None
+    negated = False
+    while True:
+        if isinstance(value, ast.Constant):
+            truth = bool(value.value)
+            return not truth if negated else truth
+        if isinstance(value, ast.NamedExpr):
+            value = value.value
+            continue
+        if isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.Not):
+            negated = not negated
+            value = value.operand
+            continue
+        return None
 
 
 def _python_expanded_sequence_assignment_contains_literal(
