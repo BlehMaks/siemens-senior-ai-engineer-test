@@ -533,14 +533,11 @@ def _python_assignment_contains_literal(
 def _python_sequence_assignment_contains_literal(
     targets: list[ast.expr], values: list[ast.expr], source: str
 ) -> bool:
-    rebound_names = _python_rebound_names(values)
     return any(
         _python_expanded_sequence_assignment_contains_literal(
             targets, expanded_values, source
         )
-        for expanded_values, _ in _python_expand_static_starred_values(
-            values, rebound_names
-        )
+        for expanded_values, _ in _python_expand_static_starred_values(values)
     )
 
 
@@ -617,8 +614,7 @@ def _python_expand_static_starred_values(
 ) -> list[tuple[list[ast.expr], dict[str, bool]]]:
     """Return exact alternatives while preserving unknown starred segments."""
 
-    if rebound_names is None:
-        rebound_names = set()
+    rebound_names = set() if rebound_names is None else set(rebound_names)
     expanded: list[tuple[list[ast.expr], dict[str, bool]]] = [([], {})]
     for value in values:
         alternatives = _python_static_starred_value_alternatives(value, rebound_names)
@@ -637,6 +633,7 @@ def _python_expand_static_starred_values(
                     )
                 )
         expanded = combined
+        rebound_names.update(_python_rebound_names([value]))
     return expanded
 
 
@@ -678,43 +675,51 @@ def _python_sequence_expression_alternatives(
 
 
 def _python_value_contains_literal(value: ast.expr, source: str) -> bool:
-    if isinstance(value, ast.Constant):
-        if isinstance(value.value, (str, bytes)):
-            return len(value.value) >= 8
-        if type(value.value) is int:
-            return abs(value.value) >= 10**15
-        if type(value.value) in {float, complex}:
-            return len(str(value.value).replace("_", "")) >= 16
-        return False
-    if isinstance(value, (ast.List, ast.Set, ast.Tuple)):
-        return any(_python_value_contains_literal(item, source) for item in value.elts)
-    if isinstance(value, ast.Dict):
-        return any(
-            _python_value_contains_literal(item, source) for item in value.values
-        )
-    if isinstance(value, ast.Starred):
-        return _python_value_contains_literal(value.value, source)
-    if isinstance(value, ast.JoinedStr):
-        if any(isinstance(item, ast.FormattedValue) for item in value.values):
-            return False
-        return (
-            sum(
-                len(item.value)
-                for item in value.values
-                if isinstance(item, ast.Constant) and isinstance(item.value, str)
+    del source
+    pending: list[ast.expr] = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, ast.Constant):
+            if isinstance(current.value, (str, bytes)) and len(current.value) >= 8:
+                return True
+            if type(current.value) is int and abs(current.value) >= 10**15:
+                return True
+            if (
+                type(current.value) in {float, complex}
+                and len(str(current.value).replace("_", "")) >= 16
+            ):
+                return True
+            continue
+        if isinstance(current, (ast.List, ast.Set, ast.Tuple)):
+            pending.extend(current.elts)
+            continue
+        if isinstance(current, ast.Dict):
+            pending.extend(current.values)
+            continue
+        if isinstance(current, ast.Starred):
+            pending.append(current.value)
+            continue
+        if isinstance(current, ast.JoinedStr):
+            if (
+                not any(isinstance(item, ast.FormattedValue) for item in current.values)
+                and sum(
+                    len(item.value)
+                    for item in current.values
+                    if isinstance(item, ast.Constant) and isinstance(item.value, str)
+                )
+                >= 8
+            ):
+                return True
+            continue
+        if isinstance(current, ast.IfExp):
+            pending.extend((current.body, current.orelse))
+            continue
+        if isinstance(current, (ast.BoolOp, ast.BinOp, ast.UnaryOp)):
+            pending.extend(
+                child
+                for child in ast.iter_child_nodes(current)
+                if isinstance(child, ast.expr)
             )
-            >= 8
-        )
-    if isinstance(value, ast.IfExp):
-        return _python_value_contains_literal(
-            value.body, source
-        ) or _python_value_contains_literal(value.orelse, source)
-    if isinstance(value, (ast.BoolOp, ast.BinOp, ast.UnaryOp)):
-        return any(
-            _python_value_contains_literal(child, source)
-            for child in ast.iter_child_nodes(value)
-            if isinstance(child, ast.expr)
-        )
     return False
 
 

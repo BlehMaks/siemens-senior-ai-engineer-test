@@ -419,10 +419,22 @@ def test_lambda_default_rebound_changes_outer_branch_pairing() -> None:
 
 def test_rebound_collection_handles_deep_valid_expression() -> None:
     expression = " + ".join("runtime_value" for _ in range(500))
+    source = _seed("tok", f"en = {expression}\n").decode()
+    compile(source, "config.py", "exec")
+
+    assert not _contains_credential_assignment("config.py", source.encode())
+
+
+def test_late_lambda_default_rebound_preserves_earlier_pairing() -> None:
     source = _seed(
         "tok",
-        f"en, harmless = runtime_token, {expression}\n",
+        "en, *rest = *([runtime_token] if enabled else []), ",
+        '*(["12345678"] if enabled else [runtime_token, "12345678"]), ',
+        "(lambda value=(enabled := False): value)\n",
     ).decode()
-    compile(source, "config.py", "exec")
+    for enabled in (True, False):
+        namespace = {"enabled": enabled, "runtime_token": "runtime-token"}
+        exec(source, namespace)
+        assert namespace["token"] == "runtime-token"
 
     assert not _contains_credential_assignment("config.py", source.encode())
