@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ctypes
 import errno
 import os
 import secrets
 import stat
+import sys
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -268,14 +270,24 @@ def _quarantine_owned_output(
             return
         quarantined_name = f"{quarantine}/owned"
         try:
-            os.rename(
+            current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        except OSError:
+            _create_empty_quarantine_marker(descriptor, quarantined_name)
+            return
+        if (current.st_dev, current.st_ino) != expected:
+            _create_empty_quarantine_marker(descriptor, quarantined_name)
+            return
+        try:
+            renamed = _rename_noreplace(
+                descriptor,
                 name,
+                descriptor,
                 quarantined_name,
-                src_dir_fd=descriptor,
-                dst_dir_fd=descriptor,
             )
         except OSError:
             return
+        if not renamed:
+            continue
         try:
             quarantine_descriptor = os.open(
                 quarantined_name,
@@ -289,6 +301,15 @@ def _quarantine_owned_output(
             if (quarantined.st_dev, quarantined.st_ino) == expected:
                 os.ftruncate(quarantine_descriptor, 0)
                 os.fsync(quarantine_descriptor)
+            else:
+                with suppress(OSError):
+                    if _rename_noreplace(
+                        descriptor,
+                        quarantined_name,
+                        descriptor,
+                        name,
+                    ):
+                        _create_empty_quarantine_marker(descriptor, quarantined_name)
         except OSError:
             pass
         finally:
@@ -299,6 +320,68 @@ def _quarantine_owned_output(
         with suppress(OSError):
             os.fsync(descriptor)
         return
+
+
+def _create_empty_quarantine_marker(descriptor: int, name: str) -> None:
+    marker_descriptor = -1
+    try:
+        marker_descriptor = os.open(
+            name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=descriptor,
+        )
+        os.fsync(marker_descriptor)
+    except OSError:
+        pass
+    finally:
+        if marker_descriptor >= 0:
+            closing_descriptor = marker_descriptor
+            marker_descriptor = -1
+            with suppress(OSError):
+                os.close(closing_descriptor)
+
+
+def _rename_noreplace(
+    source_descriptor: int,
+    source: str,
+    destination_descriptor: int,
+    destination: str,
+) -> bool:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        rename = getattr(libc, "renameatx_np", None)
+        flag = 0x00000004
+    elif sys.platform.startswith("linux"):
+        rename = getattr(libc, "renameat2", None)
+        flag = 1
+    else:
+        rename = None
+        flag = 0
+    if rename is None:
+        raise OSError(errno.ENOTSUP, "no no-replace rename primitive")
+
+    rename.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    rename.restype = ctypes.c_int
+    result = rename(
+        source_descriptor,
+        os.fsencode(source),
+        destination_descriptor,
+        os.fsencode(destination),
+        flag,
+    )
+    if result == 0:
+        return True
+    error = ctypes.get_errno()
+    if error == errno.EEXIST:
+        return False
+    raise OSError(error, os.strerror(error))
 
 
 if __name__ == "__main__":

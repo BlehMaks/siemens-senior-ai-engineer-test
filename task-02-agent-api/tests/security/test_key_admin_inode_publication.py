@@ -356,3 +356,106 @@ def test_quarantine_reservation_does_not_overwrite_a_collision(
     ]
     assert len(cleanup_directories) == 1
     assert _cleanup_payload(cleanup_directories[0]) == b""
+
+
+def test_source_replacement_after_reservation_is_preserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "generated.key"
+    displaced = tmp_path / "created.key"
+    foreign_content = b"foreign-owner\n"
+    real_fsync = os.fsync
+    real_mkdir = os.mkdir
+    replaced = False
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError(errno.EIO, "injected directory fsync failure")
+        real_fsync(descriptor)
+
+    def replace_source_after_reservation(
+        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal replaced
+        real_mkdir(target, mode, dir_fd=dir_fd)
+        if (
+            not replaced
+            and isinstance(target, str)
+            and target.startswith(".api-key-cleanup-")
+            and dir_fd is not None
+        ):
+            output.rename(displaced)
+            output.write_bytes(foreign_content)
+            replaced = True
+
+    monkeypatch.setattr(os, "fsync", fail_directory_fsync)
+    monkeypatch.setattr(os, "mkdir", replace_source_after_reservation)
+
+    with pytest.raises(SystemExit, match="protected output file"):
+        key_admin._write_plaintext_file(output, "temporary-key")
+
+    assert replaced
+    assert output.read_bytes() == foreign_content
+    assert displaced.read_bytes() == b""
+    cleanup = _cleanup_entries(tmp_path)
+    assert len(cleanup) == 1
+    assert _cleanup_payload(cleanup[0]) == b""
+
+
+def test_owned_child_collision_is_not_overwritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "generated.key"
+    foreign_content = b"foreign-owner\n"
+    real_fsync = os.fsync
+    real_rename = key_admin._rename_noreplace
+    collision: Path | None = None
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError(errno.EIO, "injected directory fsync failure")
+        real_fsync(descriptor)
+
+    def collide_before_rename(
+        source_descriptor: int,
+        source: str,
+        destination_descriptor: int,
+        destination: str,
+    ) -> bool:
+        nonlocal collision
+        if collision is None and destination.endswith("/owned"):
+            foreign = os.open(
+                destination,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=destination_descriptor,
+            )
+            try:
+                os.write(foreign, foreign_content)
+            finally:
+                os.close(foreign)
+            collision = tmp_path / destination
+        return real_rename(
+            source_descriptor,
+            source,
+            destination_descriptor,
+            destination,
+        )
+
+    monkeypatch.setattr(os, "fsync", fail_directory_fsync)
+    monkeypatch.setattr(key_admin, "_rename_noreplace", collide_before_rename)
+
+    with pytest.raises(SystemExit, match="protected output file"):
+        key_admin._write_plaintext_file(output, "temporary-key")
+
+    assert collision is not None
+    assert collision.read_bytes() == foreign_content
+    cleanup = _cleanup_entries(tmp_path)
+    assert len(cleanup) == 2
+    assert sorted(_cleanup_payload(entry) for entry in cleanup) == [
+        b"",
+        foreign_content,
+    ]
