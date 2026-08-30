@@ -516,9 +516,14 @@ def _python_assignment_contains_literal(
     if not _python_target_is_credential(target):
         return False
     if isinstance(value, ast.IfExp):
-        return _python_assignment_contains_literal(
-            target, value.body, source
-        ) or _python_assignment_contains_literal(target, value.orelse, source)
+        pending = [value.body, value.orelse]
+        while pending:
+            alternative = pending.pop()
+            if isinstance(alternative, ast.IfExp):
+                pending.extend((alternative.body, alternative.orelse))
+            elif _python_assignment_contains_literal(target, alternative, source):
+                return True
+        return False
     if isinstance(target, (ast.List, ast.Tuple)) and isinstance(
         value, (ast.List, ast.Tuple)
     ):
@@ -656,8 +661,12 @@ def _python_sequence_expression_alternatives(
     if not isinstance(value, ast.IfExp):
         return None
 
-    body = _python_sequence_expression_alternatives(value.body, rebound_names)
-    orelse = _python_sequence_expression_alternatives(value.orelse, rebound_names)
+    branch_rebound_names = set(rebound_names)
+    branch_rebound_names.update(_python_rebound_names([value.test]))
+    body = _python_sequence_expression_alternatives(value.body, branch_rebound_names)
+    orelse = _python_sequence_expression_alternatives(
+        value.orelse, branch_rebound_names
+    )
     if body is None or orelse is None:
         return None
     condition = (

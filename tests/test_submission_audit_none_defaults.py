@@ -438,3 +438,33 @@ def test_late_lambda_default_rebound_preserves_earlier_pairing() -> None:
         assert namespace["token"] == "runtime-token"
 
     assert not _contains_credential_assignment("config.py", source.encode())
+
+
+def test_rebound_in_conditional_test_applies_before_selected_branch() -> None:
+    source = _seed(
+        "head, tok",
+        "en, *rest = *([runtime_head] if enabled else []), ",
+        "*([runtime_a, runtime_b] if (enabled := False) else ",
+        '([runtime_c, runtime_d] if enabled else ["12345678", runtime_token]))\n',
+    ).decode()
+    namespace = {
+        "enabled": True,
+        "runtime_head": "head",
+        "runtime_a": "a",
+        "runtime_b": "b",
+        "runtime_c": "c",
+        "runtime_d": "d",
+        "runtime_token": "runtime-token",
+    }
+    exec(source, namespace)
+    assert namespace["token"] == "12345678"
+
+    assert _contains_credential_assignment("config.py", source.encode())
+
+
+def test_deep_conditional_credential_expression_does_not_recurse() -> None:
+    expression = "runtime_value" + " if enabled else runtime_value" * 1_200
+    source = _seed("tok", f"en = {expression}\n").decode()
+    compile(source, "config.py", "exec")
+
+    assert not _contains_credential_assignment("config.py", source.encode())
