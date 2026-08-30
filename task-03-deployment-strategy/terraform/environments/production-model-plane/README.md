@@ -13,11 +13,13 @@ worker identity receives `roles/run.invoker`.
 
 Before enabling the paid profile, complete the model evaluation, license and
 data-terms review, regional GPU quota check, load test, and cost approval. The
-reference defaults to scale-to-zero and one maximum instance. Raise either
-limit only from measured traffic and an approved budget.
+repository does not choose production capacity. Set the warm floor, per-cell
+ceiling, and request concurrency in the private variables file from measured
+traffic, latency and availability targets, regional quota, and the approved
+FinOps model. The assessment cell's capacity and budget do not apply here.
 
 Copy `terraform.tfvars.example` outside Git, replace every placeholder, and
-review the plan:
+replace the three null capacity fields, and review the plan:
 
 ```bash
 ./task-03-deployment-strategy/scripts/model_plane.sh plan \

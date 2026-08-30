@@ -116,3 +116,30 @@ def test_addendum_keeps_enterprise_components_as_explicit_non_claims() -> None:
         "OT integration",
     ):
         assert component in non_claims
+
+
+def test_assessment_capacity_does_not_leak_into_production_model_plane() -> None:
+    repo_root = TASK_ROOT.parent
+    production_files = [
+        repo_root / "docs" / "cloud-resource-manifest.md",
+        repo_root / "docs" / "release-and-operations.md",
+        PRODUCTION,
+        TASK_ROOT
+        / "terraform"
+        / "environments"
+        / "production-model-plane"
+        / "README.md",
+        TASK_ROOT
+        / "terraform"
+        / "environments"
+        / "production-model-plane"
+        / "terraform.tfvars.example",
+    ]
+    production_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in production_files
+    )
+
+    assert "bounded `min=0`, `max=1` defaults" not in production_text
+    assert "model_min_instances            = 0" not in production_text
+    assert "model_max_instances            = 1" not in production_text
+    assert "one request per instance" not in production_text

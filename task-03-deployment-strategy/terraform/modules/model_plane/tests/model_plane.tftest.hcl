@@ -26,7 +26,7 @@ run "assessment_profile_creates_no_model_capacity" {
   }
 }
 
-run "gpu_profile_is_private_bounded_and_digest_pinned" {
+run "gpu_profile_is_private_capacity_driven_and_digest_pinned" {
   command = plan
 
   variables {
@@ -35,6 +35,9 @@ run "gpu_profile_is_private_bounded_and_digest_pinned" {
     model_name                     = "qwen3:8b-2026-08"
     worker_service_account_email   = "sai-prod-worker@production-model-plane.iam.gserviceaccount.com"
     deployer_service_account_email = "sai-prod-deploy@production-model-plane.iam.gserviceaccount.com"
+    model_min_instances            = 2
+    model_max_instances            = 24
+    model_concurrency              = 8
   }
 
   assert {
@@ -48,8 +51,13 @@ run "gpu_profile_is_private_bounded_and_digest_pinned" {
   }
 
   assert {
-    condition     = google_cloud_run_v2_service.model[0].template[0].scaling[0].min_instance_count == 0 && google_cloud_run_v2_service.model[0].template[0].scaling[0].max_instance_count == 1
-    error_message = "The reference profile must scale to zero and cap GPU instances."
+    condition     = google_cloud_run_v2_service.model[0].template[0].scaling[0].min_instance_count == 2 && google_cloud_run_v2_service.model[0].template[0].scaling[0].max_instance_count == 24
+    error_message = "The model plane must use the capacity values approved for its production cell."
+  }
+
+  assert {
+    condition     = google_cloud_run_v2_service.model[0].template[0].max_instance_request_concurrency == 8
+    error_message = "The model plane must use load-tested per-instance concurrency."
   }
 
   assert {
@@ -75,6 +83,9 @@ run "gpu_profile_rejects_unpinned_or_missing_inputs" {
     model_plane_profile = "cloud_run_gpu"
     model_image         = "europe-west1-docker.pkg.dev/production-model-plane/models/ollama:latest"
     model_name          = "latest"
+    model_min_instances = 2
+    model_max_instances = 24
+    model_concurrency   = 8
   }
 
   expect_failures = [
@@ -82,6 +93,54 @@ run "gpu_profile_rejects_unpinned_or_missing_inputs" {
     var.model_name,
     var.worker_service_account_email,
   ]
+}
+
+run "gpu_profile_requires_an_approved_minimum" {
+  command = plan
+
+  variables {
+    model_plane_profile            = "cloud_run_gpu"
+    model_image                    = "europe-west1-docker.pkg.dev/production-model-plane/models/ollama-qwen@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    model_name                     = "qwen3:8b-2026-08"
+    worker_service_account_email   = "sai-prod-worker@production-model-plane.iam.gserviceaccount.com"
+    deployer_service_account_email = "sai-prod-deploy@production-model-plane.iam.gserviceaccount.com"
+    model_max_instances            = 24
+    model_concurrency              = 8
+  }
+
+  expect_failures = [var.model_min_instances]
+}
+
+run "gpu_profile_requires_an_approved_maximum" {
+  command = plan
+
+  variables {
+    model_plane_profile            = "cloud_run_gpu"
+    model_image                    = "europe-west1-docker.pkg.dev/production-model-plane/models/ollama-qwen@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    model_name                     = "qwen3:8b-2026-08"
+    worker_service_account_email   = "sai-prod-worker@production-model-plane.iam.gserviceaccount.com"
+    deployer_service_account_email = "sai-prod-deploy@production-model-plane.iam.gserviceaccount.com"
+    model_min_instances            = 2
+    model_concurrency              = 8
+  }
+
+  expect_failures = [var.model_max_instances]
+}
+
+run "gpu_profile_requires_load_tested_concurrency" {
+  command = plan
+
+  variables {
+    model_plane_profile            = "cloud_run_gpu"
+    model_image                    = "europe-west1-docker.pkg.dev/production-model-plane/models/ollama-qwen@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    model_name                     = "qwen3:8b-2026-08"
+    worker_service_account_email   = "sai-prod-worker@production-model-plane.iam.gserviceaccount.com"
+    deployer_service_account_email = "sai-prod-deploy@production-model-plane.iam.gserviceaccount.com"
+    model_min_instances            = 2
+    model_max_instances            = 24
+  }
+
+  expect_failures = [var.model_concurrency]
 }
 
 run "gpu_profile_requires_a_distinct_deployer" {
@@ -92,6 +151,9 @@ run "gpu_profile_requires_a_distinct_deployer" {
     model_image                  = "europe-west1-docker.pkg.dev/production-model-plane/models/ollama-qwen@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     model_name                   = "qwen3:8b-2026-08"
     worker_service_account_email = "sai-prod-worker@production-model-plane.iam.gserviceaccount.com"
+    model_min_instances          = 2
+    model_max_instances          = 24
+    model_concurrency            = 8
   }
 
   expect_failures = [var.deployer_service_account_email]
@@ -106,6 +168,9 @@ run "gpu_profile_rejects_an_external_worker" {
     model_name                     = "qwen3:8b-2026-08"
     worker_service_account_email   = "sai-prod-worker@attacker-project.iam.gserviceaccount.com"
     deployer_service_account_email = "sai-prod-deploy@production-model-plane.iam.gserviceaccount.com"
+    model_min_instances            = 2
+    model_max_instances            = 24
+    model_concurrency              = 8
   }
 
   expect_failures = [var.worker_service_account_email]

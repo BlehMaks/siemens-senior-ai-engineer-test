@@ -51,15 +51,21 @@ variable "deployer_service_account_email" {
 }
 
 variable "model_min_instances" {
-  description = "Warm GPU floor."
+  description = "Capacity-reviewed warm GPU floor. Required for cloud_run_gpu."
   type        = number
-  default     = 0
+  default     = null
 }
 
 variable "model_max_instances" {
-  description = "Hard GPU ceiling."
+  description = "Capacity-reviewed GPU ceiling. Required for cloud_run_gpu."
   type        = number
-  default     = 1
+  default     = null
+}
+
+variable "model_concurrency" {
+  description = "Load-tested request concurrency per model instance. Required for cloud_run_gpu."
+  type        = number
+  default     = null
 }
 
 variable "gpu_zonal_redundancy_disabled" {

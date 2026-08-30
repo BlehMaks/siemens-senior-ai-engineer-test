@@ -12,6 +12,7 @@ output "model_plane" {
     accelerator                   = local.enabled ? "nvidia-l4" : null
     min_instances                 = local.enabled ? var.model_min_instances : null
     max_instances                 = local.enabled ? var.model_max_instances : null
+    request_concurrency           = local.enabled ? var.model_concurrency : null
     public_invoker_count          = 0
   }
 }

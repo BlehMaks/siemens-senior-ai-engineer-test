@@ -12,6 +12,7 @@ module "model_plane" {
   deployer_service_account_email = var.deployer_service_account_email
   model_min_instances            = var.model_min_instances
   model_max_instances            = var.model_max_instances
+  model_concurrency              = var.model_concurrency
   gpu_zonal_redundancy_disabled  = var.gpu_zonal_redundancy_disabled
   labels                         = var.labels
 }

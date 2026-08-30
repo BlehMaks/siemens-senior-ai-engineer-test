@@ -112,29 +112,53 @@ variable "deployer_service_account_email" {
 }
 
 variable "model_min_instances" {
-  description = "Warm GPU instance floor. Zero preserves scale-to-zero."
+  description = "Capacity-reviewed warm GPU instance floor; required for cloud_run_gpu."
   type        = number
-  default     = 0
+  default     = null
 
   validation {
-    condition     = floor(var.model_min_instances) == var.model_min_instances && var.model_min_instances >= 0 && var.model_min_instances <= 2
-    error_message = "model_min_instances must be a whole number from 0 through 2."
+    condition = var.model_plane_profile == "assessment" ? var.model_min_instances == null : (
+      var.model_min_instances == null ? false :
+      floor(var.model_min_instances) == var.model_min_instances && var.model_min_instances >= 0
+    )
+    error_message = "cloud_run_gpu requires a non-negative whole-number model_min_instances value from the approved capacity plan; assessment requires null."
   }
 }
 
 variable "model_max_instances" {
-  description = "Hard GPU instance cap."
+  description = "Capacity-reviewed GPU instance ceiling; required for cloud_run_gpu."
   type        = number
-  default     = 1
+  default     = null
 
   validation {
-    condition = (
+    condition = var.model_plane_profile == "assessment" ? var.model_max_instances == null : (
+      var.model_max_instances == null ? false :
       floor(var.model_max_instances) == var.model_max_instances &&
-      var.model_max_instances >= 1 &&
-      var.model_max_instances <= 5 &&
+      var.model_max_instances >= 1
+    )
+    error_message = "cloud_run_gpu requires a positive whole-number model_max_instances value from the approved capacity plan; assessment requires null."
+  }
+
+  validation {
+    condition = var.model_plane_profile == "assessment" ? true : (
+      var.model_max_instances == null || var.model_min_instances == null ? true :
       var.model_max_instances >= var.model_min_instances
     )
-    error_message = "model_max_instances must be a whole number from 1 through 5 and not below the minimum."
+    error_message = "model_max_instances must not be below model_min_instances."
+  }
+}
+
+variable "model_concurrency" {
+  description = "Measured request concurrency per model instance; required for cloud_run_gpu."
+  type        = number
+  default     = null
+
+  validation {
+    condition = var.model_plane_profile == "assessment" ? var.model_concurrency == null : (
+      var.model_concurrency == null ? false :
+      floor(var.model_concurrency) == var.model_concurrency && var.model_concurrency >= 1
+    )
+    error_message = "cloud_run_gpu requires a positive whole-number model_concurrency value from load testing; assessment requires null."
   }
 }
 

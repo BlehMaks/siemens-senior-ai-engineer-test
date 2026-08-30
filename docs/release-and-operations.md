@@ -256,9 +256,12 @@ export MODEL_PLANE_COST_ACKNOWLEDGEMENT=I_ACCEPT_GPU_COSTS
   PRODUCTION_TERRAFORM_STATE_BUCKET
 ```
 
-The production wrapper calls Terraform only. The default configuration scales
-to zero and caps the service at one L4 instance, but GPU use can still exceed the
-assessment's EUR 5 envelope. Do not run this apply for the assignment smoke test.
+The production wrapper calls Terraform only. The example deliberately leaves
+the warm floor, instance ceiling, and request concurrency unset. Fill them from
+the production cell's load test, latency and availability targets, regional
+quota, and approved cost model before planning. Assessment budgets and capacity
+settings do not carry into this root. Do not run this apply for the assignment
+smoke test.
 
 Run the bounded cloud smoke after the workflow succeeds:
 

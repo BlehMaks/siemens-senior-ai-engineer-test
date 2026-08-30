@@ -199,8 +199,10 @@ The production apply creates these additional entities:
 Terraform grants `roles/iam.serviceAccountUser` on `sai-prod-model` to the
 specified deployer and `roles/run.invoker` on the model service to the specified
 worker. It does not grant access to the API identity or `allUsers`. The service
-uses deletion protection, internal/load-balancer ingress, one request per
-instance, and bounded `min=0`, `max=1` defaults.
+uses deletion protection and internal/load-balancer ingress. Its warm floor,
+instance ceiling, and per-instance concurrency have no repository defaults for
+the paid profile. Each regional cell must supply values approved from load
+tests, availability targets, quota, and its FinOps model.
 
 The operator applying this root needs `roles/serviceusage.serviceUsageAdmin`,
 `roles/iam.serviceAccountAdmin`, and `roles/run.admin` in the production cell,

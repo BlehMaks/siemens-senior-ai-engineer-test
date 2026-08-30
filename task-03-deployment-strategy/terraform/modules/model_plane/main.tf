@@ -50,7 +50,7 @@ resource "google_cloud_run_v2_service" "model" {
   template {
     service_account                  = google_service_account.model[0].email
     timeout                          = "300s"
-    max_instance_request_concurrency = 1
+    max_instance_request_concurrency = var.model_concurrency
     gpu_zonal_redundancy_disabled    = var.gpu_zonal_redundancy_disabled
 
     scaling {

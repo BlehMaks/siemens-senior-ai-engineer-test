@@ -69,6 +69,10 @@ reference. Promotion follows this order:
 5. release the regional gateway adapter, grant invocation only to the worker,
    run quality/latency/security smoke tests, and then shift a bounded canary.
 
+Do not copy numeric limits from the assessment cell into a production variables
+file. Each regional cell needs explicit API, queue, worker, and model capacity
+derived from its traffic model, failure policy, quota, and cost approval.
+
 Failure at any gate leaves the assessment/fake path unchanged. Rollback routes
 the gateway to an existing approved model backend or an explicit degraded mode;
 it does not rebuild an old model image or rewrite source history.
