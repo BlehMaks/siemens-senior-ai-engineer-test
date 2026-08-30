@@ -161,6 +161,16 @@ class LocalWorker:
                 lease_seconds=self._lease_seconds,
             )
             if permit is None:
+                current = await self._repository.get(
+                    tenant_id=item.tenant_id, run_id=item.run_id
+                )
+                if (
+                    current is None
+                    or current.generation_id != item.generation_id
+                    or current.state in TERMINAL_RUN_STATES
+                    or current.cancellation_requested_at is not None
+                ):
+                    return await self._process_admitted(item, permit=None)
                 self._observe_lease(item, "blocked")
                 self._observe_work(item, "quota_blocked")
                 return False
@@ -190,6 +200,7 @@ class LocalWorker:
         run = claim.run
         if claim.disposition is ClaimDisposition.STALE:
             self._observe_work(item, "stale")
+            await self._queue.discard(item)
             return True
         if claim.disposition in {
             ClaimDisposition.TERMINAL,
@@ -201,15 +212,14 @@ class LocalWorker:
                 if claim.disposition is ClaimDisposition.TERMINAL
                 else "not_found",
             )
-            await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
+            await self._queue.discard(item)
             return True
         if claim.disposition is ClaimDisposition.CANCELLATION_REQUESTED:
             self._observe_work(item, "cancelled")
             if run is not None and run.state in TERMINAL_RUN_STATES:
                 await self._observe_terminal(run, usage=None)
-                await self._queue.cancel(tenant_id=item.tenant_id, run_id=item.run_id)
-                return True
-            return False
+            await self._queue.discard(item)
+            return True
         if claim.disposition in {
             ClaimDisposition.ALREADY_CLAIMED,
             ClaimDisposition.BUSY,

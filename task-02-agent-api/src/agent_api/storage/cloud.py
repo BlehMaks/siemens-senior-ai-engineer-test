@@ -1259,11 +1259,7 @@ class CloudTasksWorkQueue:
             or _require_text(row, "run_id") != checked.run_id
         ):
             return False
-        if task_name == self._task_name(checked.work_id, checked.generation_id):
-            deleted = await self._tasks.delete(name=task_name)
-            if not deleted and await self._tasks.get(name=task_name) is not None:
-                return False
-        return await self._store.transaction(
+        removed = await self._store.transaction(
             partial(
                 _delete_matching_work,
                 document_id=document_id,
@@ -1272,6 +1268,12 @@ class CloudTasksWorkQueue:
                 index_token=index_token,
             )
         )
+        if not removed or task_name != self._task_name(
+            checked.work_id, checked.generation_id
+        ):
+            return removed
+        deleted = await self._tasks.delete(name=task_name)
+        return deleted or await self._tasks.get(name=task_name) is None
 
     async def cancel(self, *, tenant_id: OpaqueId, run_id: OpaqueId) -> int:
         checked_tenant = _scope_id(tenant_id)
