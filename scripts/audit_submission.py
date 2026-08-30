@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import subprocess
 from pathlib import Path, PurePosixPath
@@ -85,9 +86,11 @@ TEMPLATE_INTERPOLATION = re.compile(r"(?<!\$)\$\{[^{}\r\n]+\}")
 TERRAFORM_INTERPOLATION = TEMPLATE_INTERPOLATION
 BRACED_INTERPOLATION = re.compile(r"\{[A-Za-z_][^{}\r\n]*\}")
 PYTHON_REFERENCE = r"[A-Za-z_][A-Za-z0-9_.]*(?:\[[^\]\r\n]+\])*"
-PYTHON_TRAILING_REFERENCE = re.compile(rf"{PYTHON_REFERENCE}\s*,\s*[\])}}]*")
+PYTHON_TRAILING_REFERENCE = re.compile(rf"{PYTHON_REFERENCE}\s*,?\s*[\])}}]+")
 PYTHON_REFERENCE_TUPLE = re.compile(rf"\(\s*{PYTHON_REFERENCE}\s*,?\s*\)")
-PYTHON_NONE_DEFAULT = re.compile(r"[A-Za-z_][A-Za-z0-9_. \[\]|,]*=\s*None\s*,?")
+PYTHON_NONE_DEFAULT = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_. \[\]|,]*=\s*None(?=\s*(?:[,)]|$))"
+)
 SHELL_SUFFIXES = {".bash", ".sh", ".zsh"}
 TEMPLATE_SUFFIXES = {".env", ".json", ".toml", ".yaml", ".yml"}
 SHELL_SHEBANG = re.compile(r"^#![^\r\n]*(?:ba|z)?sh(?:[ \t]|$)")
@@ -357,9 +360,11 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
             if python_context and (
                 PYTHON_TRAILING_REFERENCE.fullmatch(unquoted)
                 or PYTHON_REFERENCE_TUPLE.fullmatch(unquoted)
-                or PYTHON_NONE_DEFAULT.fullmatch(unquoted)
+                or PYTHON_NONE_DEFAULT.match(unquoted)
             ):
                 continue
+            if python_context and _python_tuple_contains_literal(value):
+                return True
             if _is_literal(
                 unquoted,
                 minimum_length=16,
@@ -377,6 +382,21 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
                 return True
 
     return False
+
+
+def _python_tuple_contains_literal(value: str) -> bool:
+    try:
+        expression = ast.parse(value, mode="eval").body
+    except SyntaxError:
+        return False
+    if not isinstance(expression, ast.Tuple):
+        return False
+    return any(
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, (str, bytes))
+        and len(node.value) >= 8
+        for node in ast.walk(expression)
+    )
 
 
 def audit_repository(repo: Path) -> list[str]:
