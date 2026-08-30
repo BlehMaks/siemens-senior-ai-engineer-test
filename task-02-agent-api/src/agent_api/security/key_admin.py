@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import os
-import tempfile
+import secrets
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -133,13 +134,32 @@ def _authorization(variable: str) -> str:
 def _write_plaintext_file(path: Path, plaintext: str) -> None:
     if not path.is_absolute():
         raise SystemExit("--output-file must be an absolute path")
+    directory_descriptor = -1
     descriptor = -1
-    temporary_path: Path | None = None
+    temporary_name: str | None = None
+    published = False
     try:
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        directory_descriptor = os.open(
+            path.parent,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
         )
-        temporary_path = Path(temporary_name)
+        if not _same_directory(directory_descriptor, path.parent):
+            raise OSError(errno.ESTALE, "output directory changed")
+        for _ in range(32):
+            candidate = f".api-key-{secrets.token_hex(8)}.tmp"
+            try:
+                descriptor = os.open(
+                    candidate,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=directory_descriptor,
+                )
+            except FileExistsError:
+                continue
+            temporary_name = candidate
+            break
+        if descriptor < 0 or temporary_name is None:
+            raise OSError(errno.EEXIST, "could not reserve a temporary output file")
         os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as output:
             descriptor = -1
@@ -147,19 +167,78 @@ def _write_plaintext_file(path: Path, plaintext: str) -> None:
             output.write("\n")
             output.flush()
             os.fsync(output.fileno())
-        os.link(temporary_path, path, follow_symlinks=False)
+        if not _same_directory(directory_descriptor, path.parent):
+            raise OSError(errno.ESTALE, "output directory changed")
+        os.link(
+            temporary_name,
+            path.name,
+            src_dir_fd=directory_descriptor,
+            dst_dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        published = True
+        if not _same_directory(directory_descriptor, path.parent):
+            raise OSError(errno.ESTALE, "output directory changed")
+        temporary_stat = os.stat(
+            temporary_name, dir_fd=directory_descriptor, follow_symlinks=False
+        )
+        published_stat = os.stat(
+            path.name, dir_fd=directory_descriptor, follow_symlinks=False
+        )
+        if (temporary_stat.st_dev, temporary_stat.st_ino) != (
+            published_stat.st_dev,
+            published_stat.st_ino,
+        ) or published_stat.st_mode & 0o777 != 0o600:
+            raise OSError(errno.ESTALE, "published output identity changed")
+        os.fsync(directory_descriptor)
     except OSError as exc:
         if descriptor >= 0:
             with suppress(OSError):
                 os.close(descriptor)
-        if temporary_path is not None:
+        if published and temporary_name is not None:
+            _unlink_same_inode(
+                directory_descriptor,
+                source=temporary_name,
+                destination=path.name,
+            )
+        if temporary_name is not None and directory_descriptor >= 0:
             with suppress(OSError):
-                os.unlink(temporary_path)
+                os.unlink(temporary_name, dir_fd=directory_descriptor)
         raise SystemExit("could not write the protected output file") from exc
     else:
-        assert temporary_path is not None
+        assert temporary_name is not None
         with suppress(OSError):
-            os.unlink(temporary_path)
+            os.unlink(temporary_name, dir_fd=directory_descriptor)
+    finally:
+        if directory_descriptor >= 0:
+            with suppress(OSError):
+                os.close(directory_descriptor)
+
+
+def _same_directory(descriptor: int, path: Path) -> bool:
+    try:
+        opened = os.fstat(descriptor)
+        current = path.stat()
+    except OSError:
+        return False
+    return (opened.st_dev, opened.st_ino) == (current.st_dev, current.st_ino)
+
+
+def _unlink_same_inode(descriptor: int, *, source: str, destination: str) -> None:
+    if descriptor < 0:
+        return
+    try:
+        source_stat = os.stat(source, dir_fd=descriptor, follow_symlinks=False)
+        destination_stat = os.stat(
+            destination, dir_fd=descriptor, follow_symlinks=False
+        )
+        if (source_stat.st_dev, source_stat.st_ino) == (
+            destination_stat.st_dev,
+            destination_stat.st_ino,
+        ):
+            os.unlink(destination, dir_fd=descriptor)
+    except OSError:
+        return
 
 
 if __name__ == "__main__":

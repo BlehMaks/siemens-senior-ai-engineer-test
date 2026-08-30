@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 import stat
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -157,6 +158,44 @@ def test_key_admin_writes_protected_recovery_output_before_persistence(
     )
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
     assert capsys.readouterr().out == ""
+
+
+def test_protected_output_supports_a_near_name_maximum_destination(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / ("k" * 250)
+    output.write_text("filesystem accepts this component", encoding="utf-8")
+    output.unlink()
+
+    key_admin._write_plaintext_file(output, "temporary-key")
+
+    assert output.read_text(encoding="utf-8") == "temporary-key\n"
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+
+
+def test_parent_directory_replacement_fails_without_plaintext_residue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_directory = tmp_path / "output"
+    output_directory.mkdir()
+    displaced = tmp_path / "displaced"
+    output = output_directory / "generated.key"
+    real_link = os.link
+
+    def replace_parent(source: str, destination: str, **kwargs: object) -> None:
+        output_directory.rename(displaced)
+        output_directory.mkdir()
+        output.write_text("concurrent-owner\n", encoding="utf-8")
+        real_link(source, destination, **kwargs)
+
+    monkeypatch.setattr(os, "link", replace_parent)
+
+    with pytest.raises(SystemExit, match="protected output file"):
+        key_admin._write_plaintext_file(output, "temporary-key")
+
+    assert output.read_text(encoding="utf-8") == "concurrent-owner\n"
+    assert not (displaced / output.name).exists()
+    assert list(displaced.glob(".api-key-*.tmp")) == []
 
 
 def test_key_admin_protected_output_sets_a_bounded_expiry(
