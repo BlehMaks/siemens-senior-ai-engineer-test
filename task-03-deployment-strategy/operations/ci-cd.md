@@ -27,6 +27,12 @@ WIF provider, scoped IAM, queue, and secret foundation. On GitHub it creates the
 `gcp-dev` Environment, limits deployments to `master`, sets the reviewer, and
 writes the environment variables consumed by the workflows.
 
+This delivery boundary requires GitHub support for branch protection and
+protected Environments. GitHub Free, Pro, and Team only allow required
+Environment reviewers in public repositories; private repositories need GitHub
+Enterprise. The bootstrap does not fall back to an unprotected workflow when
+GitHub rejects either control.
+
 The variables include project and region IDs, the application-state bucket, WIF
 provider, deployer and runtime identities, secret container IDs, and required
 budget inputs. Secret payloads never enter GitHub.

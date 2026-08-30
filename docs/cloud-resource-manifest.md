@@ -36,8 +36,11 @@ On the linked billing account, the operator needs `roles/billing.admin` so that
 Terraform can grant the deployer its narrower budget-management role. On
 GitHub, the authenticated account needs repository administration permission to
 create the protected Environment, its reviewer rule, deployment branch policy,
-and Actions variables. An organization may replace any predefined role with a
-custom role containing the same permissions.
+and Actions variables. GitHub Free, Pro, and Team only support required
+Environment reviewers in public repositories; a private repository needs GitHub
+Enterprise. Terraform does not create an unprotected fallback. An organization
+may replace any predefined role with a custom role containing the same
+permissions.
 
 The post-deploy smoke uses the operator's Application Default Credentials. That
 identity needs `roles/run.viewer` on the project,

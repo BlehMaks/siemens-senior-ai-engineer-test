@@ -10,6 +10,11 @@ service. It is split into two Terraform roots to solve the first-run state probl
 
 Operators should use `scripts/bootstrap.sh` rather than call these roots by hand.
 
+GitHub Free, Pro, and Team only support required Environment reviewers in public
+repositories. Use a public submission repository, or GitHub Enterprise for a
+private one, before running `apply` or `deploy`. Terraform fails closed instead
+of creating an unprotected delivery path.
+
 ## Managed resources
 
 The main bootstrap creates or configures:
@@ -46,6 +51,10 @@ bootstrap state. They are absent from command arguments and GitHub variables.
 Terraform 1.9.8 is required. Set `TERRAFORM_BIN` when it is not on `PATH`:
 
 ```bash
+# One-time workstation authentication; the wrapper never invokes gcloud.
+gcloud auth application-default login
+gcloud auth application-default set-quota-project siemens-senior-ai-engineer
+
 export TERRAFORM_BIN=/absolute/path/to/terraform
 
 ./task-03-deployment-strategy/scripts/bootstrap.sh plan \
@@ -85,6 +94,8 @@ The complete entity and IAM inventory is maintained in
 The project and billing relationship must already exist. A human credential is
 needed for the first bootstrap, and GitHub may require that person to approve the
 protected deployment. Account creation, billing setup, MFA, terms, and corporate
-policy decisions are outside Terraform's authority. The billing account must use
-EUR, and the alert recipient must be a monitored human mailbox with a complete
-domain. The wrapper validates both before Terraform changes either platform.
+policy decisions are outside Terraform's authority. Repository visibility and a
+GitHub plan that supports the protected delivery boundary are also manual
+prerequisites. The billing account must use EUR, and the alert recipient must be
+a monitored human mailbox with a complete domain. The wrapper validates both
+before Terraform changes either platform.

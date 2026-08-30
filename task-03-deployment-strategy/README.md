@@ -61,6 +61,11 @@ The one-time ADC login succeeds when the plan reads
 and shows the two state buckets on an empty project. A project permission error
 usually means ADC was created for another Google account.
 
+GitHub must also permit branch protection and a protected Environment with a
+required reviewer. GitHub Free, Pro, and Team provide the reviewer rule only for
+public repositories; a private repository needs GitHub Enterprise. Terraform
+stops instead of weakening these controls when the plan does not support them.
+
 See [release and operations](../docs/release-and-operations.md) for the complete
 clean-machine and cloud procedure. The [resource and IAM manifest](../docs/cloud-resource-manifest.md)
 lists the exact changes made by the default deployment.

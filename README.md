@@ -74,8 +74,10 @@ export TERRAFORM_BIN=/absolute/path/to/terraform
 
 The login creates Application Default Credentials for the Terraform provider. It
 does not provision or change cloud resources. The project, billing link, account
-terms, MFA, and any protected-environment approval remain manual prerequisites.
-The deployment guide lists each manual step and its expected result.
+terms, MFA, a GitHub plan that supports protected private-repository deployments,
+and any protected-environment approval remain manual prerequisites. A public
+submission repository also satisfies the GitHub protection requirement. The
+deployment guide lists each manual step and its expected result.
 Successful ADC setup is confirmed when `bootstrap.sh plan` reads project number
 `163220015018` and returns the two state buckets without a project-access error.
 

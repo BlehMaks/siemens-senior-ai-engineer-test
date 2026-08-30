@@ -97,6 +97,17 @@ deletion, force pushes, and non-linear history for every actor. The rule does no
 require a second reviewer, so a single-person assessment repository remains
 usable; GitHub Actions still runs all checks on every push and pull request.
 
+GitHub Free, Pro, and Team only support required Environment reviewers in public
+repositories. A private repository needs GitHub Enterprise for this control.
+GitHub rejects the branch and Environment protections when the plan does not
+support them, and Terraform stops before it writes the Environment variables or
+dispatches a workflow. The practical assessment setup is a public submission
+repository. The bootstrap has no unprotected fallback. After changing repository
+visibility or the account plan, rerun the same command; remote Terraform state
+makes the interrupted apply idempotent. See GitHub's current
+[Environment plan matrix](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/review-deployments)
+and [branch protection plan matrix](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/managing-a-branch-protection-rule).
+
 The linked billing account must use EUR. Supply its ID and at least one monitored
 human mailbox before planning:
 
