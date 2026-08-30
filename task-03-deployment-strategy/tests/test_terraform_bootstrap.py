@@ -189,6 +189,7 @@ def test_project_roles_match_reviewed_allowlist() -> None:
     assert locals_tf.count("project_roles = []") == 3
     assert "project_roles = local.deployer_project_roles" in locals_tf
     assert 'role    = "roles/datastore.user"' in main_tf
+    assert 'role    = "roles/serviceusage.serviceUsageConsumer"' in main_tf
     assert 'role    = "roles/datastore.indexAdmin"' in main_tf
     assert main_tf.count("resource.name ==") >= 2
     assert "local.firestore_database_name" in main_tf

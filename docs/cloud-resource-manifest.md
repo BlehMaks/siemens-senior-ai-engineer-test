@@ -106,6 +106,7 @@ applied Terraform state.
 |---|---|---|
 | API service account | `sai-dev` Firestore database condition | `roles/datastore.user` |
 | Worker service account | `sai-dev` Firestore database condition | `roles/datastore.user` |
+| API and worker service accounts | Project | `roles/serviceusage.serviceUsageConsumer` |
 | API and worker service accounts | Each of the two secrets | `roles/secretmanager.secretAccessor` |
 | API service account | Dispatch queue | `roles/cloudtasks.enqueuer`, `roles/cloudtasks.taskDeleter`, `roles/cloudtasks.viewer` |
 | Worker service account | Dispatch queue | `roles/cloudtasks.taskDeleter`, `roles/cloudtasks.viewer` |

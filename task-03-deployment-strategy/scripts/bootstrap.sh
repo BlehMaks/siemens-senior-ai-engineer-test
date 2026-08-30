@@ -178,7 +178,8 @@ verify_bootstrap() {
     jq -e --arg database "${TF_VAR_system_code}-${TF_VAR_environment}" \
       '.firestore_database_name == $database
         and .firestore_runtime_binding_count == 2
-        and .firestore_index_binding_count == 1' >/dev/null
+        and .firestore_index_binding_count == 1
+        and .service_usage_binding_count == 2' >/dev/null
   queue=$("$TERRAFORM_BIN" -chdir="$terraform_root" output -json dispatch_queue)
   jq -e \
     --arg name "${TF_VAR_system_code}-${TF_VAR_environment}-run-dispatch" \

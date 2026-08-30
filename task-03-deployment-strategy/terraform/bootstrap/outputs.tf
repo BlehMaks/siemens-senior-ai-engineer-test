@@ -63,6 +63,7 @@ output "runtime_policy" {
     firestore_database_name         = local.firestore_database_name
     firestore_runtime_binding_count = length(google_project_iam_member.runtime_firestore_user)
     firestore_index_binding_count   = 1
+    service_usage_binding_count     = length(google_project_iam_member.runtime_service_usage_consumer)
     queue_binding_count             = length(google_cloud_tasks_queue_iam_member.runtime)
     tasks_service_agent_member      = google_service_account_iam_member.tasks_service_agent_token_creator.member
     tasks_service_agent_token_role  = google_service_account_iam_member.tasks_service_agent_token_creator.role

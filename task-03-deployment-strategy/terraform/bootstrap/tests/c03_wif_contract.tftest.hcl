@@ -101,9 +101,10 @@ run "github_wif_plans_in_one_pass" {
     condition = (
       output.runtime_policy.firestore_database_name == "sai-dev" &&
       output.runtime_policy.firestore_runtime_binding_count == 2 &&
-      output.runtime_policy.firestore_index_binding_count == 1
+      output.runtime_policy.firestore_index_binding_count == 1 &&
+      output.runtime_policy.service_usage_binding_count == 2
     )
-    error_message = "Runtime data and deployer index access must be isolated to the named assessment database."
+    error_message = "Runtime data access must stay database-scoped and both services must be allowed to consume project API quota."
   }
 
   assert {

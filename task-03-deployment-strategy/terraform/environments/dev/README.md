@@ -32,9 +32,9 @@ is committed.
   without deleting its cloud index; Terraform `moved` declarations preserve
   intermediate `assessment_*` entries even if someone plans directly;
 - Artifact Registry uses immutable tags;
-- bootstrap grants database-conditioned `roles/datastore.user` and
-  resource-scoped `roles/secretmanager.secretAccessor` only to the API and worker
-  identities;
+- bootstrap grants database-conditioned `roles/datastore.user` and project-level
+  `roles/serviceusage.serviceUsageConsumer` to the API and worker identities;
+  secret access remains scoped to the two managed secrets;
 - bootstrap also owns the queue and Cloud Run invoker policies after these
   deterministic application services have been created; this stack exposes the
   expected queue and IAM contracts but never edits those resources or policies;

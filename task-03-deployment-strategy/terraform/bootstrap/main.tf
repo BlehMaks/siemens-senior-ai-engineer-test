@@ -132,6 +132,14 @@ resource "google_project_iam_member" "runtime_firestore_user" {
   }
 }
 
+resource "google_project_iam_member" "runtime_service_usage_consumer" {
+  for_each = toset(["api", "worker"])
+
+  project = var.project_id
+  role    = "roles/serviceusage.serviceUsageConsumer"
+  member  = "serviceAccount:${module.identity[each.value].email}"
+}
+
 resource "google_project_iam_member" "deployer_firestore_index_admin" {
   project = var.project_id
   role    = "roles/datastore.indexAdmin"
