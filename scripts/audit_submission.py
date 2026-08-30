@@ -87,6 +87,7 @@ BRACED_INTERPOLATION = re.compile(r"\{[A-Za-z_][^{}\r\n]*\}")
 PYTHON_REFERENCE = r"[A-Za-z_][A-Za-z0-9_.]*(?:\[[^\]\r\n]+\])*"
 PYTHON_TRAILING_REFERENCE = re.compile(rf"{PYTHON_REFERENCE}\s*,\s*[\])}}]*")
 PYTHON_REFERENCE_TUPLE = re.compile(rf"\(\s*{PYTHON_REFERENCE}\s*,?\s*\)")
+PYTHON_NONE_DEFAULT = re.compile(r"[A-Za-z_][A-Za-z0-9_. \[\]|,]*=\s*None\s*,?")
 SHELL_SUFFIXES = {".bash", ".sh", ".zsh"}
 TEMPLATE_SUFFIXES = {".env", ".json", ".toml", ".yaml", ".yml"}
 SHELL_SHEBANG = re.compile(r"^#![^\r\n]*(?:ba|z)?sh(?:[ \t]|$)")
@@ -356,6 +357,7 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
             if python_context and (
                 PYTHON_TRAILING_REFERENCE.fullmatch(unquoted)
                 or PYTHON_REFERENCE_TUPLE.fullmatch(unquoted)
+                or PYTHON_NONE_DEFAULT.fullmatch(unquoted)
             ):
                 continue
             if _is_literal(

@@ -152,6 +152,9 @@ def test_http_url_is_not_a_machine_path(repository: Path) -> None:
         'secret = base64.urlsafe_b64encode(b"s" * 32).decode()\n',
         seed("call(\n    index_tok", "en=refreshed_token,)\n").decode(),
         seed("index_tok", "en = (refreshed_token,)\n").decode(),
+        seed(
+            "def configure(\n    index_tok", "en: str | None = None,\n): ...\n"
+        ).decode(),
     ],
 )
 def test_symbolic_credential_expressions_are_not_secret_literals(
