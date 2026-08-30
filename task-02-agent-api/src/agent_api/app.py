@@ -12,6 +12,7 @@ from typing import Annotated, cast
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse
 from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -76,6 +77,7 @@ from .storage import (
     TaskDeliveryAuthError,
     migrate,
 )
+from .ui import RESEARCH_UI_HTML, UI_RESPONSE_HEADERS
 from .workers import LocalWorker, QueueReceiver, RunExecutor, worker_lifespan
 
 _OPAQUE_ID = TypeAdapter(OpaqueId)
@@ -323,6 +325,11 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.clock = now
+
+    @app.get("/", include_in_schema=False, response_class=HTMLResponse)
+    async def research_ui() -> HTMLResponse:
+        return HTMLResponse(RESEARCH_UI_HTML, headers=UI_RESPONSE_HEADERS)
+
     app.include_router(build_health_router(clock=now))
     app.include_router(build_session_router())
     app.include_router(build_run_router())
