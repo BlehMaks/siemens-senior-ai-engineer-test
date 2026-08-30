@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Six tasks. One hiring signal.</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/dom-to-pptx@latest/dist/transitions.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #162a2d;
+      }
+
+      body {
+        font-family: Arial, Helvetica, sans-serif;
+      }
+
+      .slide-stage {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 28px;
+        padding: 36px 0;
+      }
+
+      .slide,
+      .slide * {
+        box-sizing: border-box;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .slide {
+        flex: 0 0 auto;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="slide-stage">
+      <!-- 01 — Typographic poster -->
+      <section
+        id="slide-1"
+        class="slide slide-transition-fade transition-duration-fast"
+        data-pptx-notes="Open with the hiring thesis, not the task list. I treated the assignment as one operating system: evidence generation, durable serving, immutable delivery, and honest ML evaluation. The deck is intentionally organized around the questions a hiring manager or team lead would ask. Sources: README.md; docs/architecture.md."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #162a2d; color: #ffffff;"
+      >
+        <div style="position: absolute; left: 96px; top: 86px; width: 360px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">
+          SENIOR AI ENGINEER · CASE STUDY
+        </div>
+        <div style="position: absolute; left: 96px; top: 160px; width: 1050px; height: 470px;">
+          <h1 style="margin: 0; font-size: 118px; line-height: 0.96; font-weight: 400; letter-spacing: -6px; color: #ffffff;">
+            Six tasks.<br />One hiring signal.
+          </h1>
+        </div>
+        <div style="position: absolute; left: 104px; top: 686px; width: 930px; height: 130px; border-left: 8px solid #00a99d; padding-left: 32px;">
+          <p style="margin: 0; font-size: 34px; line-height: 1.28; font-weight: 400; color: #f4f1ea;">
+            I turn ambiguous AI problems into<br />reviewable, deployable systems.
+          </p>
+        </div>
+
+        <div style="position: absolute; right: 92px; top: 96px; width: 650px; height: 650px; border: 2px solid rgba(255,255,255,0.24); border-radius: 325px;">
+          <div style="position: absolute; left: 70px; top: 70px; width: 510px; height: 510px; border: 2px solid rgba(0,169,157,0.48); border-radius: 255px;"></div>
+          <div style="position: absolute; left: 184px; top: 184px; width: 282px; height: 282px; background: #00a99d; border-radius: 141px; display: flex; align-items: center; justify-content: center;">
+            <div style="flex: 0 0 260px; width: 260px; height: 110px; white-space: nowrap; text-align: center; font-size: 88px; font-weight: 700; letter-spacing: -4px; color: #162a2d;">6→1</div>
+          </div>
+          <div style="position: absolute; left: 40px; top: 292px; width: 180px; height: 56px; background: #ffffff; border-radius: 28px; display: flex; align-items: center; justify-content: center; color: #162a2d; font-size: 22px; font-weight: 700;">REASON</div>
+          <div style="position: absolute; right: 28px; top: 120px; width: 180px; height: 56px; border: 2px solid #00a99d; border-radius: 28px; display: flex; align-items: center; justify-content: center; color: #ffffff; font-size: 22px; font-weight: 700;">SERVE</div>
+          <div style="position: absolute; right: 16px; bottom: 116px; width: 180px; height: 56px; background: #f4f1ea; border-radius: 28px; display: flex; align-items: center; justify-content: center; color: #162a2d; font-size: 22px; font-weight: 700;">DEPLOY</div>
+        </div>
+
+        <div style="position: absolute; left: 96px; bottom: 74px; width: 780px; height: 44px; font-size: 24px; color: #b8c3c1;">
+          Maksim Blekhshtein · Technical assignment · August 2026
+        </div>
+        <div style="position: absolute; right: 92px; bottom: 70px; width: 430px; height: 52px; text-align: right; font-size: 22px; letter-spacing: 2px; color: #b8c3c1;">
+          EVIDENCE → OPERATIONS → TRUST
+        </div>
+      </section>
+
+      <!-- 02 — Hiring scorecard -->
+      <section
+        id="slide-2"
+        class="slide slide-transition-push transition-dir-l transition-duration-fast"
+        data-pptx-notes="This is the evaluation lens for the rest of the deck. The strongest signal is not any one framework; it is the repeated ability to make boundaries explicit and executable. Every row maps to a concrete artifact shown later. Sources: docs/reviewer-guide.md; docs/test-strategy.md."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #f4f1ea; color: #162a2d;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 420px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">THE HIRING SCORECARD</div>
+        <h2 style="position: absolute; left: 92px; top: 128px; width: 1180px; height: 116px; margin: 0; font-size: 68px; line-height: 1.08; font-weight: 500; letter-spacing: -3px; color: #162a2d;">
+          What I would look for as a team lead
+        </h2>
+        <p style="position: absolute; right: 92px; top: 145px; width: 450px; height: 100px; margin: 0; font-size: 28px; line-height: 1.35; color: #5e6d6c;">
+          Each proof is designed to survive<br />a skeptical code review.
+        </p>
+
+        <div style="position: absolute; left: 92px; top: 310px; width: 1736px; height: 620px; border-top: 2px solid #162a2d; border-bottom: 2px solid #162a2d;">
+          <div style="position: absolute; left: 0; top: 0; width: 1736px; height: 124px; border-bottom: 1px solid #aeb9b7; display: flex; align-items: center;">
+            <div style="width: 310px; padding-left: 24px; font-size: 22px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">AI JUDGMENT</div>
+            <div style="width: 640px; font-size: 34px; font-weight: 600; color: #162a2d;">Policy stays deterministic</div>
+            <div style="width: 720px; font-size: 27px; line-height: 1.25; color: #5e6d6c;">Models propose; code owns budgets, access and evidence.</div>
+          </div>
+          <div style="position: absolute; left: 0; top: 124px; width: 1736px; height: 124px; border-bottom: 1px solid #aeb9b7; display: flex; align-items: center; background: rgba(255,255,255,0.44);">
+            <div style="width: 310px; padding-left: 24px; font-size: 22px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">PLATFORM</div>
+            <div style="width: 640px; font-size: 34px; font-weight: 600; color: #162a2d;">Long work becomes a job</div>
+            <div style="width: 720px; font-size: 27px; line-height: 1.25; color: #5e6d6c;">Persistence, leases, SSE and cancellation are contracts.</div>
+          </div>
+          <div style="position: absolute; left: 0; top: 248px; width: 1736px; height: 124px; border-bottom: 1px solid #aeb9b7; display: flex; align-items: center;">
+            <div style="width: 310px; padding-left: 24px; font-size: 22px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">ML PRACTICE</div>
+            <div style="width: 640px; font-size: 34px; font-weight: 600; color: #162a2d;">Leakage before leaderboard</div>
+            <div style="width: 720px; font-size: 27px; line-height: 1.25; color: #5e6d6c;">Splits, abstention and calibration precede complexity.</div>
+          </div>
+          <div style="position: absolute; left: 0; top: 372px; width: 1736px; height: 124px; border-bottom: 1px solid #aeb9b7; display: flex; align-items: center; background: rgba(255,255,255,0.44);">
+            <div style="width: 310px; padding-left: 24px; font-size: 22px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">DELIVERY</div>
+            <div style="width: 640px; font-size: 34px; font-weight: 600; color: #162a2d;">Promote the tested digest</div>
+            <div style="width: 720px; font-size: 27px; line-height: 1.25; color: #5e6d6c;">Keyless identity and reviewed Terraform close the loop.</div>
+          </div>
+          <div style="position: absolute; left: 0; top: 496px; width: 1736px; height: 124px; display: flex; align-items: center;">
+            <div style="width: 310px; padding-left: 24px; font-size: 22px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">PRODUCT SENSE</div>
+            <div style="width: 640px; font-size: 34px; font-weight: 600; color: #162a2d;">Limits are part of the UX</div>
+            <div style="width: 720px; font-size: 27px; line-height: 1.25; color: #5e6d6c;">Typed failures beat confident output with weak evidence.</div>
+          </div>
+        </div>
+        <div style="position: absolute; left: 92px; bottom: 56px; width: 950px; height: 34px; font-size: 22px; color: #5e6d6c;">The rest of the deck is the evidence behind this scorecard.</div>
+        <div style="position: absolute; right: 92px; bottom: 52px; width: 80px; height: 44px; font-size: 24px; text-align: right; color: #00a99d;">02</div>
+      </section>
+
+      <!-- 03 — One request journey -->
+      <section
+        id="slide-3"
+        class="slide slide-transition-push transition-dir-l transition-duration-fast"
+        data-pptx-notes="Follow a single user request from the public boundary to a durable result. Tasks 1 to 3 form the online product; Tasks 4 to 6 are deliberately separate local analytical packages. This separation avoids pretending that every deliverable belongs in one deployed runtime. Sources: docs/architecture.md; README.md."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #ffffff; color: #162a2d;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 400px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">THE PRODUCT IN ONE REQUEST</div>
+        <h2 style="position: absolute; left: 92px; top: 126px; width: 1110px; height: 95px; margin: 0; font-size: 66px; line-height: 1.08; font-weight: 500; letter-spacing: -3px; color: #162a2d;">From question to durable evidence</h2>
+        <p style="position: absolute; right: 92px; top: 142px; width: 470px; height: 84px; margin: 0; font-size: 27px; line-height: 1.35; color: #5e6d6c;">One trace crosses three tasks<br />without crossing responsibility.</p>
+
+        <div style="position: absolute; left: 120px; top: 486px; width: 1680px; height: 8px; background: #c8d3d1; border-radius: 4px;"></div>
+        <div style="position: absolute; left: 120px; top: 486px; width: 1460px; height: 8px; background: #00a99d; border-radius: 4px;"></div>
+
+        <div style="position: absolute; left: 105px; top: 332px; width: 250px; height: 130px;">
+          <div style="font-size: 23px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">01 · CLIENT</div>
+          <div style="margin-top: 14px; font-size: 31px; line-height: 1.12; font-weight: 600; color: #162a2d;">Question +<br />tenant context</div>
+        </div>
+        <div style="position: absolute; left: 376px; top: 520px; width: 250px; height: 140px;">
+          <div style="font-size: 23px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">02 · API</div>
+          <div style="margin-top: 14px; font-size: 31px; line-height: 1.12; font-weight: 600; color: #162a2d;">Persist before<br />enqueue</div>
+        </div>
+        <div style="position: absolute; left: 648px; top: 332px; width: 250px; height: 130px;">
+          <div style="font-size: 23px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">03 · WORKER</div>
+          <div style="margin-top: 14px; font-size: 31px; line-height: 1.12; font-weight: 600; color: #162a2d;">Claim lease +<br />run budget</div>
+        </div>
+        <div style="position: absolute; left: 920px; top: 520px; width: 250px; height: 140px;">
+          <div style="font-size: 23px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">04 · AGENT</div>
+          <div style="margin-top: 14px; font-size: 31px; line-height: 1.12; font-weight: 600; color: #162a2d;">Plan, search,<br />fetch, validate</div>
+        </div>
+        <div style="position: absolute; left: 1192px; top: 332px; width: 250px; height: 130px;">
+          <div style="font-size: 23px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">05 · STATE</div>
+          <div style="margin-top: 14px; font-size: 31px; line-height: 1.12; font-weight: 600; color: #162a2d;">Typed events +<br />terminal result</div>
+        </div>
+        <div style="position: absolute; left: 1464px; top: 520px; width: 300px; height: 140px;">
+          <div style="font-size: 23px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">06 · DELIVERY</div>
+          <div style="margin-top: 14px; font-size: 31px; line-height: 1.12; font-weight: 600; color: #162a2d;">Poll, SSE or<br />safe cancellation</div>
+        </div>
+
+        <div style="position: absolute; left: 92px; bottom: 98px; width: 1736px; height: 174px; background: #f4f1ea; border-radius: 32px; border: 1px solid #d4dcda; display: flex; align-items: center; padding: 0 46px;">
+          <div style="width: 300px; font-size: 23px; font-weight: 700; letter-spacing: 3px; color: #5e6d6c;">OFFLINE · SAME DISCIPLINE</div>
+          <div style="width: 440px; font-size: 32px; font-weight: 600; color: #162a2d;">04 · Failure prediction</div>
+          <div style="width: 450px; font-size: 32px; font-weight: 600; color: #162a2d;">05 · Material similarity</div>
+          <div style="width: 450px; font-size: 32px; font-weight: 600; color: #162a2d;">06 · Category consolidation</div>
+        </div>
+        <div style="position: absolute; right: 92px; bottom: 36px; width: 80px; height: 38px; font-size: 24px; text-align: right; color: #00a99d;">03</div>
+      </section>
+
+      <!-- 04 — Evidence courtroom -->
+      <section
+        id="slide-4"
+        class="slide slide-transition-fade transition-duration-fast"
+        data-pptx-notes="The key agent decision is that model prose is never treated as evidence. The planner proposes bounded searches, the fetch layer creates evidence records, synthesis can reference only those records, and the final validator checks support. If support is missing, the correct output is an abstention. Sources: task-01-search-agent/src/search_agent/evidence.py; answering.py; runner.py; task-01-search-agent/tests/test_evidence.py."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #f4f1ea; color: #162a2d;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 390px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">TASK 01 · EVIDENCE CONTRACT</div>
+        <h2 style="position: absolute; left: 92px; top: 128px; width: 1420px; height: 178px; margin: 0; font-size: 70px; line-height: 1.06; font-weight: 500; letter-spacing: -3px; color: #162a2d;">
+          The agent does not get to<br />“just answer”
+        </h2>
+
+        <div style="position: absolute; left: 92px; top: 372px; width: 640px; height: 550px; background: #162a2d; border-radius: 44px; padding: 54px; color: #ffffff;">
+          <div style="font-size: 22px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">THE ACCEPTANCE TEST</div>
+          <div style="margin-top: 58px; font-family: Georgia, 'Times New Roman', serif; font-size: 58px; line-height: 1.16; color: #ffffff;">“Can every factual claim point to evidence the system actually fetched?”</div>
+          <div style="position: absolute; left: 54px; bottom: 48px; width: 520px; height: 70px; border-top: 1px solid rgba(255,255,255,0.32); padding-top: 22px; font-size: 25px; color: #b8c3c1;">No evidence ID → no supported claim.</div>
+        </div>
+
+        <div style="position: absolute; left: 790px; top: 372px; width: 1038px; height: 550px;">
+          <div style="position: absolute; left: 0; top: 0; width: 304px; height: 210px; background: #ffffff; border: 1px solid #c8d3d1; border-radius: 30px; padding: 34px;">
+            <div style="font-size: 20px; font-weight: 700; color: #00a99d; letter-spacing: 2px;">PLAN</div>
+            <div style="margin-top: 26px; font-size: 33px; line-height: 1.13; font-weight: 600; color: #162a2d;">Queries +<br />explicit limits</div>
+          </div>
+          <div style="position: absolute; left: 342px; top: 0; width: 304px; height: 210px; background: #ffffff; border: 1px solid #c8d3d1; border-radius: 30px; padding: 34px;">
+            <div style="font-size: 20px; font-weight: 700; color: #00a99d; letter-spacing: 2px;">RETRIEVE</div>
+            <div style="margin-top: 26px; font-size: 33px; line-height: 1.13; font-weight: 600; color: #162a2d;">Safe URLs +<br />bounded bytes</div>
+          </div>
+          <div style="position: absolute; right: 0; top: 0; width: 354px; height: 210px; background: #00a99d; border-radius: 30px; padding: 34px;">
+            <div style="font-size: 20px; font-weight: 700; color: #162a2d; letter-spacing: 2px;">EVIDENCE</div>
+            <div style="margin-top: 26px; font-size: 33px; line-height: 1.13; font-weight: 600; color: #162a2d;">Passages +<br />provenance IDs</div>
+          </div>
+          <div style="position: absolute; left: 0; bottom: 0; width: 480px; height: 278px; background: #ffffff; border: 1px solid #c8d3d1; border-radius: 30px; padding: 38px;">
+            <div style="font-size: 20px; font-weight: 700; color: #00a99d; letter-spacing: 2px;">SYNTHESIZE</div>
+            <div style="margin-top: 24px; font-size: 36px; line-height: 1.14; font-weight: 600; color: #162a2d;">Draft may cite only<br />registered evidence.</div>
+            <div style="margin-top: 24px; font-size: 25px; line-height: 1.25; color: #5e6d6c;">Prompt text cannot invent provenance.</div>
+          </div>
+          <div style="position: absolute; right: 0; bottom: 0; width: 520px; height: 278px; border: 3px solid #00a99d; border-radius: 30px; padding: 38px;">
+            <div style="font-size: 20px; font-weight: 700; color: #00a99d; letter-spacing: 2px;">VALIDATE</div>
+            <div style="margin-top: 22px; font-size: 36px; line-height: 1.14; font-weight: 600; color: #162a2d;">Supported answer<br />or explicit abstention.</div>
+            <div style="margin-top: 24px; font-size: 25px; line-height: 1.25; color: #5e6d6c;">Confidence never overrides missing support.</div>
+          </div>
+        </div>
+        <div style="position: absolute; left: 92px; bottom: 50px; width: 1220px; height: 34px; font-size: 24px; color: #5e6d6c;">Engineering principle: deterministic code owns truth boundaries.</div>
+        <div style="position: absolute; right: 92px; bottom: 46px; width: 80px; height: 40px; font-size: 24px; text-align: right; color: #00a99d;">04</div>
+      </section>
+
+      <!-- 05 — Blast-radius poster -->
+      <section
+        id="slide-5"
+        class="slide slide-transition-push transition-dir-l transition-duration-fast"
+        data-pptx-notes="These are hard defaults from RunBudget, not dashboard suggestions. Every phase consumes the same budget authority, so a retry cannot accidentally reset usage. The system also caps iterations, attempts, decoded bytes, and fetch policy. Sources: task-01-search-agent/src/search_agent/runner.py; task-01-search-agent/src/search_agent/security/."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #162a2d; color: #ffffff;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 430px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">TASK 01 · FAILURE BEHAVIOR</div>
+        <h2 style="position: absolute; left: 92px; top: 126px; width: 1400px; height: 180px; margin: 0; font-size: 68px; line-height: 1.08; font-weight: 500; letter-spacing: -3px; color: #ffffff;">
+          When confidence drops,<br />the blast radius shrinks
+        </h2>
+
+        <div style="position: absolute; left: 690px; top: 352px; width: 540px; height: 540px; border: 2px solid rgba(255,255,255,0.26); border-radius: 270px; display: flex; align-items: center; justify-content: center;">
+          <div style="width: 386px; height: 386px; border: 2px solid #00a99d; border-radius: 193px; display: flex; align-items: center; justify-content: center;">
+            <div style="width: 280px; height: 280px; background: #00a99d; border-radius: 140px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 44px; line-height: 1.02; font-weight: 700; color: #162a2d;">FAIL<br />CLOSED</div>
+          </div>
+        </div>
+
+        <div style="position: absolute; left: 110px; top: 376px; width: 360px; height: 180px; border-top: 1px solid rgba(255,255,255,0.35); padding-top: 20px;">
+          <div style="font-size: 86px; line-height: 1; font-weight: 600; color: #00a99d;">60 s</div>
+          <div style="margin-top: 12px; font-size: 27px; line-height: 1.2; color: #f4f1ea;">wall-clock ceiling</div>
+        </div>
+        <div style="position: absolute; left: 250px; bottom: 104px; width: 360px; height: 180px; border-top: 1px solid rgba(255,255,255,0.35); padding-top: 20px;">
+          <div style="font-size: 86px; line-height: 1; font-weight: 600; color: #00a99d;">8</div>
+          <div style="margin-top: 12px; font-size: 27px; line-height: 1.2; color: #f4f1ea;">search queries</div>
+        </div>
+        <div style="position: absolute; right: 252px; bottom: 104px; width: 360px; height: 180px; border-top: 1px solid rgba(255,255,255,0.35); padding-top: 20px; text-align: right;">
+          <div style="font-size: 86px; line-height: 1; font-weight: 600; color: #00a99d;">12</div>
+          <div style="margin-top: 12px; font-size: 27px; line-height: 1.2; color: #f4f1ea;">pages fetched</div>
+        </div>
+        <div style="position: absolute; right: 110px; top: 376px; width: 360px; height: 180px; border-top: 1px solid rgba(255,255,255,0.35); padding-top: 20px; text-align: right;">
+          <div style="font-size: 86px; line-height: 1; font-weight: 600; color: #00a99d;">2</div>
+          <div style="margin-top: 12px; font-size: 27px; line-height: 1.2; color: #f4f1ea;">model calls</div>
+        </div>
+        <div style="position: absolute; left: 1312px; top: 610px; width: 430px; height: 148px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2); border-radius: 28px; padding: 28px;">
+          <div style="font-size: 42px; font-weight: 600; color: #ffffff;">24 MB</div>
+          <div style="margin-top: 10px; font-size: 24px; color: #b8c3c1;">raw + decoded byte caps</div>
+        </div>
+        <div style="position: absolute; left: 92px; bottom: 48px; width: 1080px; height: 36px; font-size: 24px; color: #b8c3c1;">Unsafe URL, exhausted budget, missing evidence → typed terminal state.</div>
+        <div style="position: absolute; right: 92px; bottom: 44px; width: 80px; height: 40px; font-size: 24px; text-align: right; color: #00a99d;">05</div>
+      </section>
+
+      <!-- 06 — Async lifecycle -->
+      <section
+        id="slide-6"
+        class="slide slide-transition-fade transition-duration-fast"
+        data-pptx-notes="The public API returns 202 after validation, authorization, persistence, idempotency handling, and enqueue. Research is then driven by a worker lease. SSE is replayable over durable events, while polling and cancellation use the same tenant-scoped state. Sources: task-02-agent-api/README.md; docs/architecture.md; task-02-agent-api/src/agent_api/routes/."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #ffffff; color: #162a2d;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 390px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">TASK 02 · ASYNC CONTROL</div>
+        <h2 style="position: absolute; left: 92px; top: 128px; width: 1450px; height: 178px; margin: 0; font-size: 68px; line-height: 1.08; font-weight: 500; letter-spacing: -3px; color: #162a2d;">HTTP returns fast.<br />Research is allowed to take time.</h2>
+
+        <div style="position: absolute; left: 92px; top: 360px; width: 530px; height: 540px; background: #f4f1ea; border-radius: 44px; padding: 50px; border: 1px solid #d4dcda;">
+          <div style="font-size: 180px; line-height: 0.9; font-weight: 700; letter-spacing: -12px; color: #00a99d;">202</div>
+          <div style="margin-top: 34px; font-size: 45px; line-height: 1.05; font-weight: 600; color: #162a2d;">Accepted</div>
+          <div style="margin-top: 22px; font-size: 27px; line-height: 1.35; color: #5e6d6c;">Stable run ID after<br />persist-before-enqueue.</div>
+          <div style="position: absolute; left: 50px; bottom: 42px; width: 420px; height: 74px; border-top: 1px solid #aeb9b7; padding-top: 20px; font-size: 25px; color: #162a2d;">Idempotency makes retries cheap.</div>
+        </div>
+
+        <div style="position: absolute; left: 700px; top: 408px; width: 1128px; height: 430px;">
+          <div style="position: absolute; left: 42px; top: 210px; width: 985px; height: 8px; background: #c8d3d1; border-radius: 4px;"></div>
+          <div style="position: absolute; left: 42px; top: 210px; width: 660px; height: 8px; background: #00a99d; border-radius: 4px;"></div>
+
+          <div style="position: absolute; left: 0; top: 126px; width: 170px; height: 170px; background: #f4f1ea; border: 3px solid #162a2d; border-radius: 85px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 28px; line-height: 1.05; font-weight: 700; color: #162a2d;">QUEUED</div>
+          <div style="position: absolute; left: 230px; top: 126px; width: 170px; height: 170px; background: #00a99d; border-radius: 85px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 28px; line-height: 1.05; font-weight: 700; color: #162a2d;">RUNNING</div>
+          <div style="position: absolute; left: 460px; top: 126px; width: 170px; height: 170px; background: #f4f1ea; border: 3px solid #00a99d; border-radius: 85px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 27px; line-height: 1.05; font-weight: 700; color: #162a2d;">WAITING<br />FOR TOOL</div>
+          <div style="position: absolute; left: 690px; top: 20px; width: 190px; height: 150px; background: #162a2d; border-radius: 30px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 27px; line-height: 1.05; font-weight: 700; color: #ffffff;">COMPLETED</div>
+          <div style="position: absolute; left: 690px; bottom: 8px; width: 190px; height: 150px; border: 2px solid #5e6d6c; border-radius: 30px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 27px; line-height: 1.05; font-weight: 700; color: #162a2d;">FAILED</div>
+          <div style="position: absolute; right: 0; top: 126px; width: 190px; height: 170px; background: #f4f1ea; border: 2px solid #00a99d; border-radius: 30px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 27px; line-height: 1.05; font-weight: 700; color: #162a2d;">CANCELLED</div>
+        </div>
+
+        <div style="position: absolute; left: 700px; top: 850px; width: 1128px; height: 80px; display: flex; align-items: center; border-top: 1px solid #aeb9b7;">
+          <div style="width: 300px; font-size: 25px; font-weight: 700; color: #00a99d;">LEASE RECOVERY</div>
+          <div style="width: 828px; font-size: 27px; color: #5e6d6c;">Expired claims can recover. Terminal states cannot move backward.</div>
+        </div>
+        <div style="position: absolute; left: 92px; bottom: 48px; width: 900px; height: 36px; font-size: 24px; color: #5e6d6c;">Poll · replayable SSE · idempotent cancellation</div>
+        <div style="position: absolute; right: 92px; bottom: 44px; width: 80px; height: 40px; font-size: 24px; text-align: right; color: #00a99d;">06</div>
+      </section>
+
+      <!-- 07 — Nested trust boundaries -->
+      <section
+        id="slide-7"
+        class="slide slide-transition-push transition-dir-l transition-duration-fast"
+        data-pptx-notes="Authentication is only the outer boundary. Tenant context is propagated into every repository operation, lifecycle command, event replay, quota decision, and memory action. A cross-tenant identifier is treated as absent, producing a safe 404 rather than leaking existence. Sources: task-02-agent-api/src/agent_api/security/; storage/; task-02-agent-api/tests/security/."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #f4f1ea; color: #162a2d;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 430px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">TASK 02 · MULTI-TENANT TRUST</div>
+        <h2 style="position: absolute; left: 92px; top: 128px; width: 1390px; height: 110px; margin: 0; font-size: 68px; line-height: 1.08; font-weight: 500; letter-spacing: -3px; color: #162a2d;">Isolation lives inside every query</h2>
+        <p style="position: absolute; right: 92px; top: 142px; width: 400px; height: 84px; margin: 0; font-size: 27px; line-height: 1.35; color: #5e6d6c;">Middleware alone cannot<br />protect durable state.</p>
+
+        <div style="position: absolute; left: 118px; top: 320px; width: 1470px; height: 650px; border: 3px solid #162a2d; border-radius: 52px; padding: 36px;">
+          <div style="font-size: 21px; font-weight: 700; letter-spacing: 3px; color: #5e6d6c;">01 · AUTHENTICATED REQUEST</div>
+          <div style="position: absolute; left: 80px; top: 92px; width: 1280px; height: 500px; border: 3px solid #00a99d; border-radius: 44px; padding: 34px; background: rgba(255,255,255,0.46);">
+            <div style="font-size: 21px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">02 · PRINCIPAL + TENANT SCOPE</div>
+            <div style="position: absolute; left: 88px; top: 92px; width: 1040px; height: 344px; background: #ffffff; border: 1px solid #c8d3d1; border-radius: 36px; padding: 32px;">
+              <div style="font-size: 21px; font-weight: 700; letter-spacing: 3px; color: #5e6d6c;">03 · REPOSITORY FILTER</div>
+              <div style="position: absolute; left: 88px; top: 92px; width: 790px; height: 186px; background: #162a2d; border-radius: 28px; display: flex; align-items: center; padding: 0 42px;">
+                <div style="width: 210px; font-size: 26px; font-weight: 700; color: #00a99d;">TENANT A</div>
+                <div style="width: 360px; font-size: 36px; font-weight: 600; color: #ffffff;">session · run · events</div>
+                <div style="width: 160px; text-align: right; font-size: 25px; color: #b8c3c1;">memory</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="position: absolute; right: 92px; top: 410px; width: 270px; height: 270px; border-radius: 135px; background: #00a99d; display: flex; align-items: center; justify-content: center; text-align: center;">
+          <div style="font-size: 72px; line-height: 0.95; font-weight: 700; color: #162a2d;">404<br /><span style="font-size: 27px; letter-spacing: 1px;">ACROSS<br />BOUNDARY</span></div>
+        </div>
+        <div style="position: absolute; right: 92px; top: 704px; width: 290px; height: 190px; border-left: 4px solid #00a99d; padding-left: 28px;">
+          <div style="font-size: 24px; font-weight: 700; color: #162a2d;">The same scope protects:</div>
+          <div style="margin-top: 14px; font-size: 25px; line-height: 1.35; color: #5e6d6c;">status · SSE · cancel<br />results · memory · quota</div>
+        </div>
+        <div style="position: absolute; left: 92px; bottom: 44px; width: 1110px; height: 42px; font-size: 24px; color: #5e6d6c;">Opaque IDs do not replace authorization; every read carries scope.</div>
+        <div style="position: absolute; right: 92px; bottom: 40px; width: 80px; height: 40px; font-size: 24px; text-align: right; color: #00a99d;">07</div>
+      </section>
+
+      <!-- 08 — CI/CD rail -->
+      <section
+        id="slide-8"
+        class="slide slide-transition-fade transition-duration-fast"
+        data-pptx-notes="The pipeline treats provenance as a chain of custody. GitHub Actions uses Workload Identity Federation, rebuilds and verifies the source, scans and produces an SBOM, pushes the tested image, resolves its immutable digest, and binds Terraform's binary plan to both commit and digest. Sources: .github/workflows/deploy.yml; task-03-deployment-strategy/operations/ci-cd.md; docs/release-and-operations.md."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #ffffff; color: #162a2d;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 390px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">TASK 03 · SOFTWARE SUPPLY CHAIN</div>
+        <h2 style="position: absolute; left: 92px; top: 128px; width: 1550px; height: 110px; margin: 0; font-size: 68px; line-height: 1.08; font-weight: 500; letter-spacing: -3px; color: #162a2d;">Promote evidence, not image tags</h2>
+        <p style="position: absolute; right: 92px; top: 142px; width: 420px; height: 84px; margin: 0; font-size: 27px; line-height: 1.35; color: #5e6d6c;">The artifact that passed<br />is the artifact that ships.</p>
+
+        <div style="position: absolute; left: 92px; top: 330px; width: 1736px; height: 210px; background: #162a2d; border-radius: 40px;">
+          <div style="position: absolute; left: 58px; top: 40px; width: 390px; height: 140px;">
+            <div style="font-size: 21px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">IDENTITY</div>
+            <div style="margin-top: 20px; font-size: 37px; line-height: 1.12; font-weight: 600; color: #ffffff;">OIDC → short-lived<br />deployer credential</div>
+          </div>
+          <div style="position: absolute; right: 62px; top: 46px; width: 1040px; height: 120px; display: flex; align-items: center; justify-content: space-between;">
+            <div style="width: 270px; font-size: 27px; color: #b8c3c1;">Repository ID</div>
+            <div style="width: 270px; font-size: 27px; color: #b8c3c1;">protected branch</div>
+            <div style="width: 270px; font-size: 27px; color: #b8c3c1;">gcp-dev environment</div>
+          </div>
+        </div>
+
+        <div style="position: absolute; left: 132px; top: 710px; width: 1600px; height: 10px; background: #c8d3d1; border-radius: 5px;"></div>
+        <div style="position: absolute; left: 132px; top: 710px; width: 1320px; height: 10px; background: #00a99d; border-radius: 5px;"></div>
+
+        <div style="position: absolute; left: 92px; top: 615px; width: 235px; height: 220px;">
+          <div style="font-size: 64px; font-weight: 600; color: #00a99d;">01</div><div style="font-size: 30px; line-height: 1.15; font-weight: 600; color: #162a2d;">Commit<br />SHA</div>
+        </div>
+        <div style="position: absolute; left: 392px; top: 615px; width: 235px; height: 220px;">
+          <div style="font-size: 64px; font-weight: 600; color: #00a99d;">02</div><div style="font-size: 30px; line-height: 1.15; font-weight: 600; color: #162a2d;">Tests +<br />contracts</div>
+        </div>
+        <div style="position: absolute; left: 692px; top: 615px; width: 235px; height: 220px;">
+          <div style="font-size: 64px; font-weight: 600; color: #00a99d;">03</div><div style="font-size: 30px; line-height: 1.15; font-weight: 600; color: #162a2d;">Trivy +<br />SBOM</div>
+        </div>
+        <div style="position: absolute; left: 992px; top: 585px; width: 285px; height: 280px; background: #00a99d; border-radius: 34px; padding: 34px;">
+          <div style="font-size: 64px; font-weight: 600; color: #162a2d;">04</div><div style="font-size: 34px; line-height: 1.1; font-weight: 700; color: #162a2d;">Immutable<br />digest</div><div style="margin-top: 20px; font-size: 22px; color: #162a2d;">Exact tested image</div>
+        </div>
+        <div style="position: absolute; left: 1342px; top: 615px; width: 235px; height: 220px;">
+          <div style="font-size: 64px; font-weight: 600; color: #00a99d;">05</div><div style="font-size: 30px; line-height: 1.15; font-weight: 600; color: #162a2d;">Binary<br />plan</div>
+        </div>
+        <div style="position: absolute; right: 92px; top: 615px; width: 200px; height: 220px; text-align: right;">
+          <div style="font-size: 64px; font-weight: 600; color: #00a99d;">06</div><div style="font-size: 30px; line-height: 1.15; font-weight: 600; color: #162a2d;">Apply +<br />verify</div>
+        </div>
+
+        <div style="position: absolute; left: 92px; bottom: 62px; width: 1736px; height: 104px; background: #f4f1ea; border-radius: 26px; display: flex; align-items: center; padding: 0 38px;">
+          <div style="width: 370px; font-size: 24px; font-weight: 700; color: #00a99d;">NO STATIC CLOUD KEY</div>
+          <div style="width: 500px; font-size: 27px; color: #162a2d;">No floating image tag</div>
+          <div style="width: 500px; font-size: 27px; color: #162a2d;">No plan input drift</div>
+          <div style="width: 270px; text-align: right; font-size: 24px; color: #00a99d;">08</div>
+        </div>
+      </section>
+
+      <!-- 09 — Cost-aware split plane -->
+      <section
+        id="slide-9"
+        class="slide slide-transition-push transition-dir-l transition-duration-fast"
+        data-pptx-notes="The assessment profile is intentionally small and executable: two Cloud Run services scale to zero and cap at one instance, Cloud Tasks limits concurrency to one, and a EUR 5 budget alerts the owner. The expensive model runtime is a separate, disabled-by-default production plane with explicit evaluation, quota, security, and cost gates. Sources: task-03-deployment-strategy/README.md; architecture/strategy.md; docs/release-and-operations.md."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #f4f1ea; color: #162a2d;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 410px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">TASK 03 · COST-AWARE ARCHITECTURE</div>
+        <h2 style="position: absolute; left: 92px; top: 128px; width: 1380px; height: 110px; margin: 0; font-size: 68px; line-height: 1.08; font-weight: 500; letter-spacing: -3px; color: #162a2d;">A test should not bill like a platform</h2>
+
+        <div style="position: absolute; left: 92px; top: 306px; width: 1070px; height: 650px; background: #ffffff; border: 1px solid #c8d3d1; border-radius: 44px; padding: 44px;">
+          <div style="font-size: 21px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">ASSESSMENT PLANE · EXECUTABLE</div>
+          <div style="position: absolute; left: 44px; top: 106px; width: 455px; height: 250px; background: #162a2d; border-radius: 32px; padding: 34px; color: #ffffff;">
+            <div style="font-size: 34px; font-weight: 600;">Cloud Run API</div><div style="margin-top: 20px; font-size: 26px; color: #b8c3c1;">min 0 · max 1</div><div style="margin-top: 38px; font-size: 24px; color: #00a99d;">Authenticated public edge</div>
+          </div>
+          <div style="position: absolute; right: 44px; top: 106px; width: 455px; height: 250px; background: #162a2d; border-radius: 32px; padding: 34px; color: #ffffff;">
+            <div style="font-size: 34px; font-weight: 600;">Cloud Run worker</div><div style="margin-top: 20px; font-size: 26px; color: #b8c3c1;">min 0 · max 1</div><div style="margin-top: 38px; font-size: 24px; color: #00a99d;">Task-only ingress</div>
+          </div>
+          <div style="position: absolute; left: 44px; bottom: 54px; width: 982px; height: 190px; display: flex; align-items: center; border-top: 1px solid #aeb9b7;">
+            <div style="width: 320px; font-size: 31px; font-weight: 600; color: #162a2d;">Cloud Tasks<br /><span style="font-size: 24px; font-weight: 400; color: #5e6d6c;">concurrency 1</span></div>
+            <div style="width: 320px; font-size: 31px; font-weight: 600; color: #162a2d;">Firestore<br /><span style="font-size: 24px; font-weight: 400; color: #5e6d6c;">named database</span></div>
+            <div style="width: 330px; font-size: 31px; font-weight: 600; color: #162a2d;">Secrets + logs<br /><span style="font-size: 24px; font-weight: 400; color: #5e6d6c;">identity-bound</span></div>
+          </div>
+        </div>
+
+        <div style="position: absolute; right: 92px; top: 306px; width: 602px; height: 650px; background: #162a2d; border-radius: 44px; padding: 44px; color: #ffffff;">
+          <div style="font-size: 21px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">PRODUCTION MODEL PLANE · GATED</div>
+          <div style="margin-top: 48px; font-size: 52px; line-height: 1.08; font-weight: 500; color: #ffffff;">Cell capacity follows<br />measured demand.</div>
+          <div style="margin-top: 58px; width: 510px; height: 194px; border: 2px solid #00a99d; border-radius: 97px; display: flex; align-items: center; justify-content: center;">
+            <div style="flex: 0 0 200px; width: 200px; height: 112px; white-space: nowrap; font-size: 82px; line-height: 1; font-weight: 700; color: #00a99d;">SLO</div>
+            <div style="margin-left: 24px; width: 180px; font-size: 25px; line-height: 1.15; color: #b8c3c1;">load · quota<br />FinOps approval</div>
+          </div>
+          <div style="position: absolute; left: 44px; bottom: 46px; width: 510px; height: 150px; border-top: 1px solid rgba(255,255,255,0.28); padding-top: 24px; font-size: 25px; line-height: 1.4; color: #b8c3c1;">Each regional cell sets warm floor, ceiling and concurrency from load tests, availability targets and quota.</div>
+        </div>
+        <div style="position: absolute; left: 92px; bottom: 44px; width: 1080px; height: 40px; font-size: 24px; color: #5e6d6c;">Assessment caps are verified after apply; production capacity comes from a separately approved plan.</div>
+        <div style="position: absolute; right: 92px; bottom: 40px; width: 80px; height: 40px; font-size: 24px; text-align: right; color: #00a99d;">09</div>
+      </section>
+
+      <!-- 10 — Editorial triptych -->
+      <section
+        id="slide-10"
+        class="slide slide-transition-fade transition-duration-fast"
+        data-pptx-notes="The offline tasks are not filler. Together they show three different forms of modeling judgment: entity-level leakage control, domain-appropriate retrieval with abstention, and reusable train/inference preprocessing. Sources: task-04-binary-classification/README.md; task-05-material-similarity/README.md; task-06-category-consolidation/README.md."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #162a2d; color: #ffffff;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 390px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">TASKS 04—06 · APPLIED ML</div>
+        <h2 style="position: absolute; left: 92px; top: 128px; width: 1500px; height: 116px; margin: 0; font-size: 68px; line-height: 1.08; font-weight: 500; letter-spacing: -3px; color: #ffffff;">Three tasks. Three decisions I would defend.</h2>
+
+        <div style="position: absolute; left: 92px; top: 318px; width: 530px; height: 650px; border-top: 6px solid #00a99d; background: rgba(255,255,255,0.06); padding: 38px;">
+          <div style="font-size: 150px; line-height: 0.9; font-weight: 700; letter-spacing: -9px; color: rgba(255,255,255,0.18);">04</div>
+          <div style="margin-top: 12px; font-size: 39px; line-height: 1.08; font-weight: 600; color: #ffffff;">Failure<br />prediction</div>
+          <div style="margin-top: 50px; font-size: 27px; line-height: 1.38; color: #b8c3c1;">Group identical feature vectors before CV and holdout.</div>
+          <div style="position: absolute; left: 38px; bottom: 42px; width: 440px; height: 100px; border-top: 1px solid rgba(255,255,255,0.26); padding-top: 22px; font-size: 25px; color: #00a99d;">Leakage risk shaped the pipeline.</div>
+        </div>
+        <div style="position: absolute; left: 695px; top: 318px; width: 530px; height: 650px; background: #f4f1ea; padding: 38px; color: #162a2d;">
+          <div style="font-size: 150px; line-height: 0.9; font-weight: 700; letter-spacing: -9px; color: rgba(22,42,45,0.13);">05</div>
+          <div style="margin-top: 12px; font-size: 39px; line-height: 1.08; font-weight: 600; color: #162a2d;">Material<br />similarity</div>
+          <div style="margin-top: 50px; font-size: 27px; line-height: 1.38; color: #5e6d6c;">Use lexical evidence before embeddings or ANN complexity.</div>
+          <div style="position: absolute; left: 38px; bottom: 42px; width: 440px; height: 100px; border-top: 1px solid #aeb9b7; padding-top: 22px; font-size: 25px; color: #00a99d;">Blank descriptions must abstain.</div>
+        </div>
+        <div style="position: absolute; right: 92px; top: 318px; width: 530px; height: 650px; border-bottom: 6px solid #00a99d; background: rgba(255,255,255,0.06); padding: 38px;">
+          <div style="font-size: 150px; line-height: 0.9; font-weight: 700; letter-spacing: -9px; color: rgba(255,255,255,0.18);">06</div>
+          <div style="margin-top: 12px; font-size: 39px; line-height: 1.08; font-weight: 600; color: #ffffff;">Category<br />consolidation</div>
+          <div style="margin-top: 50px; font-size: 27px; line-height: 1.38; color: #b8c3c1;">Fit vocabulary once; map unseen values predictably.</div>
+          <div style="position: absolute; left: 38px; bottom: 42px; width: 440px; height: 100px; border-top: 1px solid rgba(255,255,255,0.26); padding-top: 22px; font-size: 25px; color: #00a99d;">Training state stays frozen.</div>
+        </div>
+        <div style="position: absolute; right: 92px; bottom: 38px; width: 80px; height: 40px; font-size: 24px; text-align: right; color: #00a99d;">10</div>
+      </section>
+
+      <!-- 11 — Classifier evidence dashboard -->
+      <section
+        id="slide-11"
+        class="slide slide-transition-push transition-dir-l transition-duration-fast"
+        data-pptx-notes="The classifier story is not '90 percent accuracy.' It is a leakage-aware screening baseline. Weighted logistic regression improves grouped-CV PR-AUC and recall, but holdout precision remains moderate and probabilities are overconfident. That makes calibration and business cost ownership explicit next steps. Sources: task-04-binary-classification/reports/model-card.md; reports/metrics.json."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #f4f1ea; color: #162a2d;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 430px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">TASK 04 · FAILURE PREDICTION</div>
+        <h2 style="position: absolute; left: 92px; top: 128px; width: 1510px; height: 116px; margin: 0; font-size: 66px; line-height: 1.08; font-weight: 500; letter-spacing: -3px; color: #162a2d;">Useful as a screen — not a crystal ball</h2>
+
+        <div style="position: absolute; left: 92px; top: 320px; width: 760px; height: 650px; background: #ffffff; border: 1px solid #c8d3d1; border-radius: 42px; padding: 42px;">
+          <div style="font-size: 21px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">GROUPED CV · MEAN PR-AUC</div>
+          <div style="position: absolute; left: 42px; top: 150px; width: 660px; height: 78px; background: #dfe6e4; border-radius: 18px;">
+            <div style="width: 92px; height: 78px; background: #5e6d6c; border-radius: 18px;"></div>
+            <div style="position: absolute; left: 112px; top: 20px; width: 470px; height: 38px; font-size: 28px; color: #162a2d;">Dummy · 0.077</div>
+          </div>
+          <div style="position: absolute; left: 42px; top: 268px; width: 660px; height: 96px; background: #dfe6e4; border-radius: 20px;">
+            <div style="width: 371px; height: 96px; background: #00a99d; border-radius: 20px;"></div>
+            <div style="position: absolute; left: 392px; top: 26px; width: 244px; height: 42px; font-size: 30px; font-weight: 700; color: #162a2d;">0.563</div>
+          </div>
+          <div style="position: absolute; left: 42px; top: 386px; width: 660px; height: 44px; font-size: 29px; font-weight: 600; color: #162a2d;">Weighted logistic</div>
+          <div style="position: absolute; left: 42px; bottom: 42px; width: 660px; height: 126px; border-top: 1px solid #aeb9b7; padding-top: 24px; font-size: 27px; line-height: 1.35; color: #5e6d6c;">3,700 entities · identical feature groups never cross split boundaries.</div>
+        </div>
+
+        <div style="position: absolute; right: 92px; top: 320px; width: 902px; height: 650px; background: #162a2d; border-radius: 42px; padding: 42px; color: #ffffff;">
+          <div style="font-size: 21px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">LOCKED HOLDOUT · THRESHOLD 0.6713</div>
+          <div style="position: absolute; left: 42px; top: 150px; width: 388px; height: 230px; border-right: 1px solid rgba(255,255,255,0.25);">
+            <div style="font-size: 112px; line-height: 0.95; font-weight: 600; color: #00a99d;">.855</div>
+            <div style="margin-top: 18px; font-size: 30px; color: #ffffff;">Recall</div>
+            <div style="margin-top: 10px; font-size: 24px; color: #b8c3c1;">47 TP · 8 FN</div>
+          </div>
+          <div style="position: absolute; right: 42px; top: 150px; width: 388px; height: 230px; padding-left: 28px;">
+            <div style="font-size: 112px; line-height: 0.95; font-weight: 600; color: #ffffff;">.423</div>
+            <div style="margin-top: 18px; font-size: 30px; color: #ffffff;">Precision</div>
+            <div style="margin-top: 10px; font-size: 24px; color: #b8c3c1;">64 false positives</div>
+          </div>
+          <div style="position: absolute; left: 42px; bottom: 42px; width: 818px; height: 176px; border-top: 1px solid rgba(255,255,255,0.25); padding-top: 28px; display: flex;">
+            <div style="width: 270px;"><div style="font-size: 43px; font-weight: 600; color: #ffffff;">.423</div><div style="font-size: 24px; color: #b8c3c1;">PR-AUC</div></div>
+            <div style="width: 270px;"><div style="font-size: 43px; font-weight: 600; color: #ffffff;">.566</div><div style="font-size: 24px; color: #b8c3c1;">F1</div></div>
+            <div style="width: 278px;"><div style="font-size: 30px; line-height: 1.15; font-weight: 600; color: #00a99d;">Calibration<br />still required</div></div>
+          </div>
+        </div>
+        <div style="position: absolute; left: 92px; bottom: 42px; width: 1300px; height: 42px; font-size: 24px; color: #5e6d6c;">Accuracy is context; minority errors drive the decision.</div>
+        <div style="position: absolute; right: 92px; bottom: 38px; width: 80px; height: 40px; font-size: 24px; text-align: right; color: #00a99d;">11</div>
+      </section>
+
+      <!-- 12 — Retrieval experiment chart -->
+      <section
+        id="slide-12"
+        class="slide slide-transition-fade transition-duration-fast"
+        data-pptx-notes="The selected word/character mixture wins the reviewed eight-query benchmark on nDCG@5 while preserving deterministic ranking. But benchmark coverage and catalog coverage are different: 335 blank descriptions force explicit abstention, leaving text-backed catalog coverage at 66.43 percent. Sources: task-05-material-similarity/reports/relevance-metrics.json; retrieval-evaluation.md; data-analysis.md."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #ffffff; color: #162a2d;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 430px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">TASK 05 · MATERIAL RETRIEVAL</div>
+        <h2 style="position: absolute; left: 92px; top: 128px; width: 1440px; height: 170px; margin: 0; font-size: 66px; line-height: 1.08; font-weight: 500; letter-spacing: -3px; color: #162a2d;">Better ranking did not fix<br />missing evidence</h2>
+
+        <div style="position: absolute; left: 92px; top: 370px; width: 1050px; height: 548px; background: #f4f1ea; border-radius: 42px; padding: 42px;">
+          <div style="font-size: 21px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">REVIEWED GRID · nDCG@5</div>
+          <div style="position: absolute; left: 62px; top: 140px; width: 900px; height: 320px; border-left: 2px solid #aeb9b7; border-bottom: 2px solid #aeb9b7;">
+            <div style="position: absolute; left: 70px; bottom: 0; width: 100px; height: 255px; background: #8da4a0; border-radius: 18px 18px 0 0;"></div>
+            <div style="position: absolute; left: 235px; bottom: 0; width: 100px; height: 270px; background: #00a99d; border-radius: 18px 18px 0 0;"></div>
+            <div style="position: absolute; left: 400px; bottom: 0; width: 100px; height: 266px; background: #8da4a0; border-radius: 18px 18px 0 0;"></div>
+            <div style="position: absolute; left: 565px; bottom: 0; width: 100px; height: 244px; background: #8da4a0; border-radius: 18px 18px 0 0;"></div>
+            <div style="position: absolute; left: 730px; bottom: 0; width: 100px; height: 215px; background: #8da4a0; border-radius: 18px 18px 0 0;"></div>
+            <div style="position: absolute; left: 54px; bottom: 262px; width: 130px; height: 34px; text-align: center; font-size: 22px; color: #162a2d;">.802</div>
+            <div style="position: absolute; left: 219px; bottom: 277px; width: 130px; height: 34px; text-align: center; font-size: 24px; font-weight: 700; color: #00a99d;">.847</div>
+            <div style="position: absolute; left: 384px; bottom: 273px; width: 130px; height: 34px; text-align: center; font-size: 22px; color: #162a2d;">.833</div>
+            <div style="position: absolute; left: 549px; bottom: 251px; width: 130px; height: 34px; text-align: center; font-size: 22px; color: #162a2d;">.762</div>
+            <div style="position: absolute; left: 714px; bottom: 222px; width: 130px; height: 34px; text-align: center; font-size: 22px; color: #162a2d;">.672</div>
+          </div>
+          <div style="position: absolute; left: 92px; bottom: 32px; width: 810px; height: 44px; font-size: 23px; color: #5e6d6c;">Character weight → 1.00 · <strong>0.75</strong> · 0.50 · 0.25 · 0.00</div>
+        </div>
+
+        <div style="position: absolute; right: 92px; top: 370px; width: 620px; height: 548px; background: #162a2d; border-radius: 42px; padding: 42px; color: #ffffff;">
+          <div style="font-size: 21px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">THE DATA CEILING</div>
+          <div style="margin-top: 54px; font-size: 112px; line-height: 0.95; font-weight: 600; color: #ffffff;">66.43%</div>
+          <div style="margin-top: 20px; font-size: 30px; line-height: 1.25; color: #b8c3c1;">text-backed catalog coverage<br />663 of 998 materials</div>
+          <div style="margin-top: 50px; width: 536px; height: 14px; background: rgba(255,255,255,0.18); border-radius: 7px;">
+            <div style="width: 356px; height: 14px; background: #00a99d; border-radius: 7px;"></div>
+          </div>
+          <div style="position: absolute; left: 42px; bottom: 42px; width: 536px; height: 126px; border-top: 1px solid rgba(255,255,255,0.25); padding-top: 24px; font-size: 28px; line-height: 1.35; color: #ffffff;">335 blank descriptions → <span style="color: #00a99d; font-weight: 700;">explicit abstention</span></div>
+        </div>
+        <div style="position: absolute; left: 92px; bottom: 48px; width: 1400px; height: 42px; font-size: 24px; color: #5e6d6c;">A larger model cannot manufacture technical fitment data that is not present.</div>
+        <div style="position: absolute; right: 92px; bottom: 44px; width: 80px; height: 40px; font-size: 24px; text-align: right; color: #00a99d;">12</div>
+      </section>
+
+      <!-- 13 — Long-tail transformation -->
+      <section
+        id="slide-13"
+        class="slide slide-transition-push transition-dir-l transition-duration-fast"
+        data-pptx-notes="The rare-category transformer behaves like a proper estimator. Fit learns counts, retained categories, a collision-safe fallback label, and diagnostics from training data only. Transform applies that frozen state to validation, test, and inference; unseen values map deterministically. Sources: task-06-category-consolidation/README.md; src/category_consolidation/core.py; tests/test_category_consolidation.py."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #f4f1ea; color: #162a2d;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 470px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">TASK 06 · CATEGORY CONSOLIDATION</div>
+        <h2 style="position: absolute; left: 92px; top: 128px; width: 1550px; height: 110px; margin: 0; font-size: 66px; line-height: 1.08; font-weight: 500; letter-spacing: -3px; color: #162a2d;">Learn on train. Freeze for inference.</h2>
+
+        <div style="position: absolute; left: 92px; top: 320px; width: 730px; height: 610px; background: #ffffff; border: 1px solid #c8d3d1; border-radius: 42px; padding: 42px;">
+          <div style="font-size: 21px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">FIT · OBSERVED LONG TAIL</div>
+          <div style="position: absolute; left: 64px; bottom: 112px; width: 600px; height: 360px; border-left: 2px solid #aeb9b7; border-bottom: 2px solid #aeb9b7;">
+            <div style="position: absolute; left: 40px; bottom: 0; width: 68px; height: 315px; background: #162a2d; border-radius: 12px 12px 0 0;"></div>
+            <div style="position: absolute; left: 125px; bottom: 0; width: 68px; height: 240px; background: #162a2d; border-radius: 12px 12px 0 0;"></div>
+            <div style="position: absolute; left: 210px; bottom: 0; width: 68px; height: 155px; background: #00a99d; border-radius: 12px 12px 0 0;"></div>
+            <div style="position: absolute; left: 295px; bottom: 0; width: 68px; height: 92px; background: #8da4a0; border-radius: 12px 12px 0 0;"></div>
+            <div style="position: absolute; left: 380px; bottom: 0; width: 68px; height: 54px; background: #8da4a0; border-radius: 12px 12px 0 0;"></div>
+            <div style="position: absolute; left: 465px; bottom: 0; width: 68px; height: 30px; background: #8da4a0; border-radius: 12px 12px 0 0;"></div>
+            <div style="position: absolute; left: 196px; bottom: 176px; width: 220px; height: 46px; border-top: 3px solid #00a99d; font-size: 21px; color: #00a99d; padding-top: 8px;">strictly below threshold</div>
+          </div>
+          <div style="position: absolute; left: 64px; bottom: 42px; width: 600px; height: 46px; font-size: 24px; color: #5e6d6c;">Counts include validated missing sentinels.</div>
+        </div>
+
+        <div style="position: absolute; left: 890px; top: 440px; width: 220px; height: 220px; background: #00a99d; border-radius: 110px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 31px; line-height: 1.05; font-weight: 700; color: #162a2d;">FREEZE<br />STATE</div>
+        <div style="position: absolute; left: 922px; top: 694px; width: 170px; height: 100px; text-align: center; font-size: 24px; line-height: 1.25; color: #5e6d6c;">vocabulary<br />+ diagnostics</div>
+
+        <div style="position: absolute; right: 92px; top: 320px; width: 730px; height: 610px; background: #162a2d; border-radius: 42px; padding: 42px; color: #ffffff;">
+          <div style="font-size: 21px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">TRANSFORM · STABLE OUTPUT</div>
+          <div style="position: absolute; left: 42px; top: 144px; width: 646px; height: 100px; display: flex; align-items: center;">
+            <div style="width: 180px; height: 100px; background: #ffffff; border-radius: 24px; display: flex; align-items: center; justify-content: center; font-size: 34px; font-weight: 700; color: #162a2d;">A</div>
+            <div style="width: 180px; height: 100px; margin-left: 28px; background: #ffffff; border-radius: 24px; display: flex; align-items: center; justify-content: center; font-size: 34px; font-weight: 700; color: #162a2d;">B</div>
+            <div style="width: 230px; height: 100px; margin-left: 28px; border: 2px solid #00a99d; border-radius: 24px; display: flex; align-items: center; justify-content: center; font-size: 30px; font-weight: 700; color: #00a99d;">__RARE__</div>
+          </div>
+          <div style="position: absolute; left: 42px; top: 304px; width: 646px; height: 136px; border-top: 1px solid rgba(255,255,255,0.25); padding-top: 30px; display: flex;">
+            <div style="width: 320px; font-size: 28px; line-height: 1.3; color: #ffffff;">Seen rare values<br />map to fallback.</div>
+            <div style="width: 326px; font-size: 28px; line-height: 1.3; color: #ffffff;">Unseen values<br />map the same way.</div>
+          </div>
+          <div style="position: absolute; left: 42px; bottom: 42px; width: 646px; height: 96px; background: rgba(255,255,255,0.08); border-radius: 24px; display: flex; align-items: center; padding: 0 28px; font-size: 26px; color: #b8c3c1;">Fallback collisions produce a unique label at fit time.</div>
+        </div>
+        <div style="position: absolute; left: 92px; bottom: 44px; width: 1210px; height: 42px; font-size: 24px; color: #5e6d6c;">Simple preprocessing, explicit invariants, identical train/inference semantics.</div>
+        <div style="position: absolute; right: 92px; bottom: 40px; width: 80px; height: 40px; font-size: 24px; text-align: right; color: #00a99d;">13</div>
+      </section>
+
+      <!-- 14 — Terminal / reproducibility -->
+      <section
+        id="slide-14"
+        class="slide slide-transition-fade transition-duration-fast"
+        data-pptx-notes="A clean computer is part of the product contract. One command builds a temporary locked environment, runs formatting, lint, strict typing, all six task tests, the submission audit, and a two-tenant HTTP smoke using fake inference. It needs neither cloud credentials nor a language model. Sources: Makefile; scripts/local_submission_check.sh; docs/test-strategy.md; docs/release-and-operations.md."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #ffffff; color: #162a2d;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 430px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">REPRODUCIBILITY · REVIEW UX</div>
+        <h2 style="position: absolute; left: 92px; top: 128px; width: 1380px; height: 110px; margin: 0; font-size: 68px; line-height: 1.08; font-weight: 500; letter-spacing: -3px; color: #162a2d;">Reviewability is a feature</h2>
+        <p style="position: absolute; right: 92px; top: 142px; width: 430px; height: 84px; margin: 0; font-size: 27px; line-height: 1.35; color: #5e6d6c;">The shortest path should also<br />be the most trustworthy.</p>
+
+        <div style="position: absolute; left: 92px; top: 320px; width: 1110px; height: 650px; background: #162a2d; border-radius: 42px; padding: 42px; color: #ffffff;">
+          <div style="font-size: 20px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">CLEAN CLONE</div>
+          <div style="margin-top: 46px; font-family: 'Courier New', Courier, monospace; font-size: 40px; line-height: 1.25; color: #ffffff;">$ make local-submission</div>
+          <div style="margin-top: 44px; font-family: 'Courier New', Courier, monospace; font-size: 26px; line-height: 1.72; color: #b8c3c1;">✓ locked dependency graph<br />✓ format · lint · strict typing<br />✓ tests across all six packages<br />✓ submission boundary audit<br />✓ two-tenant HTTP acceptance</div>
+          <div style="position: absolute; left: 42px; bottom: 42px; width: 1026px; height: 94px; background: rgba(0,169,157,0.13); border: 1px solid #00a99d; border-radius: 24px; display: flex; align-items: center; padding: 0 30px; font-size: 28px; color: #ffffff;">No cloud account · no external LLM · deterministic fixtures</div>
+        </div>
+
+        <div style="position: absolute; right: 92px; top: 320px; width: 552px; height: 650px; background: #f4f1ea; border: 1px solid #c8d3d1; border-radius: 42px; padding: 42px;">
+          <div style="font-size: 21px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">REVIEWER EVIDENCE MAP</div>
+          <div style="margin-top: 48px; font-size: 31px; line-height: 1.18; font-weight: 600; color: #162a2d;">Claim</div>
+          <div style="margin-top: 8px; font-size: 25px; color: #5e6d6c;">“Answers are grounded.”</div>
+          <div style="margin-top: 38px; font-size: 31px; line-height: 1.18; font-weight: 600; color: #162a2d;">Implementation</div>
+          <div style="margin-top: 8px; font-size: 25px; line-height: 1.25; color: #5e6d6c;">evidence.py · answering.py</div>
+          <div style="margin-top: 38px; font-size: 31px; line-height: 1.18; font-weight: 600; color: #162a2d;">Executable proof</div>
+          <div style="margin-top: 8px; font-size: 25px; line-height: 1.25; color: #5e6d6c;">test_evidence.py<br />test_answering.py</div>
+          <div style="position: absolute; left: 42px; bottom: 42px; width: 468px; height: 92px; border-top: 1px solid #aeb9b7; padding-top: 24px; font-size: 24px; line-height: 1.25; color: #00a99d;">Every major claim has the same three-part trail.</div>
+        </div>
+        <div style="position: absolute; right: 92px; bottom: 38px; width: 80px; height: 40px; font-size: 24px; text-align: right; color: #00a99d;">14</div>
+      </section>
+
+      <!-- 15 — Honest production ledger -->
+      <section
+        id="slide-15"
+        class="slide slide-transition-push transition-dir-l transition-duration-fast"
+        data-pptx-notes="This is the boundary I would want a senior engineer to state clearly. Production-minded means the seams, controls, and evidence paths exist; it does not mean that unmeasured enterprise claims are presented as facts. The next steps are gated by workload, ownership, policy, and observed data. Sources: docs/reviewer-guide.md; task-03-deployment-strategy/architecture/strategy.md; production-scale.md."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #f4f1ea; color: #162a2d;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 420px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">PRODUCTION JUDGMENT</div>
+        <h2 style="position: absolute; left: 92px; top: 128px; width: 1510px; height: 110px; margin: 0; font-size: 68px; line-height: 1.08; font-weight: 500; letter-spacing: -3px; color: #162a2d;">Production-minded ≠ production-pretend</h2>
+
+        <div style="position: absolute; left: 92px; top: 320px; width: 1736px; height: 650px; border-top: 2px solid #162a2d; border-bottom: 2px solid #162a2d;">
+          <div style="position: absolute; left: 0; top: 0; width: 1736px; height: 215px; display: flex; align-items: center; background: #ffffff;">
+            <div style="width: 360px; padding-left: 38px; font-size: 28px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">IMPLEMENTED NOW</div>
+            <div style="width: 1290px; font-size: 33px; line-height: 1.35; color: #162a2d;">Bounded evidence agent · durable tenant API · managed queue/state · Terraform · keyless delivery · reproducible ML packages</div>
+          </div>
+          <div style="position: absolute; left: 0; top: 215px; width: 1736px; height: 215px; display: flex; align-items: center;">
+            <div style="width: 360px; padding-left: 38px; font-size: 28px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">GATED NEXT</div>
+            <div style="width: 1290px; font-size: 33px; line-height: 1.35; color: #162a2d;">Approved model plane · business loss function · calibrated probabilities · structured fitment · SLOs · drift and quality monitoring</div>
+          </div>
+          <div style="position: absolute; left: 0; top: 430px; width: 1736px; height: 220px; display: flex; align-items: center; background: #162a2d; color: #ffffff;">
+            <div style="width: 360px; padding-left: 38px; font-size: 28px; font-weight: 700; letter-spacing: 3px; color: #00a99d;">NOT CLAIMED</div>
+            <div style="width: 1290px; font-size: 33px; line-height: 1.35; color: #ffffff;">Enterprise load proof · production model approval · global HA · causal failure drivers · electrical compatibility from text alone</div>
+          </div>
+        </div>
+        <div style="position: absolute; left: 92px; bottom: 44px; width: 1410px; height: 42px; font-size: 24px; color: #5e6d6c;">A senior engineer protects the roadmap from claims the evidence cannot support.</div>
+        <div style="position: absolute; right: 92px; bottom: 40px; width: 80px; height: 40px; font-size: 24px; text-align: right; color: #00a99d;">15</div>
+      </section>
+
+      <!-- 16 — Closing poster -->
+      <section
+        id="slide-16"
+        class="slide slide-transition-fade transition-duration-fast"
+        data-pptx-notes="Close on the operating principle rather than the technologies. My value is the ability to turn ambiguity into explicit contracts, choose the simplest defensible model, make failure observable, and leave a clean path from local proof to cloud delivery. Sources: README.md; docs/architecture.md; docs/test-strategy.md."
+        style="width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #162a2d; color: #ffffff;"
+      >
+        <div style="position: absolute; left: 92px; top: 72px; width: 410px; height: 34px; font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #00a99d;">WHY I WOULD HIRE THIS ENGINEER</div>
+        <div style="position: absolute; left: 92px; top: 170px; width: 1420px; height: 420px;">
+          <h2 style="margin: 0; font-size: 94px; line-height: 1.02; font-weight: 400; letter-spacing: -5px; color: #ffffff;">I build AI systems that earn trust before they ask for scale.</h2>
+        </div>
+
+        <div style="position: absolute; left: 92px; bottom: 120px; width: 1736px; height: 300px; border-top: 2px solid rgba(255,255,255,0.34); display: flex; align-items: stretch;">
+          <div style="width: 434px; padding: 42px 30px 0 0; border-right: 1px solid rgba(255,255,255,0.22);"><div style="font-size: 22px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">01 · AMBIGUITY</div><div style="margin-top: 24px; font-size: 32px; line-height: 1.2; color: #ffffff;">Turn it into explicit contracts.</div></div>
+          <div style="width: 434px; padding: 42px 30px 0 34px; border-right: 1px solid rgba(255,255,255,0.22);"><div style="font-size: 22px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">02 · AI</div><div style="margin-top: 24px; font-size: 32px; line-height: 1.2; color: #ffffff;">Bound it with deterministic policy.</div></div>
+          <div style="width: 434px; padding: 42px 30px 0 34px; border-right: 1px solid rgba(255,255,255,0.22);"><div style="font-size: 22px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">03 · DELIVERY</div><div style="margin-top: 24px; font-size: 32px; line-height: 1.2; color: #ffffff;">Promote only tested evidence.</div></div>
+          <div style="width: 434px; padding: 42px 0 0 34px;"><div style="font-size: 22px; font-weight: 700; letter-spacing: 2px; color: #00a99d;">04 · JUDGMENT</div><div style="margin-top: 24px; font-size: 32px; line-height: 1.2; color: #ffffff;">State the limit before the claim.</div></div>
+        </div>
+        <div style="position: absolute; left: 92px; bottom: 52px; width: 700px; height: 38px; font-size: 25px; color: #b8c3c1;">Maksim Blekhshtein · Senior AI Engineer</div>
+        <div style="position: absolute; right: 92px; bottom: 44px; width: 410px; height: 52px; font-size: 24px; text-align: right; color: #00a99d;">REPOSITORY READY TO REVIEW →</div>
+      </section>
+    </main>
+
+    <script>
+      (function () {
+        const BAD_TRANSFORM = /\b(?:translate|translateX|translateY|translate3d|scale|scaleX|scaleY|scale3d|skew|skewX|skewY|matrix|matrix3d)\s*\(/;
+        const BAD_BACKGROUND = /\b(?:radial-gradient|conic-gradient)\s*\(/;
+        const VIEWPORT_UNITS = /\b\d*\.?\d+(?:vh|vw|vmin|vmax)\b/;
+        const BLOCKERS = [
+          ['backdrop-filter', /backdrop-filter\s*:/i],
+          ['clip-path', /clip-path\s*:/i],
+          ['mix-blend-mode', /mix-blend-mode\s*:/i],
+          ['text-shadow', /text-shadow\s*:/i],
+        ];
+
+        window.validateSlides = function validateSlides() {
+          const slides = Array.from(document.querySelectorAll('.slide'));
+          const issues = [];
+          if (!slides.length) return ['No .slide elements found.'];
+
+          slides.forEach((slide, slideIndex) => {
+            const slideStyle = getComputedStyle(slide);
+            if (slideStyle.width !== '1920px' || slideStyle.height !== '1080px') {
+              issues.push(`slide ${slideIndex + 1}: expected 1920x1080px`);
+            }
+            if (slideStyle.position !== 'relative') issues.push(`slide ${slideIndex + 1}: position must be relative`);
+            if (slideStyle.overflow !== 'hidden') issues.push(`slide ${slideIndex + 1}: overflow must be hidden`);
+
+            slide.querySelectorAll('*').forEach((element) => {
+              const inline = element.getAttribute('style') || '';
+              const computed = getComputedStyle(element);
+              if (computed.transform !== 'none') {
+                const value = (inline.match(/transform\s*:\s*([^;]+)/i) || [])[1] || '';
+                if (BAD_TRANSFORM.test(value)) issues.push(`slide ${slideIndex + 1}: unsupported transform ${value}`);
+              }
+              if (BAD_BACKGROUND.test(computed.backgroundImage || '')) issues.push(`slide ${slideIndex + 1}: unsupported gradient`);
+              if (VIEWPORT_UNITS.test(inline)) issues.push(`slide ${slideIndex + 1}: viewport units used`);
+              BLOCKERS.forEach(([name, pattern]) => {
+                if (pattern.test(inline)) issues.push(`slide ${slideIndex + 1}: blocked style ${name}`);
+              });
+              if (element.tagName === 'IMG') {
+                const source = element.getAttribute('src') || '';
+                if (!/^(https:\/\/|data:)/i.test(source)) issues.push(`slide ${slideIndex + 1}: invalid image source`);
+              }
+            });
+          });
+          return issues;
+        };
+      })();
+    </script>
+  </body>
+</html>
