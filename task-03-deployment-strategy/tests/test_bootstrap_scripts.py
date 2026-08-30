@@ -47,6 +47,44 @@ def test_bootstrap_routes_all_cloud_mutations_through_terraform() -> None:
     assert "gcloud" not in source
 
 
+def test_runtime_policy_detection_survives_pipefail(tmp_path: Path) -> None:
+    fake_terraform = tmp_path / "terraform"
+    _executable(
+        fake_terraform,
+        """#!/usr/bin/env bash
+set -euo pipefail
+[[ ${2:-} == state && ${3:-} == list ]]
+printf '%s\n' 'google_cloud_run_v2_service_iam_binding.worker_invoker[0]'
+for index in {1..20000}; do
+  printf 'unrelated_resource.%s\n' "$index"
+done
+""",
+    )
+    script_prefix = BOOTSTRAP.read_text(encoding="utf-8").rsplit(
+        '\nmain "$@"', maxsplit=1
+    )[0]
+    probe = tmp_path / "probe.sh"
+    _executable(
+        probe,
+        script_prefix
+        + """
+TERRAFORM_BIN=$1
+terraform_root=unused
+select_runtime_policy_mode
+printf '%s\n' "$TF_VAR_enable_runtime_policy"
+""",
+    )
+
+    completed = subprocess.run(
+        [str(probe), str(fake_terraform)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.stdout == "true\n"
+
+
 def test_secret_seed_is_idempotent_and_keeps_payload_off_command_line(
     tmp_path: Path,
 ) -> None:
