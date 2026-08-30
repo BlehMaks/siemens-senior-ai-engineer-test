@@ -8,6 +8,7 @@ CLOUD_SMOKE_PEPPER=""
 CLOUD_SMOKE_PROJECT=""
 CLOUD_SMOKE_DATABASE=""
 CLOUD_SMOKE_UV_BIN=""
+CLOUD_SMOKE_API_SMOKE_COPY=""
 CLOUD_SMOKE_KEY_FILE_A=""
 CLOUD_SMOKE_KEY_FILE_B=""
 
@@ -79,6 +80,19 @@ same_open_file() {
   return 1
 }
 
+sha256_file() {
+  local path=$1 digest remainder
+  if command -v sha256sum >/dev/null 2>&1; then
+    read -r digest remainder < <(sha256sum -- "$path") || return 1
+  elif command -v shasum >/dev/null 2>&1; then
+    read -r digest remainder < <(shasum -a 256 "$path") || return 1
+  else
+    return 1
+  fi
+  [[ $digest =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s' "$digest"
+}
+
 revoke_key() {
   local key=$1
   [[ -n $key ]] || return 0
@@ -134,6 +148,7 @@ main() {
   [[ $# -eq 5 ]] || { usage >&2; exit 2; }
   local project=$1 region=$2 environment=$3 project_number=$4 smoke_id=$5
   local actual_number api_url invocation_path repository_root script_dir verified_dir
+  local api_smoke_digest private_copy_digest current_api_smoke_digest
 
   [[ $project =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || fail "invalid project id"
   [[ $region =~ ^[a-z]+-[a-z]+[0-9]$ ]] || fail "invalid region"
@@ -151,8 +166,30 @@ main() {
   repository_root=$(cd "$script_dir/../.." && pwd -P)
   [[ -x $script_dir/api_smoke.sh ]] || fail "reviewed API smoke script is missing"
   exec 8<"$invocation_path" || fail "could not pin the reviewed smoke wrapper"
+  [[ -f $script_dir/api_smoke.sh && ! -L $script_dir/api_smoke.sh ]] ||
+    fail "reviewed API smoke script is not a regular file"
+  [[ -x $script_dir/api_smoke.sh ]] || fail "reviewed API smoke script is not executable"
+  api_smoke_digest=$(sha256_file "$script_dir/api_smoke.sh") ||
+    fail "could not fingerprint the reviewed API smoke script"
   exec 9<"$script_dir/api_smoke.sh" || fail "could not pin the reviewed API smoke script"
   cd "$repository_root"
+
+  CLOUD_SMOKE_PROJECT=$project
+  CLOUD_SMOKE_DATABASE="sai-$environment"
+  CLOUD_SMOKE_TEMP_DIR=$(mktemp -d -t sai-cloud-smoke.XXXXXX)
+  CLOUD_SMOKE_API_SMOKE_COPY="$CLOUD_SMOKE_TEMP_DIR/api_smoke.sh"
+  CLOUD_SMOKE_KEY_FILE_A="$CLOUD_SMOKE_TEMP_DIR/key-a"
+  CLOUD_SMOKE_KEY_FILE_B="$CLOUD_SMOKE_TEMP_DIR/key-b"
+  trap cleanup EXIT
+  if ! cat <&9 >"$CLOUD_SMOKE_API_SMOKE_COPY"; then
+    fail "could not create a private copy of the API smoke script"
+  fi
+  chmod 600 "$CLOUD_SMOKE_API_SMOKE_COPY" ||
+    fail "could not protect the private API smoke script copy"
+  private_copy_digest=$(sha256_file "$CLOUD_SMOKE_API_SMOKE_COPY") ||
+    fail "could not fingerprint the private API smoke script copy"
+  [[ $private_copy_digest == "$api_smoke_digest" ]] ||
+    fail "API smoke script changed while creating the private copy"
 
   actual_number=$(gcloud projects describe "$project" --format='value(projectNumber)')
   [[ $actual_number == "$project_number" ]] || fail "project number does not match"
@@ -160,6 +197,10 @@ main() {
   [[ $verified_dir == "$script_dir" ]] || fail "smoke script path changed during startup"
   same_open_file "$invocation_path" /dev/fd/8 || fail "smoke wrapper changed during startup"
   same_open_file "$script_dir/api_smoke.sh" /dev/fd/9 || fail "API smoke script changed during startup"
+  current_api_smoke_digest=$(sha256_file "$script_dir/api_smoke.sh") ||
+    fail "could not fingerprint the reviewed API smoke script"
+  [[ $current_api_smoke_digest == "$api_smoke_digest" ]] ||
+    fail "API smoke script contents changed during startup"
 
   api_url=$(gcloud run services describe "sai-$environment-api" \
     --project "$project" \
@@ -167,12 +208,6 @@ main() {
     --format='value(status.url)')
   [[ $api_url == https://*.run.app ]] || fail "Cloud Run API URL is missing or unexpected"
 
-  CLOUD_SMOKE_PROJECT=$project
-  CLOUD_SMOKE_DATABASE="sai-$environment"
-  CLOUD_SMOKE_TEMP_DIR=$(mktemp -d -t sai-cloud-smoke.XXXXXX)
-  CLOUD_SMOKE_KEY_FILE_A="$CLOUD_SMOKE_TEMP_DIR/key-a"
-  CLOUD_SMOKE_KEY_FILE_B="$CLOUD_SMOKE_TEMP_DIR/key-b"
-  trap cleanup EXIT
   export UV_PROJECT_ENVIRONMENT="$CLOUD_SMOKE_TEMP_DIR/venv"
   "$CLOUD_SMOKE_UV_BIN" sync --locked --all-packages --no-dev
 
@@ -215,7 +250,7 @@ main() {
 
   SMOKE_API_KEY_A="$CLOUD_SMOKE_API_KEY_A" \
   SMOKE_API_KEY_B="$CLOUD_SMOKE_API_KEY_B" \
-    "$BASH" /dev/fd/9 \
+    "$BASH" "$CLOUD_SMOKE_API_SMOKE_COPY" \
     "$api_url" "$smoke_id"
 
   revoke_key "$CLOUD_SMOKE_API_KEY_A"
