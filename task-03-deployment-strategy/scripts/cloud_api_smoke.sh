@@ -27,6 +27,43 @@ require_tool() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
 }
 
+canonical_directory() {
+  local path=$1 parent marker=$'\034' resolved
+  if [[ $path == */* ]]; then
+    parent=${path%/*}
+    [[ -n $parent ]] || parent=/
+  else
+    parent=.
+  fi
+  if ! resolved=$(cd -P -- "$parent" && pwd -P && printf '%s' "$marker"); then
+    fail "could not resolve the smoke script directory"
+  fi
+  resolved=${resolved%$marker}
+  resolved=${resolved%$'\n'}
+  printf '%s' "$resolved"
+}
+
+resolve_script_directory() {
+  local script_path=$1 script_dir target marker=$'\034' hops=0
+  while [[ -h $script_path ]]; do
+    hops=$((hops + 1))
+    ((hops <= 40)) || fail "smoke script symlink chain is too long"
+    script_dir=$(canonical_directory "$script_path")
+    if ! target=$(readlink -n "$script_path" && printf '%s' "$marker"); then
+      fail "could not read the smoke script symlink"
+    fi
+    target=${target%$marker}
+    [[ -n $target ]] || fail "smoke script symlink target is empty"
+    if [[ $target == /* ]]; then
+      script_path=$target
+    else
+      script_path=$script_dir/$target
+    fi
+  done
+  [[ -f $script_path ]] || fail "resolved smoke script is not a regular file"
+  canonical_directory "$script_path"
+}
+
 revoke_key() {
   local key=$1
   [[ -n $key ]] || return 0
@@ -81,7 +118,7 @@ cleanup() {
 main() {
   [[ $# -eq 5 ]] || { usage >&2; exit 2; }
   local project=$1 region=$2 environment=$3 project_number=$4 smoke_id=$5
-  local actual_number api_url repository_root script_dir script_path
+  local actual_number api_url invocation_path repository_root script_dir verified_dir
 
   [[ $project =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || fail "invalid project id"
   [[ $region =~ ^[a-z]+-[a-z]+[0-9]$ ]] || fail "invalid region"
@@ -94,18 +131,17 @@ main() {
     require_tool "$tool"
   done
 
+  invocation_path=${BASH_SOURCE[0]}
+  script_dir=$(resolve_script_directory "$invocation_path")
+  repository_root=$(cd "$script_dir/../.." && pwd -P)
+  [[ -x $script_dir/api_smoke.sh ]] || fail "reviewed API smoke script is missing"
+  cd "$repository_root"
+
   actual_number=$(gcloud projects describe "$project" --format='value(projectNumber)')
   [[ $actual_number == "$project_number" ]] || fail "project number does not match"
+  verified_dir=$(resolve_script_directory "$invocation_path")
+  [[ $verified_dir == "$script_dir" ]] || fail "smoke script path changed during startup"
 
-  script_path=${BASH_SOURCE[0]}
-  while [[ -h $script_path ]]; do
-    script_dir=$(cd -P "$(dirname "$script_path")" && pwd)
-    script_path=$(readlink "$script_path")
-    [[ $script_path == /* ]] || script_path=$script_dir/$script_path
-  done
-  script_dir=$(cd -P "$(dirname "$script_path")" && pwd)
-  repository_root=$(cd "$script_dir/../.." && pwd -P)
-  cd "$repository_root"
   api_url=$(gcloud run services describe "sai-$environment-api" \
     --project "$project" \
     --region "$region" \
