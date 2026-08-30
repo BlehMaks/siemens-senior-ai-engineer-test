@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import errno
 import os
 import stat
@@ -653,14 +654,44 @@ def test_permission_repair_preserves_rebound_foreign_directory(
     assert not (quarantine / "owned").exists()
 
 
-def test_linux_without_renameat2_symbol_uses_noreplace_fallback(
+def test_linux_without_renameat2_symbol_uses_raw_syscall(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "source"
     destination = tmp_path / "destination"
     source.write_bytes(b"source")
+
+    class FakeSyscall:
+        restype: type[ctypes.c_long] | None = None
+
+        def __call__(
+            self,
+            number: int,
+            source_descriptor: int,
+            source_pointer: ctypes.c_char_p,
+            destination_descriptor: int,
+            destination_pointer: ctypes.c_char_p,
+            flag: int,
+        ) -> int:
+            assert number > 0 and flag == 1
+            source_name = os.fsdecode(source_pointer.value or b"")
+            destination_name = os.fsdecode(destination_pointer.value or b"")
+            os.rename(
+                source_name,
+                destination_name,
+                src_dir_fd=source_descriptor,
+                dst_dir_fd=destination_descriptor,
+            )
+            return 0
+
+    fake_syscall = FakeSyscall()
+    fake_libc = type("FakeLibc", (), {"syscall": fake_syscall})()
     monkeypatch.setattr(key_admin.sys, "platform", "linux")
-    monkeypatch.setattr(key_admin.ctypes, "CDLL", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        key_admin.ctypes,
+        "CDLL",
+        lambda *args, **kwargs: fake_libc,
+    )
     descriptor = os.open(tmp_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         assert key_admin._rename_noreplace(
@@ -674,6 +705,45 @@ def test_linux_without_renameat2_symbol_uses_noreplace_fallback(
 
     assert not source.exists()
     assert destination.read_bytes() == b"source"
+
+
+def test_unsupported_linux_syscall_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.write_bytes(b"source")
+
+    class UnsupportedSyscall:
+        restype: type[ctypes.c_long] | None = None
+
+        def __call__(self, *args: object) -> int:
+            del args
+            ctypes.set_errno(errno.ENOSYS)
+            return -1
+
+    fake_libc = type("FakeLibc", (), {"syscall": UnsupportedSyscall()})()
+    monkeypatch.setattr(key_admin.sys, "platform", "linux")
+    monkeypatch.setattr(
+        key_admin.ctypes,
+        "CDLL",
+        lambda *args, **kwargs: fake_libc,
+    )
+    descriptor = os.open(tmp_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        with pytest.raises(OSError) as raised:
+            key_admin._rename_noreplace(
+                descriptor,
+                source.name,
+                descriptor,
+                destination.name,
+            )
+    finally:
+        os.close(descriptor)
+
+    assert raised.value.errno == errno.ENOTSUP
+    assert source.read_bytes() == b"source"
+    assert not destination.exists()
 
 
 def test_failed_nonblocking_quarantine_open_restores_source(

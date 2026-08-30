@@ -454,12 +454,7 @@ def _linux_syscall_rename_noreplace(
         "x86_64": 316,
     }.get(machine)
     if syscall is None or syscall_number is None:
-        return _link_noreplace_move(
-            source_descriptor,
-            source,
-            destination_descriptor,
-            destination,
-        )
+        raise OSError(errno.ENOTSUP, "no no-replace rename primitive")
 
     syscall.restype = ctypes.c_long
     result = syscall(
@@ -475,43 +470,9 @@ def _linux_syscall_rename_noreplace(
     error = ctypes.get_errno()
     if error == errno.EEXIST:
         return False
+    if error in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP}:
+        raise OSError(errno.ENOTSUP, "no no-replace rename primitive") from None
     raise OSError(error, os.strerror(error))
-
-
-def _link_noreplace_move(
-    source_descriptor: int,
-    source: str,
-    destination_descriptor: int,
-    destination: str,
-) -> bool:
-    try:
-        before = os.stat(source, dir_fd=source_descriptor, follow_symlinks=False)
-        os.link(
-            source,
-            destination,
-            src_dir_fd=source_descriptor,
-            dst_dir_fd=destination_descriptor,
-            follow_symlinks=False,
-        )
-    except FileExistsError:
-        return False
-    except OSError as exc:
-        raise OSError(errno.ENOTSUP, "no no-replace rename primitive") from exc
-
-    source_after = os.stat(source, dir_fd=source_descriptor, follow_symlinks=False)
-    destination_after = os.stat(
-        destination,
-        dir_fd=destination_descriptor,
-        follow_symlinks=False,
-    )
-    identity = (before.st_dev, before.st_ino)
-    if (source_after.st_dev, source_after.st_ino) != identity or (
-        destination_after.st_dev,
-        destination_after.st_ino,
-    ) != identity:
-        raise OSError(errno.ESTALE, "source changed during no-replace move")
-    os.unlink(source, dir_fd=source_descriptor)
-    return True
 
 
 def _chmod_at_resilient(
