@@ -496,6 +496,7 @@ def _python_mask_multiline_strings(source: str) -> str:
     quote: str | None = None
     triple_quote: str | None = None
     fstring_braces = 0
+    fstring_comment = False
     fstring_quote: str | None = None
     fstring_triple_quote: str | None = None
     is_fstring = False
@@ -504,6 +505,13 @@ def _python_mask_multiline_strings(source: str) -> str:
     while cursor < len(source):
         char = source[cursor]
         if triple_quote is not None:
+            if fstring_comment:
+                if char == "\n":
+                    fstring_comment = False
+                else:
+                    masked[cursor] = " "
+                cursor += 1
+                continue
             if fstring_triple_quote is not None:
                 if source.startswith(
                     fstring_triple_quote, cursor
@@ -528,7 +536,9 @@ def _python_mask_multiline_strings(source: str) -> str:
                 cursor += 1
                 continue
             if is_fstring and fstring_braces:
-                if source.startswith(('"""', "'''"), cursor):
+                if char == "#":
+                    fstring_comment = True
+                elif source.startswith(('"""', "'''"), cursor):
                     fstring_triple_quote = source[cursor : cursor + 3]
                     masked[cursor : cursor + 3] = "   "
                     cursor += 3
@@ -585,6 +595,7 @@ def _python_mask_multiline_strings(source: str) -> str:
             triple_quote = source[cursor : cursor + 3]
             is_fstring = _python_string_is_f_prefixed(source, cursor)
             fstring_braces = 0
+            fstring_comment = False
             fstring_quote = None
             fstring_triple_quote = None
             masked[cursor : cursor + 3] = "   "

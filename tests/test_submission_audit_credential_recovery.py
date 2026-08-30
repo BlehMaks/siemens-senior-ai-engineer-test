@@ -112,3 +112,16 @@ def test_fstring_expression_delimiter_does_not_expose_string_body() -> None:
     ).encode()
 
     assert not _contains_credential_assignment("config.py", source)
+
+
+def test_fstring_comment_quote_does_not_hide_later_tuple_assignment() -> None:
+    predicate = "not " * 10_000 + "False"
+    source = (
+        'documentation = f"""{(\n'
+        "    1  # apostrophe: '\n"
+        ')}\nexample text\n"""\n'
+        'token, marker = "12345678", runtime_marker\n'
+        f"probe = {predicate}\n"
+    ).encode()
+
+    assert _contains_credential_assignment("config.py", source)
