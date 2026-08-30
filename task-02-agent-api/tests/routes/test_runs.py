@@ -187,6 +187,7 @@ async def test_submit_persists_run_and_work_before_get(run_context: RunContext) 
         "updated_at": "2026-08-27T10:00:00Z",
         "terminal_at": None,
         "cancellation_requested": False,
+        "memory_used": False,
         "answer": None,
         "failure": None,
     }
