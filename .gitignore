@@ -43,3 +43,7 @@ build/
 **/.terraform/
 *.tfstate
 *.tfstate.*
+
+# Retained local Terraform review copies; intentionally outside the submission.
+task-03-deployment-strategy/terraform/**/* 2.*
+task-03-deployment-strategy/terraform/**/adversarial_*.tftest.hcl
