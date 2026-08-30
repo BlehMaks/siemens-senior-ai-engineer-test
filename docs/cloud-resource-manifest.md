@@ -50,9 +50,10 @@ identity needs `roles/run.viewer` on the project,
 these three grants. An existing project owner already has the required
 permissions; a separate smoke operator should receive only this access.
 
-The linked billing account must use EUR because the test budget is fixed at EUR
-5. The operator supplies its ID and a monitored human mailbox before the first
-plan. Service-account addresses are rejected.
+The linked billing account must use EUR because the assessment budget uses that
+currency. Before the first plan, the operator supplies the account ID, a
+positive whole-number alert amount, and a monitored human mailbox.
+Service-account addresses are rejected.
 
 ## Google Cloud entities
 
@@ -71,7 +72,7 @@ plan. Service-account addresses are rejected.
 | Cloud Run services | `sai-dev-api`, `sai-dev-worker` | Both scale to zero and are capped at one instance in the test cell |
 | Logging bucket | `assessment-app` | Regional application logs with 30-day retention |
 | Monitoring channel | One channel per configured email | Recipients are explicit bootstrap inputs |
-| Billing budget | `sai-dev-assessment-budget` | EUR 5 project budget with 20%, 50%, 80%, and 100% alerts |
+| Billing budget | `sai-dev-assessment-budget` | Operator-selected project alert budget with 20%, 50%, 80%, and 100% alerts |
 | Project custom role | `sai_dev_terraform_deployer` | Database and named Cloud Run lifecycle operations not covered by the selected predefined roles |
 | GitHub branch protection | `master` | Rejects deletion, force pushes, and non-linear history, including for administrators |
 
@@ -94,11 +95,12 @@ storage.googleapis.com
 sts.googleapis.com
 ```
 
-The EUR 5 budget is an alerting boundary, not a payment hard stop. The actual
-spend guard comes from scale-to-zero, one-instance maxima, the queue rate limit,
-short retention, and a small smoke workload. The bootstrap refuses to report a
-successful deployment if the budget or instance limits are missing from the
-applied Terraform state.
+The budget is an alerting boundary, not a payment hard stop. The operator keeps
+the amount outside the repository and chooses it for the target account. The
+assessment runtime also uses scale-to-zero, one-instance maxima, a queue rate
+limit, short retention, and a small smoke workload. The bootstrap refuses to
+report a successful deployment if the configured budget or instance limits are
+missing from the applied Terraform state.
 
 ## IAM grants made by Terraform
 
@@ -166,6 +168,7 @@ writes these Environment variables:
 ```text
 GCP_API_SERVICE_ACCOUNT
 GCP_BILLING_ACCOUNT_ID
+GCP_BUDGET_AMOUNT_UNITS
 GCP_BUDGET_NOTIFICATION_EMAILS
 GCP_DEPLOYER_SERVICE_ACCOUNT
 GCP_PROJECT_ID

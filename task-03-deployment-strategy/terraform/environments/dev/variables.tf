@@ -41,13 +41,12 @@ variable "budget_notification_emails" {
 }
 
 variable "budget_amount_units" {
-  description = "Test deployment budget in whole EUR units."
+  description = "Operator-selected test deployment alert budget in whole EUR units."
   type        = number
-  default     = 5
 
   validation {
-    condition     = floor(var.budget_amount_units) == var.budget_amount_units && var.budget_amount_units >= 1 && var.budget_amount_units <= 5
-    error_message = "The dev budget must be a whole number from 1 through 5 EUR."
+    condition     = floor(var.budget_amount_units) == var.budget_amount_units && var.budget_amount_units > 0
+    error_message = "The dev alert budget must be a positive whole number."
   }
 }
 

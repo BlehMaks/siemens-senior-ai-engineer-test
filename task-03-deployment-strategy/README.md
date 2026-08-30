@@ -18,7 +18,7 @@ The assessment profile uses:
 - Firestore for durable application state;
 - Secret Manager for runtime secrets;
 - Artifact Registry for digest-pinned images;
-- Cloud Logging, monitoring, and a EUR 5 test budget;
+- Cloud Logging, monitoring, and an operator-selected test alert budget;
 - GitHub Actions with Workload Identity Federation for keyless delivery.
 
 The LLM engine is not deployed. Deterministic fake inference is the CI and cloud

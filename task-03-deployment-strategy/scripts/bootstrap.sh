@@ -13,6 +13,7 @@ Usage:
 
 Required environment:
   GCP_BILLING_ACCOUNT_ID           Linked billing account ID
+  GCP_BUDGET_AMOUNT_UNITS          Positive whole-number alert budget
   GCP_BUDGET_NOTIFICATION_EMAILS   Monitored addresses as a JSON array
 
 Optional environment:
@@ -33,6 +34,8 @@ require_tool() {
 resolve_budget_coordinates() {
   [[ ${GCP_BILLING_ACCOUNT_ID:-} =~ ^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$ ]] ||
     fail "GCP_BILLING_ACCOUNT_ID must be the linked billing account ID"
+  [[ ${GCP_BUDGET_AMOUNT_UNITS:-} =~ ^[1-9][0-9]*$ ]] ||
+    fail "GCP_BUDGET_AMOUNT_UNITS must be a positive whole number"
   resolved_budget_notification_emails=$(jq -cer '
     if type == "array"
       and length > 0
@@ -121,12 +124,12 @@ verify_application_cost_controls() {
   managed_services=$("$TERRAFORM_BIN" -chdir="$application_root" output -json managed_services)
   execution_plane=$("$TERRAFORM_BIN" -chdir="$application_root" output -json execution_plane)
 
-  jq -e '
+  jq -e --arg amount "$GCP_BUDGET_AMOUNT_UNITS" '
     .budget.enabled == true and
     .budget.currency_code == "EUR" and
-    .budget.amount_units == "5" and
+    .budget.amount_units == $amount and
     .budget.threshold_rules == [0.2, 0.5, 0.8, 1]
-  ' <<<"$managed_services" >/dev/null || fail "the deployed EUR 5 budget guard is missing"
+  ' <<<"$managed_services" >/dev/null || fail "the deployed alert-budget guard is missing"
   jq -e '
     .api_service.min_instances == 0 and
     .api_service.max_instances == 1 and
@@ -291,6 +294,7 @@ main() {
   export TF_VAR_api_allow_unauthenticated=true
   export TF_VAR_secret_ids='{"api_key_pepper":"sai-dev-api-key-pepper","task_signing_hmac":"sai-dev-task-signing-hmac"}'
   export TF_VAR_billing_account_id=$GCP_BILLING_ACCOUNT_ID
+  export TF_VAR_budget_amount_units=$GCP_BUDGET_AMOUNT_UNITS
   export TF_VAR_budget_notification_emails=$resolved_budget_notification_emails
 
   BOOTSTRAP_TEMP_DIR=$(mktemp -d -t sai-bootstrap.XXXXXX)

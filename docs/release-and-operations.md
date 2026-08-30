@@ -108,16 +108,20 @@ makes the interrupted apply idempotent. See GitHub's current
 [Environment plan matrix](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/review-deployments)
 and [branch protection plan matrix](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/managing-a-branch-protection-rule).
 
-The linked billing account must use EUR. Supply its ID and at least one monitored
-human mailbox before planning:
+The linked billing account must use EUR. Supply its ID, the private alert amount,
+and at least one monitored human mailbox before planning:
 
 ```bash
 export GCP_BILLING_ACCOUNT_ID=ABCDEF-123456-ABCDEF
+read -r -p "Alert budget in whole EUR: " GCP_BUDGET_AMOUNT_UNITS
+export GCP_BUDGET_AMOUNT_UNITS
 export GCP_BUDGET_NOTIFICATION_EMAILS='["operator@example.com"]'
 ```
 
-The wrapper validates both values before Terraform creates anything. It rejects
-service-account mailboxes and addresses without a complete domain.
+The wrapper validates all three values before Terraform creates anything. It
+rejects non-positive or fractional amounts, service-account mailboxes, and
+addresses without a complete domain. Keep the chosen amount in the operator's
+private environment or secret manager; do not commit it to the repository.
 
 ## What the bootstrap manages
 
@@ -217,8 +221,8 @@ SHA with GitHub's resolved `master`; if the branch moved, the correlated run
 fails before tests, credentials, or deployment. The wrapper watches that exact
 run and reports the failure instead of following another revision.
 
-The wrapper uses the explicit billing account and alert recipients supplied by
-the operator. The dev stack creates a EUR 5 budget with early alerts. Both Cloud
+The wrapper uses the billing account, alert amount, and recipients supplied by
+the operator. The dev stack creates that budget with early alerts. Both Cloud
 Run services scale to zero and have a
 one-instance maximum; the queue accepts one concurrent delivery. After CI
 finishes, the wrapper reads the applied Terraform state and refuses success if

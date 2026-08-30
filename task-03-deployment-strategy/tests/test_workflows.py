@@ -97,6 +97,10 @@ def test_remote_state_and_secret_container_inputs_fail_closed() -> None:
         assert "-backend-config=bucket=$TF_STATE_BUCKET" in source
         assert "-backend-config=prefix=assessment/dev" in source
         assert "TF_VAR_secret_ids: ${{ vars.GCP_SECRET_IDS }}" in source
+        assert (
+            "TF_VAR_budget_amount_units: ${{ vars.GCP_BUDGET_AMOUNT_UNITS }}" in source
+        )
+        assert "TF_VAR_budget_amount_units must be a positive whole number" in source
         assert 'and (keys | sort) == ["api_key_pepper", "task_signing_hmac"]' in source
         assert "expected exactly two non-empty secret container IDs" in source
 

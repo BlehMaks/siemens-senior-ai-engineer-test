@@ -455,5 +455,6 @@ def test_github_environment_and_delivery_variables_are_terraform_managed() -> No
         "GCP_WORKER_SERVICE_ACCOUNT",
         "GCP_TASKS_SERVICE_ACCOUNT",
         "GCP_SECRET_IDS",
+        "GCP_BUDGET_AMOUNT_UNITS",
     }:
         assert variable in locals_tf

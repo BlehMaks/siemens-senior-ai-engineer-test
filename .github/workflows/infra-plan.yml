@@ -45,6 +45,7 @@ jobs:
       TF_VAR_deployer_service_account_email: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
       TF_VAR_secret_ids: ${{ vars.GCP_SECRET_IDS }}
       TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT_ID }}
+      TF_VAR_budget_amount_units: ${{ vars.GCP_BUDGET_AMOUNT_UNITS }}
       BUDGET_NOTIFICATION_EMAILS: ${{ vars.GCP_BUDGET_NOTIFICATION_EMAILS }}
       TF_VAR_image_digest: ${{ inputs.image_digest }}
       TF_VAR_ingress_mode: ${{ inputs.ingress_mode }}
@@ -71,13 +72,18 @@ jobs:
             TF_VAR_worker_service_account_email \
             TF_VAR_tasks_service_account_email \
             TF_VAR_deployer_service_account_email \
-            TF_VAR_secret_ids
+            TF_VAR_secret_ids \
+            TF_VAR_budget_amount_units
           do
             if [[ -z "${!variable}" ]]; then
               echo "$variable is required" >&2
               exit 1
             fi
           done
+          if [[ ! "$TF_VAR_budget_amount_units" =~ ^[1-9][0-9]*$ ]]; then
+            echo "TF_VAR_budget_amount_units must be a positive whole number" >&2
+            exit 1
+          fi
 
       - name: Validate secret container IDs
         shell: bash

@@ -19,7 +19,7 @@ payloads, or credential files.
   `sai-dev` database.
 
 The scripts reject non-`dev` targets. Normal preflight and smoke traffic should cost
-well below one euro. The EUR 5 project budget alerts the operator; the runtime and
+small. The operator-selected project budget sends alerts; the runtime and
 queue caps are the controls that bound demand because a budget does not stop spend.
 
 ## Non-destructive preflight and budget check

@@ -30,9 +30,10 @@ def test_bootstrap_routes_all_cloud_mutations_through_terraform() -> None:
     assert "output -raw project_number" in source
     assert "resolve_budget_coordinates" in source
     assert "GCP_BILLING_ACCOUNT_ID must be the linked billing account ID" in source
+    assert "GCP_BUDGET_AMOUNT_UNITS must be a positive whole number" in source
     assert "GCP_BUDGET_NOTIFICATION_EMAILS" in source
     assert "verify_application_cost_controls" in source
-    assert '.budget.amount_units == "5"' in source
+    assert ".budget.amount_units == $amount" in source
     assert ".api_service.max_instances == 1" in source
     assert ".worker_service.max_instances == 1" in source
     assert '-f "dispatch_id=$dispatch_id"' in source

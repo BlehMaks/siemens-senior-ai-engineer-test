@@ -6,6 +6,7 @@ variables {
   project_id                     = "contract-assignment-dev"
   project_number                 = "123456789012"
   billing_account_id             = "ABC123-DEF456-GHI789"
+  budget_amount_units            = 7
   budget_notification_emails     = ["cloud-budgets@example.com"]
   api_service_account_email      = "sai-dev-api@contract-assignment-dev.iam.gserviceaccount.com"
   worker_service_account_email   = "sai-dev-worker@contract-assignment-dev.iam.gserviceaccount.com"
@@ -18,13 +19,13 @@ run "dev_environment_plans_with_reviewed_contract" {
   command = plan
 
   assert {
-    condition     = output.managed_services.budget.amount_units == "5"
-    error_message = "The test environment must keep its billing alert at EUR 5."
+    condition     = output.managed_services.budget.amount_units == "7"
+    error_message = "The test environment must preserve the operator-selected alert budget."
   }
 
   assert {
     condition     = jsonencode(output.managed_services.budget.threshold_rules) == jsonencode([0.2, 0.5, 0.8, 1.0])
-    error_message = "The test environment must alert before exhausting EUR 5."
+    error_message = "The test environment must retain its early alert thresholds."
   }
 
   assert {

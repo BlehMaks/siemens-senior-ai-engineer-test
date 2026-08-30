@@ -40,6 +40,7 @@ locals {
   github_environment_variables = var.enable_github_wif ? {
     GCP_API_SERVICE_ACCOUNT        = module.identity["api"].email
     GCP_BILLING_ACCOUNT_ID         = var.billing_account_id
+    GCP_BUDGET_AMOUNT_UNITS        = tostring(var.budget_amount_units)
     GCP_BUDGET_NOTIFICATION_EMAILS = jsonencode(sort(tolist(var.budget_notification_emails)))
     GCP_DEPLOYER_SERVICE_ACCOUNT   = module.deployer_identity.email
     GCP_PROJECT_ID                 = var.project_id

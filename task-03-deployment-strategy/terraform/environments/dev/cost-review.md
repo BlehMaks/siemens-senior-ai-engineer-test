@@ -3,10 +3,11 @@
 The default `dev` posture stays intentionally close to the assignment's
 low-cost assessment target.
 
-## Default alert budget
+## Alert budget
 
-- Cloud Billing budget: EUR 5. The wrapper supplies the linked billing account,
-  project number, and a monitored email recipient.
+- The operator chooses a positive whole-number amount outside the repository.
+  The wrapper supplies it with the linked billing account, project number, and a
+  monitored email recipient.
 - Thresholds: 20%, 50%, 80%, 100%.
 - Default IAM recipients are disabled to avoid broad accidental mail fan-out.
 

@@ -2,6 +2,7 @@ project_id         = "example-assignment-dev"
 region             = "europe-west3"
 environment        = "dev"
 system_code        = "sai"
+# Set TF_VAR_budget_amount_units in the operator's private environment.
 bootstrap_state_bucket_name   = "example-assignment-dev-sai-bootstrap-tf-state"
 application_state_bucket_name = "example-assignment-dev-sai-app-tf-state"
 secret_ids = {

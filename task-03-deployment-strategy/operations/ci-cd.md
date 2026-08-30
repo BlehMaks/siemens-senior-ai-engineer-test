@@ -99,10 +99,10 @@ The bootstrap is safe to rerun after a partial failure. Terraform reuses remote
 state, keeps existing secret versions, and dispatches deployment only after
 verification succeeds.
 
-The operator supplies the linked billing account and alert recipients explicitly.
+The operator supplies the linked billing account, alert amount, and recipients explicitly.
 Terraform grants the deployer
-`roles/billing.costsManager` on that account and creates the EUR 5 alert during
+`roles/billing.costsManager` on that account and creates the selected alert during
 the application apply. Before any mutation, the wrapper rejects malformed
-billing IDs and service-account or incomplete recipient addresses. The operator
-must already have billing-account administration permission for the first
-bootstrap.
+billing IDs, invalid amounts, and service-account or incomplete recipient
+addresses. The operator must already have billing-account administration
+permission for the first bootstrap.

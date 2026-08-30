@@ -32,7 +32,7 @@ The main bootstrap creates or configures:
   exists;
 - the authenticated Cloud Tasks queue and its OIDC caller policy;
 - application-state access for the deployer, with no bootstrap-state access;
-- a billing-account-scoped budget role for the EUR 5 dev alert.
+- a billing-account-scoped role for the operator-selected dev budget alert.
 
 The application root owns the Cloud Run services. Bootstrap owns their
 post-deploy invoker policy and grants the deployer only the lifecycle operations
@@ -56,6 +56,10 @@ gcloud auth application-default login
 gcloud auth application-default set-quota-project siemens-senior-ai-engineer
 
 export TERRAFORM_BIN=/absolute/path/to/terraform
+export GCP_BILLING_ACCOUNT_ID=ABCDEF-123456-ABCDEF
+read -r -p "Alert budget in whole EUR: " GCP_BUDGET_AMOUNT_UNITS
+export GCP_BUDGET_AMOUNT_UNITS
+export GCP_BUDGET_NOTIFICATION_EMAILS='["operator@example.com"]'
 
 ./task-03-deployment-strategy/scripts/bootstrap.sh plan \
   PROJECT_ID OWNER/REPOSITORY REVIEWER REGION
@@ -74,7 +78,7 @@ export TERRAFORM_BIN=/absolute/path/to/terraform
 `apply` creates and verifies the bootstrap. `verify` requires a no-drift plan and
 checks the GitHub output and queue. `deploy` does the same work as `apply`, then
 dispatches `deploy.yml` only when local `HEAD` equals remote `master`; after the
-workflow it verifies the EUR 5 budget and one-instance Cloud Run caps from
+workflow it verifies the operator-selected budget and one-instance Cloud Run caps from
 application state. The dispatch carries that verified SHA, and the workflow
 fails before cloud authentication if GitHub resolves `master` to another commit.
 
@@ -96,6 +100,7 @@ needed for the first bootstrap, and GitHub may require that person to approve th
 protected deployment. Account creation, billing setup, MFA, terms, and corporate
 policy decisions are outside Terraform's authority. Repository visibility and a
 GitHub plan that supports the protected delivery boundary are also manual
-prerequisites. The billing account must use EUR, and the alert recipient must be
-a monitored human mailbox with a complete domain. The wrapper validates both
-before Terraform changes either platform.
+prerequisites. The billing account must use EUR. The amount must be a positive
+whole number, and the alert recipient must be a monitored human mailbox with a
+complete domain. The wrapper validates these inputs before Terraform changes
+either platform.

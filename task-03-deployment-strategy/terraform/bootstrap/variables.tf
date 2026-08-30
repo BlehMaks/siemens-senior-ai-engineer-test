@@ -217,6 +217,16 @@ variable "billing_account_id" {
   }
 }
 
+variable "budget_amount_units" {
+  description = "Operator-selected assessment alert budget in whole EUR units."
+  type        = number
+
+  validation {
+    condition     = floor(var.budget_amount_units) == var.budget_amount_units && var.budget_amount_units > 0
+    error_message = "budget_amount_units must be a positive whole number."
+  }
+}
+
 variable "budget_notification_emails" {
   description = "Optional budget recipients copied into the protected GitHub environment."
   type        = set(string)

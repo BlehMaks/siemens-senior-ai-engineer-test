@@ -41,9 +41,9 @@ is committed.
 - the deployer gets repository-scoped `roles/artifactregistry.writer`;
 - secret containers and the log bucket stay in the configured region;
 - the log bucket keeps 30 days of redacted application logs;
-- the wrapper supplies the linked billing account and a monitored recipient; the
-  dev root creates a EUR 5 budget, alerts at 20%, 50%, 80%, and 100%, and disables
-  broad default-IAM recipients;
+- the wrapper supplies the linked billing account, a positive whole-number alert
+  amount, and a monitored recipient; the dev root creates that budget, alerts at
+  20%, 50%, 80%, and 100%, and disables broad default-IAM recipients;
 - API and worker both scale to zero and are capped at one instance;
 - `model_plane_profile` is fixed to `assessment`; this root cannot create GPU or
   model-serving resources. The optional production root is validated separately;
