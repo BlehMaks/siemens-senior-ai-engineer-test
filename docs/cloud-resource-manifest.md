@@ -9,9 +9,9 @@ The wrapper and deployment workflow use Terraform for every Google Cloud create,
 read, update, and verification step. The Google Cloud CLI is not part of the
 deployment path.
 
-The separate production model-plane root is disabled by default and is not part
-of the Tasks 1 to 3 test apply. Its optional entities and roles are listed below
-so they can be reviewed before a later production plan.
+The production roots are disabled by default and are not part of the Tasks 1 to 3
+test apply. Their optional entities and roles are listed below so they can be
+reviewed before a later production plan.
 
 ## Access needed before the first run
 
@@ -184,12 +184,21 @@ GCP_WORKLOAD_IDENTITY_PROVIDER
 These are identifiers, not credentials. GitHub receives no service-account key
 and no Secret Manager payload.
 
-## Optional production model plane
+## Optional production inference
 
 `terraform/environments/production-model-plane` defaults to `assessment` and
 creates nothing. Setting `model_plane_profile = "cloud_run_gpu"` is a separate
 production action. The normal `gcp-dev` workflows set the assessment value
 directly, so they cannot create GPU capacity.
+
+`terraform/environments/production` is the end-to-end alternative. It composes
+the managed services, hardened ingress, API/worker execution plane, and the same
+private GPU model module in one state. Its worker is configured with
+`AGENT_API_INFERENCE_MODE=ollama`, `AGENT_MODEL_TRANSPORT_PROFILE=cloud`, the
+model service URI, a matching ID-token audience, an approved model name, bounded
+search backends, and structured action-log level. The root has no automatic
+apply workflow and requires operator-supplied immutable images, budget controls,
+GPU capacity, identities, secrets, and remote state.
 
 The production apply creates these additional entities:
 
@@ -197,7 +206,7 @@ The production apply creates these additional entities:
 |---|---|---|
 | Service account | `sai-prod-model` | Runtime identity for model serving; it receives no project role by default |
 | Cloud Run GPU service | `sai-prod-model` | Private Ollama-compatible model backend with one L4 GPU per instance |
-| Remote-state prefix | `production/model-plane` | Separate state inside the supplied production state bucket |
+| Remote-state prefix | `production/model-plane` or operator-selected production-cell prefix | Separate state inside the supplied production state bucket |
 
 Terraform grants `roles/iam.serviceAccountUser` on `sai-prod-model` to the
 specified deployer and `roles/run.invoker` on the model service to the specified

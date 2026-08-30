@@ -10,6 +10,29 @@ No production code was changed during the analysis that produced this document.
 Before implementing anything, re-check the referenced code because the repository
 may have evolved.
 
+## Implementation update — 2026-08-31
+
+The repository has now implemented the plan's minimum production-quality slice:
+
+- bounded HTML, XHTML, plain-text, and isolated-subprocess PDF extraction with
+  structural page/section/table blocks and typed failure reasons;
+- normalized research documents, deterministic structural chunks, exact mirror
+  removal, and lexical/exact-term/authority/freshness ranking;
+- global bounded top-k selection before synthesis, while the existing evidence and
+  citation validators remain the final support boundary;
+- typed `auto`/DuckDuckGo search attempts and bounded fallback without increasing
+  query or result budgets;
+- bounded same-session conversation context treated explicitly as untrusted data;
+- live privacy-safe action records plus v2 persisted reflections with v1 read
+  compatibility and citation-backed verified-claim summaries;
+- explicit local and cloud model transport profiles, including an end-to-end
+  private Cloud Run Ollama-to-worker Terraform composition.
+
+This closes the P0 implementation slice described below; it does not turn every
+later recommendation into a shipped feature. Browser rendering, OCR, embeddings,
+rerankers, distributed content caches, multi-cell topology, and production load/SLO
+evidence remain gated extensions that should be added only after measured need.
+
 ## Scope
 
 The source principles apply differently across the six assignment tasks:

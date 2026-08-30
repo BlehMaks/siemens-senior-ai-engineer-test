@@ -229,11 +229,11 @@ finishes, the wrapper reads the applied Terraform state and refuses success if
 those limits are absent. A Google Cloud budget sends alerts but does not stop
 charges by itself.
 
-## Production model-plane reference
+## Production inference references
 
 The assessment deployment above always sets
 `TF_VAR_model_plane_profile=assessment`; it cannot create an LLM service. A
-separate root and wrapper are included for the production design:
+separate model-only root and wrapper are included for gateway-oriented designs:
 
 ```bash
 cp task-03-deployment-strategy/terraform/environments/production-model-plane/terraform.tfvars.example \
@@ -266,6 +266,28 @@ the production cell's load test, latency and availability targets, regional
 quota, and approved cost model before planning. Assessment budgets and capacity
 settings do not carry into this root. Do not run this apply for the assignment
 smoke test.
+
+For an end-to-end Cloud Run cell, use the production root instead. It directly
+wires the private model URI and Google ID-token audience into the real worker:
+
+```bash
+cp task-03-deployment-strategy/terraform/environments/production/terraform.tfvars.example \
+  /absolute/private/path/production-cell.tfvars
+
+terraform -chdir=task-03-deployment-strategy/terraform/environments/production init \
+  -reconfigure \
+  -backend-config="bucket=PRODUCTION_TERRAFORM_STATE_BUCKET" \
+  -backend-config="prefix=production/cell"
+
+terraform -chdir=task-03-deployment-strategy/terraform/environments/production plan \
+  -input=false \
+  -var-file=/absolute/private/path/production-cell.tfvars
+```
+
+Review every placeholder and the same cost, quota, license, data, residency,
+load, recovery, and SLO gates before an apply. This root is intentionally absent
+from the assessment GitHub workflow, so a dev deployment cannot create paid GPU
+capacity accidentally.
 
 Run the bounded cloud smoke after the workflow succeeds:
 
