@@ -1055,6 +1055,16 @@ class ResearchRunner:
                 bytes_count=selected_context.total_characters,
             ),
         )
+        for chunk in selected_context.chunks:
+            self._record(
+                trace,
+                ActionTraceRecord(
+                    stage=TraceStage.RANK,
+                    action="rank.chunk",
+                    outcome=TraceOutcome.SUCCEEDED,
+                    safe_id=chunk.chunk_id,
+                ),
+            )
 
         records: list[EvidenceRecord] = []
         for hit, extracted, research_document, retrieved_at in documents:

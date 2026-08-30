@@ -402,7 +402,7 @@ class LocalWorker:
             history = await list_recent(
                 tenant_id=run.tenant_id,
                 session_id=run.session_id,
-                limit=7,
+                limit=100,
             )
         else:
             history = await self._repository.list_session(
