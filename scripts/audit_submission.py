@@ -55,7 +55,7 @@ _CREDENTIAL_ASSIGNMENT_BODY = (
     r"(?:(?:export|local|readonly|declare|typeset)"
     r"(?:[ \t]+(?:--|-[A-Za-z]+))*[ \t]+)?"
     r"(?P<key_quote>[\"']?)(?P<key>[A-Za-z0-9_.-]*"
-    r"(?:api[_-]?key|password|secret|token))(?P=key_quote)"
+    r"(?:api[_-]?key|password|secret|token|credential))(?P=key_quote)"
     r"(?:\[[^\]\r\n]+\])?[ \t]*(?::|\+?=)"
 )
 CREDENTIAL_ASSIGNMENT = re.compile(
@@ -84,7 +84,9 @@ SHELL_INTERPOLATION = re.compile(
     r"`[^`\r\n]+`"
     r")"
 )
-TEMPLATE_INTERPOLATION = re.compile(r"(?<!\$)\$\{[^{}\r\n]+\}")
+TEMPLATE_INTERPOLATION = re.compile(
+    r"(?<!\$)(?:\$\{\{[^{}\r\n]+\}\}|\$\{[^{}\r\n]+\})"
+)
 TERRAFORM_INTERPOLATION = TEMPLATE_INTERPOLATION
 BRACED_INTERPOLATION = re.compile(r"\{[A-Za-z_][^{}\r\n]*\}")
 PYTHON_REFERENCE = r"[A-Za-z_][A-Za-z0-9_.]*(?:\[[^\]\r\n]+\])*"
@@ -291,6 +293,10 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
             # for syntactically incomplete Python files and protects its regressions.
             _contains_credential_assignment_linewise(path, content)
             return parsed
+        for line in _decode_python_source(content).splitlines():
+            recovered = _python_contains_credential_assignment(line.encode())
+            if recovered:
+                return True
     return _contains_credential_assignment_linewise(path, content)
 
 
@@ -473,7 +479,11 @@ def _python_contains_credential_assignment(content: bytes) -> bool | None:
 
 def _python_name_is_credential(name: str) -> bool:
     return (
-        re.search(r"(?:api[_-]?key|password|secret|token)$", name, re.IGNORECASE)
+        re.search(
+            r"(?:api[_-]?key|password|secret|token|credential)$",
+            name,
+            re.IGNORECASE,
+        )
         is not None
     )
 
