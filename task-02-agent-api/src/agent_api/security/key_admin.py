@@ -138,6 +138,7 @@ def _write_plaintext_file(path: Path, plaintext: str) -> None:
     directory_descriptor = -1
     descriptor = -1
     created = False
+    expected: tuple[int, int] | None = None
     try:
         directory_descriptor = os.open(
             path.parent,
@@ -152,6 +153,8 @@ def _write_plaintext_file(path: Path, plaintext: str) -> None:
             dir_fd=directory_descriptor,
         )
         created = True
+        opened_stat = os.fstat(descriptor)
+        expected = (opened_stat.st_dev, opened_stat.st_ino)
         os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8", closefd=False) as output:
             output.write(plaintext)
@@ -184,17 +187,21 @@ def _write_plaintext_file(path: Path, plaintext: str) -> None:
             opened_stat.st_ino,
         ) or stat.S_IMODE(final_stat.st_mode) != 0o600:
             raise OSError(errno.ESTALE, "published output identity changed")
-        os.close(descriptor)
+        closing_descriptor = descriptor
         descriptor = -1
+        os.close(closing_descriptor)
     except OSError as exc:
-        expected: tuple[int, int] | None = None
         if descriptor >= 0:
-            with suppress(OSError):
-                opened_stat = os.fstat(descriptor)
-                expected = (opened_stat.st_dev, opened_stat.st_ino)
-            with suppress(OSError):
-                os.ftruncate(descriptor, 0)
-                os.fsync(descriptor)
+            try:
+                current = os.fstat(descriptor)
+                current_identity = (current.st_dev, current.st_ino)
+                if expected is None:
+                    expected = current_identity
+                if current_identity == expected:
+                    os.ftruncate(descriptor, 0)
+                    os.fsync(descriptor)
+            except OSError:
+                pass
         if created and expected is not None:
             _quarantine_owned_output(
                 directory_descriptor,
@@ -202,8 +209,10 @@ def _write_plaintext_file(path: Path, plaintext: str) -> None:
                 expected=expected,
             )
         if descriptor >= 0:
+            closing_descriptor = descriptor
+            descriptor = -1
             with suppress(OSError):
-                os.close(descriptor)
+                os.close(closing_descriptor)
         raise SystemExit("could not write the protected output file") from exc
     finally:
         if directory_descriptor >= 0:
@@ -248,11 +257,27 @@ def _quarantine_owned_output(
         except OSError:
             return
         try:
-            quarantined = os.stat(quarantine, dir_fd=descriptor, follow_symlinks=False)
+            quarantine_descriptor = os.open(
+                quarantine,
+                os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=descriptor,
+            )
+        except OSError:
+            return
+        try:
+            quarantined = os.fstat(quarantine_descriptor)
             if (quarantined.st_dev, quarantined.st_ino) == expected:
-                os.unlink(quarantine, dir_fd=descriptor)
+                os.ftruncate(quarantine_descriptor, 0)
+                os.fsync(quarantine_descriptor)
         except OSError:
             pass
+        finally:
+            closing_descriptor = quarantine_descriptor
+            quarantine_descriptor = -1
+            with suppress(OSError):
+                os.close(closing_descriptor)
+        with suppress(OSError):
+            os.fsync(descriptor)
         return
 
 
