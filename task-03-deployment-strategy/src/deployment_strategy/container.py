@@ -282,7 +282,8 @@ def main() -> None:
     """Run a single bounded Uvicorn worker and let it own SIGTERM handling."""
 
     uvicorn.run(
-        build_application(),
+        "deployment_strategy.container:build_application",
+        factory=True,
         host="0.0.0.0",
         port=_bounded_integer("PORT", default=8080, minimum=1, maximum=65_535),
         workers=1,

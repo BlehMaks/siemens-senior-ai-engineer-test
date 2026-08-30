@@ -27,6 +27,7 @@ from deployment_strategy.container import (
     FakeRunExecutor,
     _bounded_integer,
     build_application,
+    main,
 )
 from search_agent.state import RunStatus
 
@@ -34,6 +35,23 @@ TASK_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = TASK_ROOT.parent
 DOCKERFILE = TASK_ROOT / "container" / "Dockerfile"
 T = TypeVar("T")
+
+
+def test_main_builds_cloud_clients_inside_uvicorn_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def run(app: object, **options: object) -> None:
+        captured["app"] = app
+        captured.update(options)
+
+    monkeypatch.setattr("deployment_strategy.container.uvicorn.run", run)
+
+    main()
+
+    assert captured["app"] == "deployment_strategy.container:build_application"
+    assert captured["factory"] is True
 
 
 class CloudFakeStore(DocumentStoreTransaction):
