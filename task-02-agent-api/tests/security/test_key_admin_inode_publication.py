@@ -15,6 +15,10 @@ def _cleanup_entries(directory: Path) -> list[Path]:
     return list(directory.glob(".api-key-cleanup-*"))
 
 
+def _cleanup_payload(entry: Path) -> bytes:
+    return (entry / "owned").read_bytes() if entry.is_dir() else entry.read_bytes()
+
+
 def test_output_is_created_directly_without_a_link_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -101,7 +105,7 @@ def test_parent_rename_during_final_fsync_removes_plaintext(
     assert not (displaced / output.name).exists()
     cleanup = _cleanup_entries(displaced)
     assert len(cleanup) == 1
-    assert cleanup[0].read_bytes() == b""
+    assert _cleanup_payload(cleanup[0]) == b""
 
 
 def test_failure_keeps_an_empty_quarantine_instead_of_unlinking(
@@ -128,7 +132,7 @@ def test_failure_keeps_an_empty_quarantine_instead_of_unlinking(
     assert not output.exists()
     cleanup = _cleanup_entries(tmp_path)
     assert len(cleanup) == 1
-    assert cleanup[0].read_bytes() == b""
+    assert _cleanup_payload(cleanup[0]) == b""
 
 
 def test_special_permission_bits_fail_without_plaintext(
@@ -153,7 +157,7 @@ def test_special_permission_bits_fail_without_plaintext(
     assert not output.exists()
     cleanup = _cleanup_entries(tmp_path)
     assert len(cleanup) == 1
-    assert cleanup[0].read_bytes() == b""
+    assert _cleanup_payload(cleanup[0]) == b""
 
 
 def test_close_error_after_release_scrubs_the_owned_inode(
@@ -181,7 +185,7 @@ def test_close_error_after_release_scrubs_the_owned_inode(
     assert not output.exists()
     cleanup = _cleanup_entries(tmp_path)
     assert len(cleanup) == 1
-    assert cleanup[0].read_bytes() == b""
+    assert _cleanup_payload(cleanup[0]) == b""
 
 
 def test_close_error_after_reuse_does_not_touch_the_new_owner(
@@ -213,4 +217,142 @@ def test_close_error_after_reuse_does_not_touch_the_new_owner(
     assert unrelated.read_bytes() == b"must-not-be-truncated\n"
     cleanup = _cleanup_entries(tmp_path)
     assert len(cleanup) == 1
-    assert cleanup[0].read_bytes() == b""
+    assert _cleanup_payload(cleanup[0]) == b""
+
+
+def test_close_error_scrubs_a_created_inode_moved_before_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "generated.key"
+    displaced = tmp_path / "displaced.key"
+    replacement_content = b"concurrent-owner\n"
+    real_close = os.close
+    real_open = os.open
+    replacement_descriptor = -1
+    injected = False
+
+    def close_replace_and_reuse(descriptor: int) -> None:
+        nonlocal injected, replacement_descriptor
+        current = os.fstat(descriptor)
+        if stat.S_ISREG(current.st_mode) and not injected:
+            injected = True
+            real_close(descriptor)
+            output.rename(displaced)
+            output.write_bytes(replacement_content)
+            replacement_descriptor = real_open(output, os.O_WRONLY)
+            assert replacement_descriptor == descriptor
+            raise OSError(errno.EIO, "injected close failure after replacement")
+        real_close(descriptor)
+
+    monkeypatch.setattr(os, "close", close_replace_and_reuse)
+
+    try:
+        with pytest.raises(SystemExit, match="protected output file"):
+            key_admin._write_plaintext_file(output, "temporary-key")
+    finally:
+        if replacement_descriptor >= 0:
+            real_close(replacement_descriptor)
+
+    assert injected
+    assert output.read_bytes() == replacement_content
+    assert displaced.read_bytes() == b""
+    assert _cleanup_entries(tmp_path) == []
+
+
+def test_late_parent_replacement_is_rejected_and_scrubbed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "output"
+    parent.mkdir()
+    displaced = tmp_path / "displaced"
+    output = parent / "generated.key"
+    replacement_content = b"concurrent-owner\n"
+    real_stat = os.stat
+    relative_stats = 0
+
+    def replace_parent_before_final_stat(
+        target: str | bytes | int | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> os.stat_result:
+        nonlocal relative_stats
+        if target == output.name and dir_fd is not None:
+            relative_stats += 1
+            if relative_stats == 2:
+                parent.rename(displaced)
+                parent.mkdir()
+                output.write_bytes(replacement_content)
+        return real_stat(
+            target,
+            dir_fd=dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+
+    monkeypatch.setattr(os, "stat", replace_parent_before_final_stat)
+
+    with pytest.raises(SystemExit, match="protected output file"):
+        key_admin._write_plaintext_file(output, "temporary-key")
+
+    assert relative_stats >= 2
+    assert output.read_bytes() == replacement_content
+    assert not (displaced / output.name).exists()
+    cleanup = _cleanup_entries(displaced)
+    assert len(cleanup) == 1
+    assert _cleanup_payload(cleanup[0]) == b""
+
+
+def test_quarantine_reservation_does_not_overwrite_a_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "generated.key"
+    foreign_content = b"foreign-owner\n"
+    real_fsync = os.fsync
+    real_mkdir = os.mkdir
+    collision: Path | None = None
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError(errno.EIO, "injected directory fsync failure")
+        real_fsync(descriptor)
+
+    def create_collision(
+        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal collision
+        if (
+            collision is None
+            and isinstance(target, str)
+            and target.startswith(".api-key-cleanup-")
+            and dir_fd is not None
+        ):
+            foreign = os.open(
+                target,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=dir_fd,
+            )
+            try:
+                os.write(foreign, foreign_content)
+            finally:
+                os.close(foreign)
+            collision = tmp_path / target
+            raise FileExistsError(errno.EEXIST, "injected quarantine collision")
+        real_mkdir(target, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "fsync", fail_directory_fsync)
+    monkeypatch.setattr(os, "mkdir", create_collision)
+
+    with pytest.raises(SystemExit, match="protected output file"):
+        key_admin._write_plaintext_file(output, "temporary-key")
+
+    assert collision is not None
+    assert collision.read_bytes() == foreign_content
+    cleanup_directories = [
+        entry for entry in _cleanup_entries(tmp_path) if entry.is_dir()
+    ]
+    assert len(cleanup_directories) == 1
+    assert _cleanup_payload(cleanup_directories[0]) == b""

@@ -137,6 +137,7 @@ def _write_plaintext_file(path: Path, plaintext: str) -> None:
         raise SystemExit("--output-file must be an absolute path")
     directory_descriptor = -1
     descriptor = -1
+    recovery_descriptor = -1
     created = False
     expected: tuple[int, int] | None = None
     try:
@@ -187,19 +188,27 @@ def _write_plaintext_file(path: Path, plaintext: str) -> None:
             opened_stat.st_ino,
         ) or stat.S_IMODE(final_stat.st_mode) != 0o600:
             raise OSError(errno.ESTALE, "published output identity changed")
+        if not _same_directory(directory_descriptor, path.parent):
+            raise OSError(errno.ESTALE, "output directory changed")
+        recovery_descriptor = os.dup(descriptor)
         closing_descriptor = descriptor
         descriptor = -1
         os.close(closing_descriptor)
+        closing_descriptor = recovery_descriptor
+        recovery_descriptor = -1
+        with suppress(OSError):
+            os.close(closing_descriptor)
     except OSError as exc:
-        if descriptor >= 0:
+        owned_descriptor = descriptor if descriptor >= 0 else recovery_descriptor
+        if owned_descriptor >= 0:
             try:
-                current = os.fstat(descriptor)
+                current = os.fstat(owned_descriptor)
                 current_identity = (current.st_dev, current.st_ino)
                 if expected is None:
                     expected = current_identity
                 if current_identity == expected:
-                    os.ftruncate(descriptor, 0)
-                    os.fsync(descriptor)
+                    os.ftruncate(owned_descriptor, 0)
+                    os.fsync(owned_descriptor)
             except OSError:
                 pass
         if created and expected is not None:
@@ -211,6 +220,11 @@ def _write_plaintext_file(path: Path, plaintext: str) -> None:
         if descriptor >= 0:
             closing_descriptor = descriptor
             descriptor = -1
+            with suppress(OSError):
+                os.close(closing_descriptor)
+        if recovery_descriptor >= 0:
+            closing_descriptor = recovery_descriptor
+            recovery_descriptor = -1
             with suppress(OSError):
                 os.close(closing_descriptor)
         raise SystemExit("could not write the protected output file") from exc
@@ -237,20 +251,26 @@ def _quarantine_owned_output(
 ) -> None:
     if descriptor < 0:
         return
+    try:
+        current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+    except OSError:
+        return
+    if (current.st_dev, current.st_ino) != expected:
+        return
+
     for _ in range(32):
         quarantine = f".api-key-cleanup-{secrets.token_hex(16)}"
         try:
-            os.stat(quarantine, dir_fd=descriptor, follow_symlinks=False)
-        except FileNotFoundError:
-            pass
+            os.mkdir(quarantine, 0o700, dir_fd=descriptor)
+        except FileExistsError:
+            continue
         except OSError:
             return
-        else:
-            continue
+        quarantined_name = f"{quarantine}/owned"
         try:
             os.rename(
                 name,
-                quarantine,
+                quarantined_name,
                 src_dir_fd=descriptor,
                 dst_dir_fd=descriptor,
             )
@@ -258,7 +278,7 @@ def _quarantine_owned_output(
             return
         try:
             quarantine_descriptor = os.open(
-                quarantine,
+                quarantined_name,
                 os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
                 dir_fd=descriptor,
             )

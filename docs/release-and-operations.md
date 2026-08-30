@@ -189,10 +189,10 @@ to mode `0600` files in its temporary directory, keeps it out of command
 arguments and output, and removes the directory on exit. The exact smoke-only
 IAM requirements are listed in the resource manifest.
 
-If a key-file write fails, the CLI clears the file and moves it to an empty
-`.api-key-cleanup-*` quarantine entry. It leaves that empty entry in place
-rather than risk unlinking a path another process has replaced. The smoke
-script's temporary-directory cleanup removes it when the script exits.
+If a key-file write fails, the CLI clears the file and moves it into a mode
+`0700` `.api-key-cleanup-*` directory as an empty `owned` file. It leaves that
+directory in place rather than risk unlinking a path another process has
+replaced. The smoke script removes the temporary directory when it exits.
 
 ## CI/CD path
 
