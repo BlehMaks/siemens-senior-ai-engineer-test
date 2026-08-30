@@ -34,8 +34,8 @@ def test_nested_static_boolop_stops_unreachable_rebind_analysis() -> None:
     assert not _contains_credential_assignment("config.py", source.encode())
 
 
-def test_parser_complexity_failure_falls_back_without_crashing() -> None:
+def test_parser_complexity_failure_fails_closed() -> None:
     predicate = "not " * 10_000 + "False"
     source = f"token, marker = runtime_token, ({predicate})\n"
 
-    assert not _contains_credential_assignment("config.py", source.encode())
+    assert _contains_credential_assignment("config.py", source.encode())

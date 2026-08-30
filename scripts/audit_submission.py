@@ -8,7 +8,6 @@ import io
 import re
 import subprocess
 import tokenize
-from itertools import pairwise
 from pathlib import Path, PurePosixPath
 
 MAX_PUBLIC_FILE_BYTES = 5 * 1024 * 1024
@@ -292,13 +291,6 @@ def _contains_credential_assignment(path: str, content: bytes) -> bool:
             # for syntactically incomplete Python files and protects its regressions.
             _contains_credential_assignment_linewise(path, content)
             return parsed
-        source = _decode_python_source(content)
-        recoverable = _python_mask_multiline_strings(source)
-        for line in recoverable.splitlines():
-            for statement in _python_recovery_statements(line.lstrip()):
-                recovered = _python_contains_credential_assignment(statement.encode())
-                if recovered:
-                    return True
     return _contains_credential_assignment_linewise(path, content)
 
 
@@ -422,7 +414,10 @@ def _python_contains_credential_assignment(content: bytes) -> bool | None:
     source = _decode_python_source(content)
     try:
         tree = ast.parse(content)
-    except (MemoryError, RecursionError, SyntaxError, ValueError):
+    except (MemoryError, RecursionError):
+        # A file complex enough to exhaust the parser cannot be proven safe.
+        return True
+    except (SyntaxError, ValueError):
         return None
 
     for node in ast.walk(tree):
@@ -488,159 +483,6 @@ def _python_name_is_credential(name: str) -> bool:
         )
         is not None
     )
-
-
-def _python_mask_multiline_strings(source: str) -> str:
-    masked = list(source)
-    cursor = 0
-    quote: str | None = None
-    triple_quote: str | None = None
-    fstring_braces = 0
-    fstring_comment = False
-    fstring_quote: str | None = None
-    fstring_triple_quote: str | None = None
-    is_fstring = False
-    in_comment = False
-
-    while cursor < len(source):
-        char = source[cursor]
-        if triple_quote is not None:
-            if fstring_comment:
-                if char == "\n":
-                    fstring_comment = False
-                else:
-                    masked[cursor] = " "
-                cursor += 1
-                continue
-            if fstring_triple_quote is not None:
-                if source.startswith(
-                    fstring_triple_quote, cursor
-                ) and not _quote_is_escaped(source, cursor):
-                    masked[cursor : cursor + 3] = "   "
-                    cursor += 3
-                    fstring_triple_quote = None
-                    continue
-                if char != "\n":
-                    masked[cursor] = " "
-                cursor += 1
-                continue
-            if fstring_quote is not None:
-                if char == "\\":
-                    masked[cursor : cursor + 2] = "  "
-                    cursor += 2
-                    continue
-                if char == fstring_quote:
-                    fstring_quote = None
-                if char != "\n":
-                    masked[cursor] = " "
-                cursor += 1
-                continue
-            if is_fstring and fstring_braces:
-                if char == "#":
-                    fstring_comment = True
-                elif source.startswith(('"""', "'''"), cursor):
-                    fstring_triple_quote = source[cursor : cursor + 3]
-                    masked[cursor : cursor + 3] = "   "
-                    cursor += 3
-                    continue
-                if char in {'"', "'"}:
-                    fstring_quote = char
-                elif char == "{":
-                    fstring_braces += 1
-                elif char == "}":
-                    fstring_braces -= 1
-                if char != "\n":
-                    masked[cursor] = " "
-                cursor += 1
-                continue
-            if source.startswith(triple_quote, cursor) and not _quote_is_escaped(
-                source, cursor
-            ):
-                masked[cursor : cursor + 3] = "   "
-                cursor += 3
-                triple_quote = None
-                is_fstring = False
-                continue
-            if is_fstring and char == "{":
-                if source.startswith("{{", cursor):
-                    masked[cursor : cursor + 2] = "  "
-                    cursor += 2
-                    continue
-                fstring_braces = 1
-            if char != "\n":
-                masked[cursor] = " "
-            cursor += 1
-            continue
-
-        if in_comment:
-            if char == "\n":
-                in_comment = False
-            cursor += 1
-            continue
-
-        if quote is not None:
-            if char == "\\":
-                cursor += 2
-                continue
-            if char == quote or char == "\n":
-                quote = None
-            cursor += 1
-            continue
-
-        if char == "#":
-            in_comment = True
-            cursor += 1
-            continue
-        if source.startswith(('"""', "'''"), cursor):
-            triple_quote = source[cursor : cursor + 3]
-            is_fstring = _python_string_is_f_prefixed(source, cursor)
-            fstring_braces = 0
-            fstring_comment = False
-            fstring_quote = None
-            fstring_triple_quote = None
-            masked[cursor : cursor + 3] = "   "
-            cursor += 3
-            continue
-        if char in {'"', "'"}:
-            quote = char
-        cursor += 1
-
-    return "".join(masked)
-
-
-def _python_recovery_statements(line: str) -> list[str]:
-    boundaries = [0]
-    try:
-        for token in tokenize.generate_tokens(io.StringIO(line).readline):
-            if token.type == tokenize.OP and token.string == ";":
-                boundaries.append(token.end[1])
-    except (IndentationError, tokenize.TokenError):
-        return [line]
-    boundaries.append(len(line) + 1)
-    return [
-        line[start : end - 1].strip()
-        for start, end in pairwise(boundaries)
-        if line[start : end - 1].strip()
-    ]
-
-
-def _python_string_is_f_prefixed(source: str, cursor: int) -> bool:
-    start = cursor
-    while start and source[start - 1].lower() in "rubf":
-        start -= 1
-    prefix = source[start:cursor].lower()
-    return "f" in prefix and (
-        start == 0 or not (source[start - 1].isalnum() or source[start - 1] == "_")
-    )
-
-
-def _quote_is_escaped(source: str, cursor: int) -> bool:
-    backslashes = 0
-    cursor -= 1
-    while cursor >= 0 and source[cursor] == "\\":
-        backslashes += 1
-        cursor -= 1
-    return backslashes % 2 == 1
 
 
 def _decode_python_source(content: bytes) -> str:

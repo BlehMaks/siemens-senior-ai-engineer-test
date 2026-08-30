@@ -1,4 +1,3 @@
-import pytest
 from scripts.audit_submission import _contains_credential_assignment
 
 
@@ -23,105 +22,8 @@ def test_github_format_expression_remains_symbolic() -> None:
     assert not _contains_credential_assignment("deploy.yml", workflow)
 
 
-def test_parser_failure_recovers_tuple_credential_assignment() -> None:
+def test_parser_resource_failure_fails_closed() -> None:
     predicate = "not " * 10_000 + "False"
-    source = (
-        f'token, marker = "12345678", runtime_marker\nprobe = {predicate}\n'
-    ).encode()
-
-    assert _contains_credential_assignment("config.py", source)
-
-
-def test_parser_failure_recovers_indented_tuple_credential_assignment() -> None:
-    predicate = "not " * 10_000 + "False"
-    source = (
-        'def configure():\n    token, marker = "12345678", runtime_marker\n'
-        f"probe = {predicate}\n"
-    ).encode()
-
-    assert _contains_credential_assignment("config.py", source)
-
-
-def test_parser_failure_ignores_assignments_inside_multiline_strings() -> None:
-    predicate = "not " * 10_000 + "False"
-    source = (
-        'example = """\ntoken, marker = "12345678", runtime_marker\n"""\n'
-        f"probe = {predicate}\n"
-    ).encode()
-
-    assert not _contains_credential_assignment("config.py", source)
-
-
-def test_parser_failure_ignores_assignments_inside_multiline_f_strings() -> None:
-    predicate = "not " * 10_000 + "False"
-    source = (
-        'example = f"""\ntoken, marker = "12345678", runtime_marker\n"""\n'
-        f"probe = {predicate}\n"
-    ).encode()
-
-    assert not _contains_credential_assignment("config.py", source)
-
-
-def test_invalid_dedent_does_not_expose_later_multiline_string() -> None:
-    source = (
-        b"if True:\n    if True:\n        pass\n      invalid_dedent = 1\n"
-        b'documentation = """\n'
-        b'token, marker = "12345678", runtime_marker\n'
-        b'"""\n'
-    )
-
-    assert not _contains_credential_assignment("config.py", source)
-
-
-def test_closing_string_line_recovers_following_tuple_assignment() -> None:
-    predicate = "not " * 10_000 + "False"
-    source = (
-        'def configure():\n    documentation = """\n    example text\n'
-        '    """; token, marker = "12345678", runtime_marker\n'
-        f"probe = {predicate}\n"
-    ).encode()
-
-    assert _contains_credential_assignment("config.py", source)
-
-
-@pytest.mark.parametrize(
-    "prefix",
-    [
-        'documentation = """example"""; ',
-        'documentation = """\nexample\n""".strip(); ',
-    ],
-)
-def test_parser_failure_recovers_tuple_after_string_statement(prefix: str) -> None:
-    predicate = "not " * 10_000 + "False"
-    source = (
-        prefix
-        + 'token, marker = "12345678", runtime_marker\n'
-        + f"probe = {predicate}\n"
-    ).encode()
-
-    assert _contains_credential_assignment("config.py", source)
-
-
-def test_fstring_expression_delimiter_does_not_expose_string_body() -> None:
-    predicate = "not " * 10_000 + "False"
-    source = (
-        'documentation = f"""{\'"""\'}\n'
-        'token, marker = "12345678", runtime_marker\n'
-        '"""\n'
-        f"probe = {predicate}\n"
-    ).encode()
-
-    assert not _contains_credential_assignment("config.py", source)
-
-
-def test_fstring_comment_quote_does_not_hide_later_tuple_assignment() -> None:
-    predicate = "not " * 10_000 + "False"
-    source = (
-        'documentation = f"""{(\n'
-        "    1  # apostrophe: '\n"
-        ')}\nexample text\n"""\n'
-        'token, marker = "12345678", runtime_marker\n'
-        f"probe = {predicate}\n"
-    ).encode()
+    source = f"runtime_value = {predicate}\n".encode()
 
     assert _contains_credential_assignment("config.py", source)
