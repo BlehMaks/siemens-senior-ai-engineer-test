@@ -459,3 +459,29 @@ def test_owned_child_collision_is_not_overwritten(
         b"",
         foreign_content,
     ]
+
+
+def test_restrictive_umask_keeps_documented_cleanup_permissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "generated.key"
+    real_fsync = os.fsync
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError(errno.EIO, "injected directory fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_directory_fsync)
+    previous_umask = os.umask(0o777)
+    try:
+        with pytest.raises(SystemExit, match="protected output file"):
+            key_admin._write_plaintext_file(output, "temporary-key")
+    finally:
+        os.umask(previous_umask)
+
+    cleanup = _cleanup_entries(tmp_path)
+    assert len(cleanup) == 1
+    assert stat.S_IMODE(cleanup[0].stat().st_mode) == 0o700
+    assert stat.S_IMODE((cleanup[0] / "owned").stat().st_mode) == 0o600
+    assert _cleanup_payload(cleanup[0]) == b""

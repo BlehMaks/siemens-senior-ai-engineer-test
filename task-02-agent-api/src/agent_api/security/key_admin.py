@@ -264,6 +264,12 @@ def _quarantine_owned_output(
         quarantine = f".api-key-cleanup-{secrets.token_hex(16)}"
         try:
             os.mkdir(quarantine, 0o700, dir_fd=descriptor)
+            os.chmod(
+                quarantine,
+                0o700,
+                dir_fd=descriptor,
+                follow_symlinks=False,
+            )
         except FileExistsError:
             continue
         except OSError:
@@ -331,6 +337,7 @@ def _create_empty_quarantine_marker(descriptor: int, name: str) -> None:
             0o600,
             dir_fd=descriptor,
         )
+        os.fchmod(marker_descriptor, 0o600)
         os.fsync(marker_descriptor)
     except OSError:
         pass
