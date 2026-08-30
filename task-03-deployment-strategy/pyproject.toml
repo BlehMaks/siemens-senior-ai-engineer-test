@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Executable deployment assets and capacity checks"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "google-auth>=2.40,<3",
+    "requests>=2.32,<3",
     "siemens-agent-api==0.1.0",
     "siemens-search-agent==0.1.0",
 ]

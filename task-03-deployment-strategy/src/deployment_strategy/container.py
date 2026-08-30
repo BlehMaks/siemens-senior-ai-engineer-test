@@ -30,9 +30,12 @@ from agent_api.storage import (
     GoogleFirestoreDocumentStore,
     SignedWorkItemCodec,
 )
+from search_agent import OllamaResearchExecutor, OllamaRuntimeSettings
 from search_agent.cli import _demo_runner
 from search_agent.contracts import OpaqueId, QueryText
 from search_agent.runner import RunResult
+
+from .model_auth import GoogleIdTokenAuth
 
 _DEFAULT_DATABASE_PATH = Path("/tmp/agent-api.sqlite3")
 _LOGGER = logging.getLogger(__name__)
@@ -129,15 +132,9 @@ def build_application(
     if not database_path.is_absolute():
         raise ValueError("AGENT_API_DATABASE_PATH must be absolute")
 
-    inference_mode = os.environ.get("AGENT_API_INFERENCE_MODE", "fake")
-    if inference_mode == "fake":
-        executor = FakeRunExecutor()
-    elif inference_mode == "disabled":
-        executor = None
-    else:
-        raise ValueError("AGENT_API_INFERENCE_MODE must be fake or disabled")
-
     cloud_settings = _cloud_runtime_settings()
+    inference_mode = os.environ.get("AGENT_API_INFERENCE_MODE", "fake")
+    executor = _run_executor(inference_mode, cloud_settings=cloud_settings)
     if cloud_settings is not None:
         if cloud_settings.service_role == "api" and executor is not None:
             raise ValueError("cloud API service must disable local inference")
@@ -178,6 +175,47 @@ def build_application(
             cloud_settings is not None and cloud_settings.service_role == "worker"
         ),
     )
+
+
+def _run_executor(
+    inference_mode: str, *, cloud_settings: CloudRuntimeSettings | None
+) -> FakeRunExecutor | OllamaResearchExecutor | None:
+    if inference_mode == "fake":
+        return FakeRunExecutor()
+    if inference_mode == "disabled":
+        return None
+    if inference_mode != "ollama":
+        raise ValueError("AGENT_API_INFERENCE_MODE must be fake, ollama, or disabled")
+
+    model_name = os.environ.get("AGENT_MODEL_NAME", "")
+    base_url = os.environ.get("AGENT_MODEL_BASE_URL", "http://127.0.0.1:11434")
+    audience = os.environ.get("AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE")
+    if (
+        cloud_settings is not None
+        and cloud_settings.service_role == "worker"
+        and audience is None
+    ):
+        raise ValueError(
+            "cloud Ollama worker requires AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE"
+        )
+    settings = OllamaRuntimeSettings(
+        model_name=model_name,
+        base_url=base_url,
+        timeout_seconds=_bounded_integer(
+            "AGENT_MODEL_TIMEOUT_SECONDS", default=120, minimum=1, maximum=600
+        ),
+        max_retries=_bounded_integer(
+            "AGENT_MODEL_MAX_RETRIES", default=1, minimum=0, maximum=5
+        ),
+        search_region=os.environ.get("AGENT_SEARCH_REGION", "wt-wt"),
+        search_backend=os.environ.get("AGENT_SEARCH_BACKEND", "duckduckgo"),
+    )
+    if audience is not None and settings.base_url != audience:
+        raise ValueError(
+            "AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE must match AGENT_MODEL_BASE_URL"
+        )
+    auth = None if audience is None else GoogleIdTokenAuth(audience)
+    return OllamaResearchExecutor(settings=settings, model_auth=auth)
 
 
 def _cloud_runtime_settings() -> CloudRuntimeSettings | None:

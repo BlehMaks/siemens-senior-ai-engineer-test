@@ -26,9 +26,12 @@ from deployment_strategy.container import (
     CloudRuntimeSettings,
     FakeRunExecutor,
     _bounded_integer,
+    _run_executor,
     build_application,
     main,
 )
+from deployment_strategy.model_auth import GoogleIdTokenAuth
+from search_agent import OllamaResearchExecutor
 from search_agent.state import RunStatus
 
 TASK_ROOT = Path(__file__).resolve().parents[1]
@@ -267,7 +270,7 @@ def test_bounded_process_settings_fail_closed(
         _bounded_integer(name, default=10, minimum=minimum, maximum=maximum)
 
 
-@pytest.mark.parametrize("mode", ["ollama", "cloud", "FAKE", " fake"])
+@pytest.mark.parametrize("mode", ["cloud", "FAKE", " fake"])
 def test_unknown_inference_modes_fail_closed(
     mode: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -276,6 +279,78 @@ def test_unknown_inference_modes_fail_closed(
 
     with pytest.raises(ValueError, match="AGENT_API_INFERENCE_MODE"):
         build_application()
+
+
+def test_local_ollama_mode_reuses_the_bounded_research_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENT_MODEL_NAME", "granite3.3:8b")
+
+    executor = _run_executor("ollama", cloud_settings=None)
+
+    assert isinstance(executor, OllamaResearchExecutor)
+    assert executor.settings.model_name == "granite3.3:8b"
+    assert executor.settings.base_url == "http://127.0.0.1:11434"
+    assert executor.model_auth is None
+
+
+def test_ollama_mode_rejects_a_missing_model_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENT_MODEL_NAME", raising=False)
+
+    with pytest.raises(ValueError, match="model_name"):
+        _run_executor("ollama", cloud_settings=None)
+
+
+def test_cloud_worker_ollama_requires_matching_private_model_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_cloud_environment(monkeypatch, tmp_path, role="worker")
+    monkeypatch.setenv("AGENT_API_INFERENCE_MODE", "ollama")
+    monkeypatch.setenv("AGENT_MODEL_NAME", "granite3.3:8b")
+    monkeypatch.setenv(
+        "AGENT_MODEL_BASE_URL", "https://private-model.example.run.app"
+    )
+
+    with pytest.raises(ValueError, match="ID_TOKEN_AUDIENCE"):
+        build_application(cloud_adapter_factory=_cloud_factory({}))
+
+    monkeypatch.setenv(
+        "AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE",
+        "https://different-model.example.run.app",
+    )
+    with pytest.raises(ValueError, match="must match"):
+        build_application(cloud_adapter_factory=_cloud_factory({}))
+
+
+def test_cloud_worker_ollama_uses_google_identity_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_cloud_environment(monkeypatch, tmp_path, role="worker")
+    model_origin = "https://private-model.example.run.app"
+    monkeypatch.setenv("AGENT_API_INFERENCE_MODE", "ollama")
+    monkeypatch.setenv("AGENT_MODEL_NAME", "granite3.3:8b")
+    monkeypatch.setenv("AGENT_MODEL_BASE_URL", model_origin)
+    monkeypatch.setenv("AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE", model_origin)
+
+    executor = _run_executor(
+        "ollama",
+        cloud_settings=CloudRuntimeSettings(
+            project_id="contract-assessment-dev",
+            database="(default)",
+            queue_name=(
+                "projects/contract-assessment-dev/locations/europe-west3/"
+                "queues/dispatch"
+            ),
+            delivery_path="/internal/tasks/run-delivery",
+            target_url=None,
+            service_role="worker",
+        ),
+    )
+
+    assert isinstance(executor, OllamaResearchExecutor)
+    assert isinstance(executor.model_auth, GoogleIdTokenAuth)
 
 
 def test_relative_database_paths_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
