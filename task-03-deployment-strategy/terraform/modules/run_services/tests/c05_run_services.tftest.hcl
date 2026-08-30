@@ -112,6 +112,67 @@ run "default_contract_is_bounded_and_digest_pinned" {
     condition     = output.worker_service.image == output.api_service.image
     error_message = "The worker contract must expose the same immutable image digest as the API."
   }
+
+  assert {
+    condition = (
+      output.worker_service.runtime.inference_mode == "fake" &&
+      output.worker_service.runtime.model_transport_profile == "" &&
+      output.worker_service.runtime.model_base_url == "" &&
+      output.worker_service.runtime.model_name == "" &&
+      output.worker_service.runtime.model_google_id_token_audience == "" &&
+      output.worker_service.runtime.search_backends[0] == "auto"
+    )
+    error_message = "Assessment mode must remain fake and contain no model-plane settings."
+  }
+}
+
+run "cloud_ollama_contract_wires_one_authenticated_model_origin" {
+  command = plan
+
+  variables {
+    environment                    = "prod"
+    worker_inference_mode          = "ollama"
+    model_transport_profile        = "cloud"
+    model_base_url                 = "https://sai-prod-model-abc.a.run.app"
+    model_name                     = "granite3.3:8b-q4"
+    model_google_id_token_audience = "https://sai-prod-model-abc.a.run.app"
+    search_backends                = ["auto", "duckduckgo"]
+  }
+
+  assert {
+    condition = (
+      output.worker_service.runtime.inference_mode == "ollama" &&
+      output.worker_service.runtime.model_transport_profile == "cloud" &&
+      output.worker_service.runtime.model_base_url == output.worker_service.runtime.model_google_id_token_audience &&
+      output.worker_service.runtime.model_name == "granite3.3:8b-q4" &&
+      jsonencode(output.worker_service.runtime.search_backends) == jsonencode(["auto", "duckduckgo"])
+    )
+    error_message = "Cloud mode must wire the model origin, audience, model, and search fallback order."
+  }
+}
+
+run "partial_cloud_model_identity_fails_closed" {
+  command = plan
+
+  variables {
+    worker_inference_mode          = "ollama"
+    model_transport_profile        = "cloud"
+    model_base_url                 = "https://sai-prod-model-abc.a.run.app"
+    model_name                     = "granite3.3:8b-q4"
+    model_google_id_token_audience = "https://another-model-abc.a.run.app"
+  }
+
+  expect_failures = [var.model_google_id_token_audience]
+}
+
+run "fake_mode_rejects_model_settings" {
+  command = plan
+
+  variables {
+    model_transport_profile = "cloud"
+  }
+
+  expect_failures = [var.model_transport_profile]
 }
 
 run "hardened_api_mode_blocks_url_bypass_and_keeps_lb_usable" {

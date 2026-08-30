@@ -1,0 +1,27 @@
+project_id                     = "replace-with-production-project-id"
+project_number                 = "123456789012"
+region                         = "europe-west4"
+environment                    = "prod"
+system_code                    = "sai"
+billing_account_id             = "ABC123-DEF456-GHI789"
+budget_amount_units            = 1000
+budget_notification_emails     = ["cloud-budgets@example.com"]
+api_service_account_email      = "sai-prod-api@replace-with-production-project-id.iam.gserviceaccount.com"
+worker_service_account_email   = "sai-prod-worker@replace-with-production-project-id.iam.gserviceaccount.com"
+deployer_service_account_email = "sai-prod-deploy@replace-with-production-project-id.iam.gserviceaccount.com"
+tasks_service_account_email    = "sai-prod-tasks@replace-with-production-project-id.iam.gserviceaccount.com"
+secret_ids = {
+  api_key_pepper    = "sai-prod-api-key-pepper"
+  task_signing_hmac = "sai-prod-task-signing-hmac"
+}
+image_digest         = "sha256:replace-with-reviewed-agent-image-digest"
+model_image          = "europe-west4-docker.pkg.dev/replace-with-production-project-id/models/ollama@sha256:replace-with-reviewed-model-image-digest"
+model_name           = "replace-with-approved-model-name"
+model_min_instances  = 1
+model_max_instances  = 2
+model_concurrency    = 4
+search_backends      = ["auto", "duckduckgo"]
+action_log_level     = "INFO"
+labels = {
+  owner = "ml-platform"
+}

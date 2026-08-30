@@ -21,14 +21,19 @@ The assessment profile uses:
 - Cloud Logging, monitoring, and an operator-selected test alert budget;
 - GitHub Actions with Workload Identity Federation for keyless delivery.
 
-The LLM engine is not deployed. Deterministic fake inference is the CI and cloud
-smoke default. Local Ollama remains the real-model development path.
+Deterministic fake inference remains the CI and assessment-cloud smoke default.
+Real inference has two explicit transport profiles: `local` accepts only a
+loopback HTTP Ollama origin and no cloud credentials; `cloud` accepts only a
+non-loopback HTTPS Ollama-compatible origin with a matching Google ID-token
+audience. The same application orchestration is used in both profiles.
 
-The submission also includes a separate, disabled-by-default production model
-plane. It can provision a private Cloud Run L4 service from an approved,
-digest-pinned Ollama-compatible image. It is not referenced by the assessment
-workflow and requires an explicit GPU cost acknowledgement before apply. See
-[the production model-plane root](terraform/environments/production-model-plane/README.md).
+The opt-in [end-to-end production root](terraform/environments/production/README.md)
+provisions the managed services, API, worker, and a private Cloud Run L4 model
+service together. Terraform passes the model service URI, model name, and matching
+audience to the worker and grants model invocation only to its service account.
+The assessment workflow cannot select this paid profile. A smaller standalone
+[model-plane root](terraform/environments/production-model-plane/README.md) remains
+available for organizations that connect the model through an external gateway.
 
 ## Provisioning entry point
 
@@ -82,6 +87,7 @@ lists the exact changes made by the default deployment.
 - [Production-scale gates](architecture/production-scale.md)
 - [GCP profile decision record](architecture/adr/0001-gcp-reference-profiles.md)
 - [Bootstrap Terraform](terraform/bootstrap/README.md)
+- [End-to-end production cell](terraform/environments/production/README.md)
 - [Gated production model plane](terraform/environments/production-model-plane/README.md)
 - [CI/CD contract](operations/ci-cd.md)
 - [Assessment-cell runbooks](architecture/runbooks.md)
@@ -95,12 +101,13 @@ lists the exact changes made by the default deployment.
 | Identity | Repository-scoped WIF, short-lived credentials, separate runtime identities, and narrow resource ownership |
 | Delivery | Protected GitHub Environment, exact image digest, binary plan handoff, and non-cancelling apply concurrency |
 | Operations | Local API smoke, cloud preflight, existing-revision rollback, and guarded teardown procedures |
-| Capacity | Repeatable fake-provider proof with machine-readable sample output |
+| Capacity | Repeatable fake-provider proof plus explicit, operator-supplied GPU ceilings for the opt-in production cell |
 
 ## Honest boundary
 
 The assessment cell is a low-cost executable reference, not the final Siemens
-topology. Apigee, GKE, Spanner or AlloyDB, Vertex AI, Cloud Run GPU, multi-cell
-routing, corporate identity, VPC Service Controls, and enterprise SIEM remain
-gated options. Production claims still require residency, SLO, recovery, cost,
-model, security, and traffic decisions from the owning teams.
+topology. The repository now has an executable single-cell Cloud Run GPU path, but
+it has not been applied or load-tested here. Apigee, GKE, Spanner or AlloyDB,
+Vertex AI, multi-cell routing, corporate identity, VPC Service Controls, and
+enterprise SIEM remain gated options. Production claims still require residency,
+SLO, recovery, cost, model, security, and traffic decisions from the owning teams.

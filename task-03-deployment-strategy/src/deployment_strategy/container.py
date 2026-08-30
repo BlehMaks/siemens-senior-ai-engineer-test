@@ -8,7 +8,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 from urllib.parse import urlsplit
 
 import uvicorn
@@ -39,6 +39,7 @@ from search_agent.memory import (
     SQLiteSemanticFactRepository,
 )
 from search_agent.runner import RunResult
+from search_agent.runtime import search_backends_from_environment
 
 from .model_auth import GoogleIdTokenAuth
 
@@ -131,6 +132,7 @@ def build_application(
 ) -> FastAPI:
     """Build one API process from environment-only runtime configuration."""
 
+    _configure_action_logging()
     database_path = Path(
         os.environ.get("AGENT_API_DATABASE_PATH", str(_DEFAULT_DATABASE_PATH))
     )
@@ -200,19 +202,30 @@ def _run_executor(
         raise ValueError("AGENT_API_INFERENCE_MODE must be fake, ollama, or disabled")
 
     model_name = os.environ.get("AGENT_MODEL_NAME", "")
-    base_url = os.environ.get("AGENT_MODEL_BASE_URL", "http://127.0.0.1:11434")
-    audience = os.environ.get("AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE")
+    default_profile = (
+        "cloud"
+        if cloud_settings is not None and cloud_settings.service_role == "worker"
+        else "local"
+    )
+    transport_profile = os.environ.get("AGENT_MODEL_TRANSPORT_PROFILE", default_profile)
+    if transport_profile not in {"local", "cloud"}:
+        raise ValueError("AGENT_MODEL_TRANSPORT_PROFILE must be local or cloud")
     if (
         cloud_settings is not None
         and cloud_settings.service_role == "worker"
-        and audience is None
+        and transport_profile != "cloud"
     ):
-        raise ValueError(
-            "cloud Ollama worker requires AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE"
-        )
+        raise ValueError("cloud Ollama worker requires cloud model transport")
+    base_url = os.environ.get(
+        "AGENT_MODEL_BASE_URL",
+        "http://127.0.0.1:11434" if transport_profile == "local" else "",
+    )
+    audience = os.environ.get("AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE")
     settings = OllamaRuntimeSettings(
         model_name=model_name,
         base_url=base_url,
+        transport_profile=cast(Literal["local", "cloud"], transport_profile),
+        google_id_token_audience=audience,
         timeout_seconds=_bounded_integer(
             "AGENT_MODEL_TIMEOUT_SECONDS", default=120, minimum=1, maximum=600
         ),
@@ -220,13 +233,13 @@ def _run_executor(
             "AGENT_MODEL_MAX_RETRIES", default=1, minimum=0, maximum=5
         ),
         search_region=os.environ.get("AGENT_SEARCH_REGION", "wt-wt"),
-        search_backend=os.environ.get("AGENT_SEARCH_BACKEND", "duckduckgo"),
+        search_backends=search_backends_from_environment(os.environ),
     )
-    if audience is not None and settings.base_url != audience:
-        raise ValueError(
-            "AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE must match AGENT_MODEL_BASE_URL"
-        )
-    auth = None if audience is None else GoogleIdTokenAuth(audience)
+    auth = (
+        None
+        if settings.google_id_token_audience is None
+        else GoogleIdTokenAuth(settings.google_id_token_audience)
+    )
     return OllamaResearchExecutor(
         settings=settings,
         model_auth=auth,
@@ -245,6 +258,21 @@ def _local_memory_reader(database_path: Path) -> RepositoryReviewedMemoryReader:
         SQLiteSemanticFactRepository(database_path),
         SQLiteProcedureRepository(database_path),
     )
+
+
+def _configure_action_logging() -> None:
+    level_name = os.environ.get("AGENT_ACTION_LOG_LEVEL", "INFO")
+    if level_name not in {"ERROR", "WARNING", "INFO", "DEBUG"}:
+        raise ValueError(
+            "AGENT_ACTION_LOG_LEVEL must be ERROR, WARNING, INFO, or DEBUG"
+        )
+    level = getattr(logging, level_name)
+    for logger_name in (
+        "search_agent.actions",
+        "agent_api.operations",
+        "deployment_strategy",
+    ):
+        logging.getLogger(logger_name).setLevel(level)
 
 
 def _cloud_runtime_settings() -> CloudRuntimeSettings | None:

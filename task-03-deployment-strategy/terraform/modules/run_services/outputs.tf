@@ -30,6 +30,15 @@ output "worker_service" {
     invoker_members = ["serviceAccount:${var.tasks_service_account_email}"]
     invoker_role    = "roles/run.invoker"
     image           = local.image
+    runtime = {
+      inference_mode                 = var.worker_inference_mode
+      model_transport_profile        = var.model_transport_profile
+      model_base_url                 = var.model_base_url
+      model_name                     = var.model_name
+      model_google_id_token_audience = var.model_google_id_token_audience
+      search_backends                = var.search_backends
+      action_log_level               = var.action_log_level
+    }
   }
 }
 

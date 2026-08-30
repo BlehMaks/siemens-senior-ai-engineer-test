@@ -306,3 +306,98 @@ variable "worker_concurrency" {
     error_message = "worker_concurrency must be a whole number from 1 to 1000."
   }
 }
+
+variable "worker_inference_mode" {
+  description = "Worker inference implementation. fake is assessment-only; ollama uses the private cloud model service."
+  type        = string
+  default     = "fake"
+
+  validation {
+    condition     = contains(["fake", "ollama"], var.worker_inference_mode)
+    error_message = "worker_inference_mode must be fake or ollama."
+  }
+}
+
+variable "model_transport_profile" {
+  description = "Empty for fake inference; cloud for an authenticated private Ollama-compatible service."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.worker_inference_mode == "fake" ? var.model_transport_profile == "" :
+      var.model_transport_profile == "cloud"
+    )
+    error_message = "model_transport_profile must be empty for fake inference and cloud for ollama."
+  }
+}
+
+variable "model_base_url" {
+  description = "Clean HTTPS origin of the private Ollama-compatible Cloud Run model service."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.worker_inference_mode == "fake" ? var.model_base_url == "" :
+      can(regex("^https://[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(:443)?$", var.model_base_url))
+    )
+    error_message = "ollama requires a clean HTTPS model_base_url origin; fake inference requires an empty value."
+  }
+}
+
+variable "model_name" {
+  description = "Immutable model identifier served by the private model plane."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.worker_inference_mode == "fake" ? var.model_name == "" :
+      can(regex("^[A-Za-z0-9][A-Za-z0-9._:/-]{2,199}$", var.model_name)) &&
+      !contains(["latest", "placeholder", "replace-me"], lower(var.model_name))
+    )
+    error_message = "ollama requires a concrete immutable model_name; fake inference requires an empty value."
+  }
+}
+
+variable "model_google_id_token_audience" {
+  description = "Cloud Run ID-token audience. It must exactly match model_base_url."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.worker_inference_mode == "fake" ? var.model_google_id_token_audience == "" :
+      var.model_google_id_token_audience == var.model_base_url
+    )
+    error_message = "ollama audience must exactly match model_base_url; fake inference requires an empty value."
+  }
+}
+
+variable "search_backends" {
+  description = "Bounded ordered DDGS backend fallback list passed to the worker."
+  type        = list(string)
+  default     = ["auto"]
+
+  validation {
+    condition = (
+      length(var.search_backends) >= 1 &&
+      length(var.search_backends) <= 2 &&
+      length(distinct(var.search_backends)) == length(var.search_backends) &&
+      alltrue([for backend in var.search_backends : contains(["auto", "duckduckgo"], backend)])
+    )
+    error_message = "search_backends must contain one or two unique supported backend names."
+  }
+}
+
+variable "action_log_level" {
+  description = "Bounded structured action-log verbosity."
+  type        = string
+  default     = "INFO"
+
+  validation {
+    condition     = contains(["ERROR", "WARNING", "INFO", "DEBUG"], var.action_log_level)
+    error_message = "action_log_level must be ERROR, WARNING, INFO, or DEBUG."
+  }
+}

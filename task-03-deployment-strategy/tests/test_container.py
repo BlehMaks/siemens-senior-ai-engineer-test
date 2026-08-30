@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -293,6 +294,8 @@ def test_local_ollama_mode_reuses_the_bounded_research_executor(
     assert isinstance(executor, OllamaResearchExecutor)
     assert executor.settings.model_name == "granite3.3:8b"
     assert executor.settings.base_url == "http://127.0.0.1:11434"
+    assert executor.settings.transport_profile == "local"
+    assert executor.settings.search_backends == ("auto",)
     assert executor.model_auth is None
     assert executor.memory_reader_factory is not None
 
@@ -315,15 +318,16 @@ def test_cloud_worker_ollama_requires_matching_private_model_identity(
     monkeypatch.setenv("AGENT_API_INFERENCE_MODE", "ollama")
     monkeypatch.setenv("AGENT_MODEL_NAME", "granite3.3:8b")
     monkeypatch.setenv("AGENT_MODEL_BASE_URL", "https://private-model.example.run.app")
+    monkeypatch.setenv("AGENT_MODEL_TRANSPORT_PROFILE", "cloud")
 
-    with pytest.raises(ValueError, match="ID_TOKEN_AUDIENCE"):
+    with pytest.raises(ValueError, match="audience"):
         build_application(cloud_adapter_factory=_cloud_factory({}))
 
     monkeypatch.setenv(
         "AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE",
         "https://different-model.example.run.app",
     )
-    with pytest.raises(ValueError, match="must match"):
+    with pytest.raises(ValueError, match="exactly match"):
         build_application(cloud_adapter_factory=_cloud_factory({}))
 
 
@@ -335,6 +339,7 @@ def test_cloud_worker_ollama_uses_google_identity_auth(
     monkeypatch.setenv("AGENT_API_INFERENCE_MODE", "ollama")
     monkeypatch.setenv("AGENT_MODEL_NAME", "granite3.3:8b")
     monkeypatch.setenv("AGENT_MODEL_BASE_URL", model_origin)
+    monkeypatch.setenv("AGENT_MODEL_TRANSPORT_PROFILE", "cloud")
     monkeypatch.setenv("AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE", model_origin)
 
     executor = _run_executor(
@@ -355,7 +360,53 @@ def test_cloud_worker_ollama_uses_google_identity_auth(
 
     assert isinstance(executor, OllamaResearchExecutor)
     assert isinstance(executor.model_auth, GoogleIdTokenAuth)
+    assert executor.settings.transport_profile == "cloud"
+    assert executor.settings.google_id_token_audience == model_origin
     assert executor.memory_reader_factory is None
+
+
+def test_local_process_can_use_authenticated_cloud_ollama(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_origin = "https://private-model.example.run.app"
+    monkeypatch.setenv("AGENT_MODEL_NAME", "granite3.3:8b")
+    monkeypatch.setenv("AGENT_MODEL_BASE_URL", model_origin)
+    monkeypatch.setenv("AGENT_MODEL_TRANSPORT_PROFILE", "cloud")
+    monkeypatch.setenv("AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE", model_origin)
+    monkeypatch.setenv("AGENT_SEARCH_BACKENDS", "auto,duckduckgo")
+
+    executor = _run_executor(
+        "ollama", cloud_settings=None, database_path=tmp_path / "memory.sqlite3"
+    )
+
+    assert isinstance(executor, OllamaResearchExecutor)
+    assert isinstance(executor.model_auth, GoogleIdTokenAuth)
+    assert executor.settings.search_backends == ("auto", "duckduckgo")
+    assert executor.memory_reader_factory is not None
+
+
+def test_cloud_worker_rejects_local_model_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AGENT_MODEL_NAME", "granite3.3:8b")
+    monkeypatch.setenv("AGENT_MODEL_TRANSPORT_PROFILE", "local")
+
+    with pytest.raises(ValueError, match="requires cloud model transport"):
+        _run_executor(
+            "ollama",
+            cloud_settings=CloudRuntimeSettings(
+                project_id="contract-assessment-dev",
+                database="(default)",
+                queue_name=(
+                    "projects/contract-assessment-dev/locations/europe-west3/"
+                    "queues/dispatch"
+                ),
+                delivery_path="/internal/tasks/run-delivery",
+                target_url=None,
+                service_role="worker",
+            ),
+            database_path=tmp_path / "memory.sqlite3",
+        )
 
 
 def test_relative_database_paths_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -363,6 +414,22 @@ def test_relative_database_paths_are_rejected(monkeypatch: pytest.MonkeyPatch) -
 
     with pytest.raises(ValueError, match="AGENT_API_DATABASE_PATH"):
         build_application()
+
+
+def test_action_log_level_is_strict_and_configures_agent_loggers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AGENT_API_DATABASE_PATH", str(tmp_path / "db.sqlite3"))
+    monkeypatch.setenv("AGENT_API_KEY_PEPPER", "c" * 43)
+    monkeypatch.setenv("AGENT_ACTION_LOG_LEVEL", "debug")
+    with pytest.raises(ValueError, match="AGENT_ACTION_LOG_LEVEL"):
+        build_application()
+
+    monkeypatch.setenv("AGENT_ACTION_LOG_LEVEL", "DEBUG")
+    build_application()
+
+    assert logging.getLogger("search_agent.actions").level == logging.DEBUG
+    assert logging.getLogger("agent_api.operations").level == logging.DEBUG
 
 
 def test_cloud_run_production_rejects_sqlite_authoritative_state(

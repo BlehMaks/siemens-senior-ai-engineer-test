@@ -25,6 +25,7 @@ locals {
   dispatch_queue_path = "projects/${var.project_id}/locations/${var.region}/queues/${local.dispatch_queue_name}"
 
   api_plain_env = {
+    AGENT_ACTION_LOG_LEVEL        = var.action_log_level
     AGENT_API_SERVICE_ROLE        = "api"
     AGENT_API_INFERENCE_MODE      = "disabled"
     AGENT_API_SHUTDOWN_SECONDS    = tostring(var.shutdown_seconds)
@@ -35,15 +36,26 @@ locals {
     AGENT_API_QUEUE_DELIVERY_PATH = var.worker_dispatch_path
   }
 
-  worker_plain_env = {
+  worker_base_env = {
+    AGENT_ACTION_LOG_LEVEL        = var.action_log_level
     AGENT_API_SERVICE_ROLE        = "worker"
-    AGENT_API_INFERENCE_MODE      = "fake"
+    AGENT_API_INFERENCE_MODE      = var.worker_inference_mode
     AGENT_API_SHUTDOWN_SECONDS    = tostring(var.shutdown_seconds)
     AGENT_API_GCP_PROJECT_ID      = var.project_id
     AGENT_API_FIRESTORE_DATABASE  = var.firestore_database_name
     AGENT_API_CLOUD_TASKS_QUEUE   = local.dispatch_queue_path
     AGENT_API_QUEUE_DELIVERY_PATH = var.worker_dispatch_path
+    AGENT_SEARCH_BACKENDS         = join(",", var.search_backends)
   }
+
+  worker_model_env = var.worker_inference_mode == "ollama" ? {
+    AGENT_MODEL_TRANSPORT_PROFILE        = var.model_transport_profile
+    AGENT_MODEL_BASE_URL                 = var.model_base_url
+    AGENT_MODEL_NAME                     = var.model_name
+    AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE = var.model_google_id_token_audience
+  } : {}
+
+  worker_plain_env = merge(local.worker_base_env, local.worker_model_env)
 }
 
 resource "google_project_service" "required" {

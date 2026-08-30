@@ -42,6 +42,15 @@ run "dev_environment_plans_with_reviewed_contract" {
     condition     = output.execution_plane.worker_service.image == output.execution_plane.api_service.image
     error_message = "Both execution-plane service contracts must expose the promoted immutable image."
   }
+
+  assert {
+    condition = (
+      output.execution_plane.worker_service.runtime.inference_mode == "fake" &&
+      output.execution_plane.worker_service.runtime.model_base_url == "" &&
+      output.execution_plane.worker_service.runtime.model_name == ""
+    )
+    error_message = "The dev assessment worker must stay cost-free and disconnected from model-serving capacity."
+  }
 }
 
 run "tasks_identity_cannot_collapse_into_deployer" {
