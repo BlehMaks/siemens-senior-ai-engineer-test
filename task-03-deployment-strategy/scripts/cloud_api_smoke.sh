@@ -81,7 +81,7 @@ cleanup() {
 main() {
   [[ $# -eq 5 ]] || { usage >&2; exit 2; }
   local project=$1 region=$2 environment=$3 project_number=$4 smoke_id=$5
-  local actual_number api_url repository_root script_dir
+  local actual_number api_url repository_root script_dir script_path
 
   [[ $project =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || fail "invalid project id"
   [[ $region =~ ^[a-z]+-[a-z]+[0-9]$ ]] || fail "invalid region"
@@ -90,14 +90,20 @@ main() {
   [[ $smoke_id =~ ^[a-z0-9][a-z0-9-]{2,31}$ ]] || fail "SMOKE_ID must be a short lowercase opaque label"
 
   CLOUD_SMOKE_UV_BIN=${UV_BIN:-uv}
-  for tool in gcloud jq curl "$CLOUD_SMOKE_UV_BIN"; do
+  for tool in gcloud jq curl readlink "$CLOUD_SMOKE_UV_BIN"; do
     require_tool "$tool"
   done
 
   actual_number=$(gcloud projects describe "$project" --format='value(projectNumber)')
   [[ $actual_number == "$project_number" ]] || fail "project number does not match"
 
-  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+  script_path=${BASH_SOURCE[0]}
+  while [[ -h $script_path ]]; do
+    script_dir=$(cd -P "$(dirname "$script_path")" && pwd)
+    script_path=$(readlink "$script_path")
+    [[ $script_path == /* ]] || script_path=$script_dir/$script_path
+  done
+  script_dir=$(cd -P "$(dirname "$script_path")" && pwd)
   repository_root=$(cd "$script_dir/../.." && pwd -P)
   cd "$repository_root"
   api_url=$(gcloud run services describe "sai-$environment-api" \
