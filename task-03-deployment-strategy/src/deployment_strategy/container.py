@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from collections.abc import Callable
@@ -34,6 +35,7 @@ from search_agent.contracts import OpaqueId, QueryText
 from search_agent.runner import RunResult
 
 _DEFAULT_DATABASE_PATH = Path("/tmp/agent-api.sqlite3")
+_LOGGER = logging.getLogger(__name__)
 _CLOUD_QUEUE = re.compile(
     r"^projects/(?P<project>[a-z][a-z0-9-]{4,28}[a-z0-9])/"
     r"locations/[a-z]+-[a-z]+[0-9]/queues/[a-z][a-z0-9-]{1,99}$"
@@ -76,9 +78,25 @@ class CloudReadinessProbe:
             await self._store.get(
                 collection="_readiness", document_id="connectivity-probe"
             )
-            return await self._tasks.ready()
-        except Exception:
+        except Exception as exc:
+            _LOGGER.warning(
+                "Cloud readiness failed: dependency=firestore error_type=%s",
+                type(exc).__name__,
+            )
             return False
+        try:
+            tasks_ready = await self._tasks.ready()
+        except Exception as exc:
+            _LOGGER.warning(
+                "Cloud readiness failed: dependency=cloud_tasks error_type=%s",
+                type(exc).__name__,
+            )
+            return False
+        if not tasks_ready:
+            _LOGGER.warning(
+                "Cloud readiness failed: dependency=cloud_tasks status=unavailable"
+            )
+        return tasks_ready
 
 
 class FakeRunExecutor:

@@ -22,6 +22,7 @@ from agent_api.storage import (
 )
 from deployment_strategy.container import (
     CloudAdapters,
+    CloudReadinessProbe,
     CloudRuntimeSettings,
     FakeRunExecutor,
     _bounded_integer,
@@ -87,8 +88,47 @@ class ReadyProbe:
         return True
 
 
+class NotReadyProbe:
+    async def ready(self) -> bool:
+        return False
+
+
+class ExplodingStore(CloudFakeStore):
+    async def get(
+        self, *, collection: str, document_id: str
+    ) -> dict[str, object] | None:
+        del collection, document_id
+        raise RuntimeError("test-only failure")
+
+
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_cloud_readiness_logs_the_failed_dependency(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    probe = CloudReadinessProbe(ExplodingStore(), ReadyProbe())
+
+    assert await probe.ready() is False
+    assert (
+        "Cloud readiness failed: dependency=firestore error_type=RuntimeError"
+        in caplog.text
+    )
+
+
+@pytest.mark.asyncio
+async def test_cloud_readiness_logs_an_unavailable_task_queue(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    probe = CloudReadinessProbe(CloudFakeStore(), NotReadyProbe())
+
+    assert await probe.ready() is False
+    assert (
+        "Cloud readiness failed: dependency=cloud_tasks status=unavailable"
+        in caplog.text
+    )
 
 
 def test_dockerfile_is_locked_minimal_and_runtime_hardened() -> None:
