@@ -51,11 +51,16 @@ implemented lifecycle is deliberately model-independent:
 - source, session, procedure, fact, and tenant deletion are durable, and SQLite
   reopen preserves lifecycle state and consumed procedure version numbers;
 - `RepositoryReviewedMemoryReader` exposes at most eight active facts and four active
-  procedures to answer synthesis. `ResearchRunner.memory_reads_enabled` is `False`
-  by default, and disabled runs do not call the reader or add a prompt field;
+  procedures to answer synthesis. A bare `ResearchRunner` remains fail-closed with
+  memory reads disabled, while the local Ollama service automatically supplies a
+  request-scoped reader for its SQLite memory store; no caller or UI toggle is
+  required. Runs with no eligible reviewed records do not add a prompt field;
 - enabled memory is reduced to public fact provenance and declarative steps, appears
   only under `reviewed_memory_untrusted_data`, and cannot change planning, tools,
   capabilities, system instructions, budgets, or citation validation.
+- non-empty reviewed context is counted in the persisted reflection as
+  `memory_records`; the API derives its terminal `memory_used` indicator from that
+  count instead of trusting the browser or a separate mutable flag.
 
 There is no model proposal, automatic approval, automatic activation, or executable
 procedure path. Those paths remain unavailable because the excluded model benchmark

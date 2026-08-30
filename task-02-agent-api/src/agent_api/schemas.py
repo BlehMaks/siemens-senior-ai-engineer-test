@@ -345,6 +345,7 @@ class RunStatusResponse(StrictModel):
     cancellation_requested: bool = False
     answer: ScopedAnswer | None = None
     failure: RunFailure | None = None
+    memory_used: bool = False
 
     _required_timestamps_are_utc = field_validator("created_at", "updated_at")(
         _require_utc
@@ -368,6 +369,8 @@ class RunStatusResponse(StrictModel):
         terminal = self.state in TERMINAL_RUN_STATES
         if terminal != (self.terminal_at is not None):
             raise ValueError("terminal timestamp must match terminal state")
+        if self.memory_used and not terminal:
+            raise ValueError("memory usage can be exposed only for terminal runs")
         if self.terminal_at is not None and not (
             self.created_at <= self.terminal_at <= self.updated_at
         ):

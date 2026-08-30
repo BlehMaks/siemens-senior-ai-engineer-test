@@ -86,9 +86,16 @@ def _revalidate_reflection(value: object) -> RunReflection:
 
 
 def _validate_state_update_reflection(
-    *, tenant_id: str, run_id: str, state: RunState, reflection: RunReflection | None
+    *,
+    tenant_id: str,
+    run_id: str,
+    state: RunState,
+    reflection: RunReflection | None,
+    memory_used: bool,
 ) -> None:
     if reflection is None:
+        if memory_used:
+            raise ValueError("memory usage requires a persisted reflection")
         return
     if reflection.tenant_id != tenant_id or reflection.run_id != run_id:
         raise ValueError("reflection must match the run scope")
@@ -98,6 +105,8 @@ def _validate_state_update_reflection(
         raise ValueError("non-terminal runs cannot persist a reflection")
     if reflection.outcome.value != state.value:
         raise ValueError("reflection must match the terminal state")
+    if memory_used != (reflection.usage.memory_records > 0):
+        raise ValueError("memory usage must match the persisted reflection")
 
 
 def _validate_terminal_payload(
@@ -178,6 +187,7 @@ class RunRecord(StrictModel):
     lease: ExecutionLease | None = None
     answer: ScopedAnswer | None = None
     failure_code: RunFailureCode | None = None
+    memory_used: bool = False
 
     _required_timestamps_are_utc = field_validator("created_at", "updated_at")(
         _require_utc
@@ -222,6 +232,8 @@ class RunRecord(StrictModel):
             raise ValueError("terminal timestamp must be within the run lifetime")
         if is_terminal and self.lease is not None:
             raise ValueError("terminal runs cannot retain an execution lease")
+        if self.memory_used and not is_terminal:
+            raise ValueError("memory usage can be published only for terminal runs")
         if (
             is_terminal
             and self.cancellation_requested_at is not None
@@ -439,6 +451,7 @@ class StateUpdate(StrictModel):
     answer: ScopedAnswer | None = None
     failure_code: RunFailureCode | None = None
     reflection: RunReflection | None = None
+    memory_used: bool = False
 
     _at_is_utc = field_validator("at")(_require_utc)
 
@@ -482,6 +495,7 @@ class StateUpdate(StrictModel):
             run_id=self.run_id,
             state=self.next_state,
             reflection=self.reflection,
+            memory_used=self.memory_used,
         )
         return self
 

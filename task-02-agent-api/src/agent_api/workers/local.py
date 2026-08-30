@@ -76,6 +76,7 @@ class _TerminalProjection:
     answer: ScopedAnswer | None = None
     failure_code: RunFailureCode | None = None
     reflection: RunReflection | None = None
+    memory_used: bool = False
 
 
 class LocalWorker:
@@ -463,6 +464,7 @@ class LocalWorker:
                 answer=projection.answer,
                 failure_code=projection.failure_code,
                 reflection=projection.reflection,
+                memory_used=projection.memory_used,
             )
         )
         if write.disposition is WriteDisposition.APPLIED:
@@ -556,11 +558,13 @@ def _projection_from_result(
             next_state=RunState.COMPLETED,
             answer=validate_public_answer(snapshot.answer),
             reflection=reflect_run(result),
+            memory_used=result.usage.memory_records > 0,
         )
     if snapshot.terminal_state is TerminalState.CANCELLED:
         return _TerminalProjection(
             next_state=RunState.CANCELLED,
             reflection=reflect_run(result),
+            memory_used=result.usage.memory_records > 0,
         )
     if snapshot.failure_reason is None:
         raise ValueError("failed result omitted its failure reason")
@@ -571,6 +575,7 @@ def _projection_from_result(
             RunFailureCode.EXECUTION_FAILED,
         ),
         reflection=reflect_run(result),
+        memory_used=result.usage.memory_records > 0,
     )
 
 

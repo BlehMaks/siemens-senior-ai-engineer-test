@@ -282,25 +282,30 @@ def test_unknown_inference_modes_fail_closed(
 
 
 def test_local_ollama_mode_reuses_the_bounded_research_executor(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("AGENT_MODEL_NAME", "granite3.3:8b")
 
-    executor = _run_executor("ollama", cloud_settings=None)
+    executor = _run_executor(
+        "ollama", cloud_settings=None, database_path=tmp_path / "memory.sqlite3"
+    )
 
     assert isinstance(executor, OllamaResearchExecutor)
     assert executor.settings.model_name == "granite3.3:8b"
     assert executor.settings.base_url == "http://127.0.0.1:11434"
     assert executor.model_auth is None
+    assert executor.memory_reader_factory is not None
 
 
 def test_ollama_mode_rejects_a_missing_model_name(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("AGENT_MODEL_NAME", raising=False)
 
     with pytest.raises(ValueError, match="model_name"):
-        _run_executor("ollama", cloud_settings=None)
+        _run_executor(
+            "ollama", cloud_settings=None, database_path=tmp_path / "memory.sqlite3"
+        )
 
 
 def test_cloud_worker_ollama_requires_matching_private_model_identity(
@@ -309,9 +314,7 @@ def test_cloud_worker_ollama_requires_matching_private_model_identity(
     _set_cloud_environment(monkeypatch, tmp_path, role="worker")
     monkeypatch.setenv("AGENT_API_INFERENCE_MODE", "ollama")
     monkeypatch.setenv("AGENT_MODEL_NAME", "granite3.3:8b")
-    monkeypatch.setenv(
-        "AGENT_MODEL_BASE_URL", "https://private-model.example.run.app"
-    )
+    monkeypatch.setenv("AGENT_MODEL_BASE_URL", "https://private-model.example.run.app")
 
     with pytest.raises(ValueError, match="ID_TOKEN_AUDIENCE"):
         build_application(cloud_adapter_factory=_cloud_factory({}))
@@ -347,10 +350,12 @@ def test_cloud_worker_ollama_uses_google_identity_auth(
             target_url=None,
             service_role="worker",
         ),
+        database_path=tmp_path / "memory.sqlite3",
     )
 
     assert isinstance(executor, OllamaResearchExecutor)
     assert isinstance(executor.model_auth, GoogleIdTokenAuth)
+    assert executor.memory_reader_factory is None
 
 
 def test_relative_database_paths_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -553,6 +553,7 @@ class FirestoreRunRepository:
                 ),
                 answer=checked.answer,
                 failure_code=checked.failure_code,
+                memory_used=checked.memory_used,
             )
             sequence = await self._next_event_sequence(tx, changed)
             await self._save_run(tx, previous=run, changed=changed)

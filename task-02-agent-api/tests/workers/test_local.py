@@ -300,6 +300,7 @@ class FakeRunRepository:
                 lease=None if terminal else run.lease,
                 answer=update.answer,
                 failure_code=update.failure_code,
+                memory_used=update.memory_used,
                 cancellation_requested_at=(
                     run.cancellation_requested_at
                     if update.next_state is not RunState.CANCELLED
@@ -407,6 +408,34 @@ async def test_two_workers_execute_one_delivery() -> None:
     assert stored is not None
     assert stored.state is RunState.COMPLETED
     assert stored.delivery_attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_persists_truthful_reviewed_memory_indicator() -> None:
+    queue = FakeQueue(work_item())
+    repository = FakeRunRepository(queued_run())
+    result = completed_result()
+    result = RunResult(
+        snapshot=result.snapshot,
+        events=result.events,
+        usage=result.usage.model_copy(update={"memory_records": 2}),
+    )
+    worker = LocalWorker(
+        repository=cast(RunRepository, repository),
+        queue=queue,
+        executor=ScriptedExecutor(result=result),
+        worker_id="worker-one",
+        clock=MutableClock(NOW),
+        lease_id_factory=lambda: "lease-one",
+    )
+
+    await worker.process_one()
+    stored = await repository.get(tenant_id="tenant-one", run_id="run-one")
+
+    assert stored is not None
+    assert stored.memory_used is True
+    reflection = repository.reflections[("tenant-one", "session-one", "run-one")]
+    assert reflection.usage.memory_records == 2
 
 
 @pytest.mark.asyncio

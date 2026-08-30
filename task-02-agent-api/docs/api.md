@@ -127,6 +127,8 @@ state, and UTC creation time. A status response exposes lifecycle timestamps,
 a cancellation flag, and exactly one public terminal result where applicable.
 The public answer reuses the Task 1 `ScopedAnswer` and `Citation` types and is
 additionally limited to 16 citations and eight follow-up queries.
+`memory_used` defaults to `false` and may be `true` only on a terminal run whose
+persisted reflection records at least one reviewed memory item.
 
 Valid terminal response shapes are:
 
@@ -138,6 +140,7 @@ Valid terminal response shapes are:
   "created_at":"2026-08-27T10:00:00Z",
   "updated_at":"2026-08-27T10:00:02Z",
   "terminal_at":"2026-08-27T10:00:02Z",
+  "memory_used":true,
   "cancellation_requested":false,
   "answer":{
     "answer_text":"The documented answer is supported by the cited source.",

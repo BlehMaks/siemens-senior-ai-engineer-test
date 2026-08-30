@@ -770,6 +770,7 @@ class SQLiteRunRepository(_PathRepository):
                 lease=None if terminal else run.lease,
                 answer=checked.answer,
                 failure_code=checked.failure_code,
+                memory_used=checked.memory_used,
             )
             if not await _save_run(connection, run, changed):
                 current = await _get_run(connection, checked.tenant_id, checked.run_id)

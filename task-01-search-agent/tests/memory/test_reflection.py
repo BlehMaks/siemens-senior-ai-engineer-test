@@ -64,8 +64,20 @@ def test_completed_reflection_has_a_stable_bounded_snapshot() -> None:
             "model_calls": 2,
             "model_attempts": 2,
             "tokens": 512,
+            "memory_records": 0,
         },
     }
+
+
+def test_reflection_preserves_reviewed_memory_usage() -> None:
+    result = completed_result()
+    result = RunResult(
+        snapshot=result.snapshot,
+        events=result.events,
+        usage=result.usage.model_copy(update={"memory_records": 3}),
+    )
+
+    assert reflect_run(result).usage.memory_records == 3
 
 
 def test_failed_cancelled_and_partial_runs_still_reflect() -> None:

@@ -33,6 +33,11 @@ from agent_api.storage import (
 from search_agent import OllamaResearchExecutor, OllamaRuntimeSettings
 from search_agent.cli import _demo_runner
 from search_agent.contracts import OpaqueId, QueryText
+from search_agent.memory import (
+    RepositoryReviewedMemoryReader,
+    SQLiteProcedureRepository,
+    SQLiteSemanticFactRepository,
+)
 from search_agent.runner import RunResult
 
 from .model_auth import GoogleIdTokenAuth
@@ -134,7 +139,11 @@ def build_application(
 
     cloud_settings = _cloud_runtime_settings()
     inference_mode = os.environ.get("AGENT_API_INFERENCE_MODE", "fake")
-    executor = _run_executor(inference_mode, cloud_settings=cloud_settings)
+    executor = _run_executor(
+        inference_mode,
+        cloud_settings=cloud_settings,
+        database_path=database_path,
+    )
     if cloud_settings is not None:
         if cloud_settings.service_role == "api" and executor is not None:
             raise ValueError("cloud API service must disable local inference")
@@ -178,7 +187,10 @@ def build_application(
 
 
 def _run_executor(
-    inference_mode: str, *, cloud_settings: CloudRuntimeSettings | None
+    inference_mode: str,
+    *,
+    cloud_settings: CloudRuntimeSettings | None,
+    database_path: Path,
 ) -> FakeRunExecutor | OllamaResearchExecutor | None:
     if inference_mode == "fake":
         return FakeRunExecutor()
@@ -215,7 +227,24 @@ def _run_executor(
             "AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE must match AGENT_MODEL_BASE_URL"
         )
     auth = None if audience is None else GoogleIdTokenAuth(audience)
-    return OllamaResearchExecutor(settings=settings, model_auth=auth)
+    return OllamaResearchExecutor(
+        settings=settings,
+        model_auth=auth,
+        memory_reader_factory=(
+            None
+            if cloud_settings is not None
+            else lambda: _local_memory_reader(database_path)
+        ),
+    )
+
+
+def _local_memory_reader(database_path: Path) -> RepositoryReviewedMemoryReader:
+    """Open one request-scoped reader over the migrated local memory store."""
+
+    return RepositoryReviewedMemoryReader(
+        SQLiteSemanticFactRepository(database_path),
+        SQLiteProcedureRepository(database_path),
+    )
 
 
 def _cloud_runtime_settings() -> CloudRuntimeSettings | None:

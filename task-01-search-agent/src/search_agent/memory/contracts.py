@@ -128,6 +128,7 @@ class ReflectionUsage(StrictModel):
     model_calls: int = Field(ge=0, le=16)
     model_attempts: int = Field(ge=0, le=96)
     tokens: int = Field(ge=0, le=1_000_000)
+    memory_records: int = Field(default=0, ge=0, le=12)
 
     @model_validator(mode="after")
     def validate_related_counts(self) -> ReflectionUsage:

@@ -124,6 +124,7 @@ class RunUsage(StrictModel):
     model_calls: int = Field(ge=0)
     model_attempts: int = Field(ge=0)
     tokens: int = Field(ge=0)
+    memory_records: int = Field(default=0, ge=0, le=12)
 
 
 class RunResult(StrictModel):
@@ -198,6 +199,7 @@ class _Ledger:
     model_calls: int = 0
     model_attempts: int = 0
     tokens: int = 0
+    memory_records: int = 0
 
     @classmethod
     def create(
@@ -359,6 +361,7 @@ class _Ledger:
             model_calls=self.model_calls,
             model_attempts=self.model_attempts,
             tokens=self.tokens,
+            memory_records=self.memory_records,
         )
 
 
@@ -530,6 +533,12 @@ class ResearchRunner:
             if self.memory_reads_enabled
             else None
         )
+        if memory is not None:
+            memory_record_count = len(memory.facts) + len(memory.procedures)
+            if memory_record_count:
+                ledger.memory_records = memory_record_count
+            else:
+                memory = None
         answer = await self._synthesize(
             snapshot.request,
             decision,

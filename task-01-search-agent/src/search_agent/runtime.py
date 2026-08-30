@@ -14,6 +14,7 @@ import httpx
 from ddgs import DDGS
 
 from .contracts import OpaqueId, QueryText
+from .memory import RepositoryReviewedMemoryReader
 from .planning import QueryPlanner
 from .providers import OllamaStructuredChatProvider
 from .runner import ResearchRunner, RunBudget, RunResult
@@ -29,6 +30,7 @@ from .tools import (
 _MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
 SearchBackendFactory = Callable[[], SyncSearchBackend]
 FetchClientFactory = Callable[[], httpx.AsyncClient]
+MemoryReaderFactory = Callable[[], RepositoryReviewedMemoryReader]
 
 
 def _ddgs_backend() -> SyncSearchBackend:
@@ -102,6 +104,7 @@ class OllamaResearchExecutor:
     search_backend_factory: SearchBackendFactory = _ddgs_backend
     fetch_client_factory: FetchClientFactory = create_fetch_client
     resolver: HostResolver | None = None
+    memory_reader_factory: MemoryReaderFactory | None = None
 
     async def run(
         self,
@@ -112,17 +115,36 @@ class OllamaResearchExecutor:
         request: QueryText | str,
         budget: RunBudget | None = None,
     ) -> RunResult:
-        async with self.fetch_client_factory() as fetch_client:
-            runner = self._runner(fetch_client)
-            return await runner.run(
-                tenant_id=tenant_id,
-                session_id=session_id,
-                run_id=run_id,
-                request=str(request),
-                budget=budget,
-            )
+        memory_reader = (
+            None if self.memory_reader_factory is None else self.memory_reader_factory()
+        )
+        try:
+            async with self.fetch_client_factory() as fetch_client:
+                runner = self._runner(fetch_client, memory_reader=memory_reader)
+                return await runner.run(
+                    tenant_id=tenant_id,
+                    session_id=session_id,
+                    run_id=run_id,
+                    request=str(request),
+                    budget=budget,
+                )
+        finally:
+            if memory_reader is not None:
+                memory_reader.close()
+                for repository in (
+                    memory_reader.semantic_facts,
+                    memory_reader.procedures,
+                ):
+                    close = getattr(repository, "close", None)
+                    if callable(close):
+                        close()
 
-    def _runner(self, fetch_client: httpx.AsyncClient) -> ResearchRunner:
+    def _runner(
+        self,
+        fetch_client: httpx.AsyncClient,
+        *,
+        memory_reader: RepositoryReviewedMemoryReader | None,
+    ) -> ResearchRunner:
         policy = SitePolicy()
         guard = (
             UrlGuard(policy=policy)
@@ -148,6 +170,8 @@ class OllamaResearchExecutor:
             fetcher=GuardedFetcher(client=fetch_client, guard=guard),
             extractor=AsyncLocalExtractor(),
             provider=provider,
+            memory_reader=memory_reader,
+            memory_reads_enabled=memory_reader is not None,
         )
 
 

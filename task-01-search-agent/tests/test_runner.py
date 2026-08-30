@@ -526,6 +526,7 @@ async def test_reviewed_memory_reads_default_off_without_prompt_delta() -> None:
     result = await _run(_runner(provider=provider, memory_reader=reader))
 
     assert result.snapshot.status is RunStatus.COMPLETED
+    assert result.usage.memory_records == 0
     assert reader.calls == []
     assert provider.messages[0][0].content == ORIGINAL_SYNTHESIS_SYSTEM_PROMPT
     payload = json.loads(provider.messages[0][1].content)
@@ -548,6 +549,7 @@ async def test_enabled_reviewed_memory_is_bounded_untrusted_synthesis_data() -> 
     )
 
     assert result.snapshot.status is RunStatus.COMPLETED
+    assert result.usage.memory_records == 1
     assert reader.calls == [("tenant-one", NOW)]
     assert searcher.calls == 1
     system_message, data_message = provider.messages[0]
@@ -605,6 +607,7 @@ async def test_enabled_runner_live_revalidates_active_procedure_pointer() -> Non
         reader.close()
 
     assert result.snapshot.status is RunStatus.COMPLETED
+    assert result.usage.memory_records == 1
     payload = json.loads(provider.messages[0][1].content)
     active = payload["reviewed_memory_untrusted_data"]["active_procedures"]
     assert active == [

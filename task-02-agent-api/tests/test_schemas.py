@@ -162,6 +162,22 @@ def test_every_terminal_state_has_a_valid_public_shape(
     assert response.terminal_at is not None
 
 
+def test_memory_indicator_is_terminal_only() -> None:
+    response = RunStatusResponse.model_validate(
+        {
+            **status_values(RunState.COMPLETED),
+            "answer": answer(),
+            "memory_used": True,
+        }
+    )
+
+    assert response.memory_used is True
+    with pytest.raises(ValidationError, match="memory usage"):
+        RunStatusResponse.model_validate(
+            {**status_values(RunState.RUNNING), "memory_used": True}
+        )
+
+
 @pytest.mark.parametrize(
     "values",
     [

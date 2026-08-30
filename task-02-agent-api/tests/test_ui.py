@@ -35,6 +35,8 @@ async def test_reviewer_ui_is_packaged_safe_and_outside_openapi(tmp_path) -> Non
     assert 'api("/v1/sessions"' in response.text
     assert '"/runs"' in response.text
     assert 'api("/v1/runs/"' in response.text
+    assert "run.memory_used === true" in response.text
+    assert "Reviewed memory informed this answer." in response.text
     assert "textContent" in response.text
     for forbidden in ("innerHTML", "localStorage", "sessionStorage", "location.hash"):
         assert forbidden not in response.text

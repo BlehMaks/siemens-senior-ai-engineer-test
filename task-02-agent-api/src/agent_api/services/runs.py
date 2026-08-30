@@ -191,4 +191,5 @@ def _public_status(run: RunRecord) -> RunStatusResponse:
         cancellation_requested=run.cancellation_requested_at is not None,
         answer=run.answer,
         failure=failure,
+        memory_used=run.memory_used,
     )

@@ -104,6 +104,12 @@ RESEARCH_UI_HTML = """<!doctype html>
     }
     .citations { display: grid; gap: 6px; margin-top: 10px; }
     .citations a { color: var(--accent-dark); overflow-wrap: anywhere; }
+    .memory-note {
+      color: var(--accent-dark);
+      font-size: 13px;
+      font-weight: 650;
+      margin-top: 9px;
+    }
     .status { color: var(--muted); min-height: 24px; }
     .status.error { color: var(--danger); }
     .composer {
@@ -210,6 +216,12 @@ RESEARCH_UI_HTML = """<!doctype html>
         return;
       }
       const wrapper = addMessage("Agent", answer.answer_text, "agent");
+      if (run.memory_used === true) {
+        const memoryNote = document.createElement("div");
+        memoryNote.className = "memory-note";
+        memoryNote.textContent = "Reviewed memory informed this answer.";
+        wrapper.appendChild(memoryNote);
+      }
       if (!answer.citations?.length) return;
       const citations = document.createElement("div");
       citations.className = "citations";

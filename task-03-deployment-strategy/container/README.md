@@ -42,6 +42,16 @@ trivy image --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,secret \
 gitleaks git --redact --no-banner --exit-code 1 .
 ```
 
-Production adapters replace `fake` during the Task 2/Task 3 integration step. The
-only other accepted value today is `disabled`, which starts the API without an
-in-process worker; unknown inference modes fail closed during startup.
+Set `AGENT_API_INFERENCE_MODE=ollama`, `AGENT_MODEL_NAME`, and optionally
+`AGENT_MODEL_BASE_URL` to run the same bounded agent against a local Ollama server.
+In this local mode the process opens the existing SQLite semantic/procedural memory
+repositories per request and automatically supplies their reviewed active context to
+the agent. The terminal API response records whether any memory was actually used.
+
+Cloud workers use the same `OllamaResearchExecutor` and inject a fresh Google ID
+token for each request to a private HTTPS model origin. The agent consumes memory
+through `ReviewedMemoryReadPort`; a scaled deployment supplies a managed-store
+adapter instead of sharing SQLite between replicas. The assessment cloud profile
+does not pretend SQLite is authoritative and therefore leaves that adapter unset.
+`disabled` starts the API without an in-process worker, and unknown inference modes
+fail closed during startup.
