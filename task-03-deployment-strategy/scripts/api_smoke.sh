@@ -96,7 +96,22 @@ main() {
   cancel_run_id=$(jq -er '.run_id | strings' "$tmp_dir/cancel-run.json")
   status=$(request_status "$tmp_dir/cancel.json" --request POST --config "$auth_a" "$base_url/v1/runs/$cancel_run_id/cancel")
   expect_status 202 "$status" "run cancellation"
-  jq -e '.cancellation_requested == true' "$tmp_dir/cancel.json" >/dev/null || fail "run did not record a cancellation request"
+  jq -e --arg run_id "$cancel_run_id" '
+    .run_id == $run_id and (
+      (
+        .cancellation_requested == true and
+        .changed == true and
+        (.requested_at | type) == "string" and
+        (.state == "cancelled" or .state == "running" or .state == "waiting_for_tool")
+      ) or (
+        .cancellation_requested == false and
+        .changed == false and
+        .requested_at == null and
+        (.state == "completed" or .state == "failed" or .state == "expired")
+      )
+    )
+  ' "$tmp_dir/cancel.json" >/dev/null ||
+    fail "run cancellation response violated the active-or-terminal race contract"
 
   status=$(request_status "$tmp_dir/delete.json" --request DELETE --config "$auth_a" "$base_url/v1/sessions/$session_id")
   expect_status 204 "$status" "session deletion"

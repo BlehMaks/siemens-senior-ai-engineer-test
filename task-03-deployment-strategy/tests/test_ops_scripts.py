@@ -416,6 +416,7 @@ class SmokeHandler(BaseHTTPRequestHandler):
     requests: ClassVar[list[tuple[str, str, str | None]]] = []
     run_count: ClassVar[int] = 0
     leak_cross_tenant: ClassVar[bool] = False
+    terminal_cancel_race: ClassVar[bool] = False
 
     def log_message(self, format: str, *args: object) -> None:
         del format, args
@@ -469,7 +470,28 @@ class SmokeHandler(BaseHTTPRequestHandler):
             run_id = "run-stream" if self.run_count == 1 else "run-cancel"
             self._json(202, {"run_id": run_id})
         elif self.path == "/v1/runs/run-cancel/cancel":
-            self._json(202, {"cancellation_requested": True})
+            if self.terminal_cancel_race:
+                self._json(
+                    202,
+                    {
+                        "run_id": "run-cancel",
+                        "state": "completed",
+                        "cancellation_requested": False,
+                        "changed": False,
+                        "requested_at": None,
+                    },
+                )
+            else:
+                self._json(
+                    202,
+                    {
+                        "run_id": "run-cancel",
+                        "state": "cancelled",
+                        "cancellation_requested": True,
+                        "changed": True,
+                        "requested_at": "2026-08-30T16:00:00Z",
+                    },
+                )
         else:
             self._json(404, {"error": {"code": "not_found"}})
 
@@ -482,10 +504,13 @@ class SmokeHandler(BaseHTTPRequestHandler):
             self._json(404, {"error": {"code": "not_found"}})
 
 
-def _run_api_smoke(*, leak_cross_tenant: bool) -> subprocess.CompletedProcess[str]:
+def _run_api_smoke(
+    *, leak_cross_tenant: bool, terminal_cancel_race: bool = False
+) -> subprocess.CompletedProcess[str]:
     SmokeHandler.requests = []
     SmokeHandler.run_count = 0
     SmokeHandler.leak_cross_tenant = leak_cross_tenant
+    SmokeHandler.terminal_cancel_race = terminal_cancel_race
     server = ThreadingHTTPServer(("127.0.0.1", 0), SmokeHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -522,6 +547,16 @@ def test_api_smoke_covers_health_auth_run_sse_cancel_tenant_and_delete() -> None
         )
         == 1
     )
+
+
+def test_api_smoke_accepts_run_that_finishes_before_cancellation() -> None:
+    result = _run_api_smoke(
+        leak_cross_tenant=False,
+        terminal_cancel_race=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "API smoke passed" in result.stdout
 
 
 def test_api_smoke_fails_on_cross_tenant_visibility() -> None:
