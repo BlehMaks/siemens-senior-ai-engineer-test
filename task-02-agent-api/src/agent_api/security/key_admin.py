@@ -133,8 +133,14 @@ def _write_plaintext_file(path: Path, plaintext: str) -> None:
         raise SystemExit("--output-file must be an absolute path")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     descriptor = -1
+    created = False
+    created_identity: tuple[int, int] | None = None
     try:
         descriptor = os.open(path, flags, 0o600)
+        created = True
+        file_stat = os.fstat(descriptor)
+        created_identity = (file_stat.st_dev, file_stat.st_ino)
+        os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as output:
             descriptor = -1
             output.write(plaintext)
@@ -144,7 +150,14 @@ def _write_plaintext_file(path: Path, plaintext: str) -> None:
     except OSError as exc:
         if descriptor >= 0:
             os.close(descriptor)
-        path.unlink(missing_ok=True)
+        if created and created_identity is not None:
+            try:
+                path_stat = os.lstat(path)
+            except FileNotFoundError:
+                pass
+            else:
+                if (path_stat.st_dev, path_stat.st_ino) == created_identity:
+                    path.unlink()
         raise SystemExit("could not write the protected output file") from exc
 
 
