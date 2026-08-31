@@ -117,6 +117,44 @@ def test_frozen_pdf_pipeline_selects_the_late_page_fact() -> None:
     assert any(chunk.table_index is not None for chunk in context.chunks)
 
 
+def test_dated_listing_keeps_date_with_following_heading_for_ranking() -> None:
+    url = "https://press.siemens.com/global/en"
+    first_headline = "Fresh nonce announcement 71e5c4e8"
+    extracted = LocalExtractor().extract(
+        FetchedDocument(
+            canonical_url=url,
+            content_type="text/html",
+            body=(
+                "<html><head><title>Press</title></head><body><article>"
+                "<h2>Featured news</h2>"
+                '<span class="Date" data-original="2026-08-07">'
+                "07 August 2026</span>"
+                f"<h3>{first_headline}</h3>"
+                '<span class="StartDate" data-original="2026-08-06">'
+                "06 August 2026</span>"
+                "<h3>CES 2026 partnership update</h3>"
+                "</article></body></html>"
+            ).encode(),
+        )
+    )
+    hit = SearchHit(
+        title="Press",
+        url=_URL.validate_python(url),
+        snippet="Siemens press listings",
+        rank=1,
+    )
+
+    context = retrieve_context(
+        "Return the exact first listed headline dated 2026",
+        hit,
+        extracted,
+        retrieved_at=_NOW,
+    )
+
+    assert first_headline in context.chunks[0].text
+    assert context.chunks[0].text.startswith("07 August 2026")
+
+
 def test_document_and_chunk_ids_ignore_incidental_whitespace() -> None:
     normalized = build_research_document(_hit(), _document(), retrieved_at=_NOW)
     spaced = _document(

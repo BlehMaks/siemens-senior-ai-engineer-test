@@ -141,6 +141,25 @@ def test_appends_visible_headings_missed_by_main_content_extraction(
     )
 
 
+def test_nested_time_element_remains_part_of_its_heading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    heading = "Updated 31 August 2026 announcement"
+    monkeypatch.setattr(
+        extract_module,
+        "bare_extraction",
+        lambda *args, **kwargs: SimpleNamespace(title="Press", text=heading),
+    )
+    html = (
+        b'<h3>Updated <time datetime="2026-08-31">31 August 2026</time> '
+        b"announcement</h3>"
+    )
+
+    extracted = LocalExtractor().extract(_document(html))
+
+    assert ExtractedBlock(text=heading, section=heading) in extracted.blocks
+
+
 @pytest.mark.parametrize(
     "hidden_markup",
     [

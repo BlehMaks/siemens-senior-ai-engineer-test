@@ -27,6 +27,10 @@ _MAX_QUOTE_CHARS = 400
 _MAX_CONTEXT_CHARS = 8_000
 _MAX_REQUEST_CHARS = 1_000
 _TOKEN_PATTERN = re.compile(r"[^\W_]+(?:[-./][^\W_]+)*", flags=re.UNICODE)
+_FIRST_LISTED_PATTERN = re.compile(
+    r"\bfirst\s+(?:listed\s+)?(?:headline|item|entry|result|release|announcement)\b",
+    flags=re.IGNORECASE,
+)
 _AUTHORITY = {
     SourceType.OFFICIAL_REPORT: 1.0,
     SourceType.REGULATORY_FILING: 0.98,
@@ -167,12 +171,37 @@ def select_context(
         ) from None
 
     by_content: dict[str, ResearchChunk] = {}
+    positional: ResearchChunk | None = None
     for document in materialized:
-        for chunk in chunk_document(request, document, max_chunk_chars=max_chunk_chars):
+        document_chunks = chunk_document(
+            request, document, max_chunk_chars=max_chunk_chars
+        )
+        if positional is None and _FIRST_LISTED_PATTERN.search(request):
+            positional = min(
+                (
+                    chunk
+                    for chunk in document_chunks
+                    if chunk.section is not None
+                    and chunk.text.endswith(f"\n{chunk.section}")
+                ),
+                key=lambda chunk: chunk.ordinal,
+                default=None,
+            )
+        for chunk in document_chunks:
             previous = by_content.get(chunk.content_hash)
             if previous is None or _rank_key(chunk) < _rank_key(previous):
                 by_content[chunk.content_hash] = chunk
     ranked = sorted(by_content.values(), key=_rank_key)
+    if positional is not None:
+        selected_positional = by_content[positional.content_hash]
+        ranked = [
+            selected_positional,
+            *(
+                chunk
+                for chunk in ranked
+                if chunk.content_hash != selected_positional.content_hash
+            ),
+        ]
     selected = tuple(ranked[:top_k])
     if not selected:
         raise RetrievalError(

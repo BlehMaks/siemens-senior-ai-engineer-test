@@ -372,6 +372,9 @@ class _HTMLBlockParser(HTMLParser):
         self.blocks: list[ExtractedBlock] = []
         self._suppressed_depth = 0
         self._active_tag: str | None = None
+        self._active_is_date = False
+        self._date_attribute = ""
+        self._pending_date: str | None = None
         self._parts: list[str] = []
         self._section: str | None = None
 
@@ -385,11 +388,26 @@ class _HTMLBlockParser(HTMLParser):
             if tag not in _VOID_HTML_TAGS:
                 self._suppressed_depth = 1
             return
+        attributes = {name.casefold(): value or "" for name, value in attrs}
+        classes = set(attributes.get("class", "").casefold().split())
+        if self._active_tag is None and (
+            tag == "time"
+            or (tag == "span" and classes.intersection({"date", "startdate"}))
+        ):
+            self._active_tag = tag
+            self._active_is_date = True
+            self._date_attribute = (
+                attributes.get("datetime") or attributes.get("data-original") or ""
+            )
+            self._parts = []
+            return
         if tag not in self._BLOCK_TAGS:
             return
         if self._active_tag is not None:
             self._finish_block()
         self._active_tag = tag
+        self._active_is_date = False
+        self._date_attribute = ""
         self._parts = []
 
     def handle_data(self, data: str) -> None:
@@ -413,11 +431,25 @@ class _HTMLBlockParser(HTMLParser):
         if self._active_tag is None:
             return
         text = _space_normalized(" ".join(self._parts))
+        if self._active_is_date:
+            self._pending_date = text or _space_normalized(self._date_attribute) or None
+            self._active_tag = None
+            self._active_is_date = False
+            self._date_attribute = ""
+            self._parts = []
+            return
         if text:
             if self._active_tag.startswith("h"):
                 self._section = text
+                if self._pending_date is not None:
+                    text = f"{self._pending_date}\n{text}"
+                self._pending_date = None
+            else:
+                self._pending_date = None
             self.blocks.append(ExtractedBlock(text=text, section=self._section))
         self._active_tag = None
+        self._active_is_date = False
+        self._date_attribute = ""
         self._parts = []
 
 
