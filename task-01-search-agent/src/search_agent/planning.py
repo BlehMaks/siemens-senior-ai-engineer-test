@@ -83,6 +83,30 @@ _QUESTION_PATTERN = re.compile(
     r"|did|can|could|will|would|should|has|have|had|tell|give|list|name)\b",
     flags=re.IGNORECASE,
 )
+_MAX_CONVERSATIONAL_TOKENS = 6
+# Anchored small-talk openers. Each is matched as a whole phrase at the start of
+# a short request, so a real question that merely reuses one of these words is
+# never captured.
+_CONVERSATIONAL_PHRASES = (
+    "hi",
+    "hello",
+    "hey",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "thanks",
+    "thank you",
+    "how are you",
+    "how are you doing",
+    "how do you do",
+    "how is it going",
+    "how s it going",
+    "what s up",
+    "who are you",
+    "what are you",
+    "what can you do",
+)
+
 _CLAIM_SEGMENT_PATTERN = re.compile(r"(?:\n+|;+|(?<!\d)[.!?]+|[.!?]+(?!\d))")
 _LETTER_PATTERN = re.compile(r"[^\W\d_]", flags=re.UNICODE)
 _QUESTION_PATTERN = re.compile(
@@ -216,8 +240,9 @@ PLANNING_SYSTEM_PROMPT = (
     "weather, prices, dates, numbers, people, products, places or organizations, "
     "and any topic you are not certain about, even when it is not about a company. "
     "This is the normal case, so choose it whenever you are unsure. Use "
-    "direct_reply, with requires_search false, only for a greeting or for a "
-    "request that needs no external fact at all. Use clarification, with "
+    "direct_reply, with requires_search false, only for a greeting, small "
+    "talk about yourself, or a request that needs no external fact at all. "
+    "Use clarification, with "
     "requires_search false, only when the request is too vague to search. Omit "
     "query_plan entirely unless requires_search is true. "
     "For company research, answer_focus and every search text may only reuse words "
@@ -229,6 +254,9 @@ PLANNING_SYSTEM_PROMPT = (
     # The policy layer rejects new words here, so the prompt must not promise them.
     "A direct_reply answer_focus may only reuse the request's words, spelling out "
     "an acronym from the request at most; it is never a place for new facts. "
+    "The one exception is small talk directed at you, such as a greeting, "
+    "thanks, or how you are: reply there in one short friendly sentence of "
+    "your own words, and state no external fact. "
     "For clarification, put the user-facing response in answer_focus. "
     "Return only the structured response."
 )
@@ -240,6 +268,14 @@ _CONTEXT_PLANNING_SYSTEM_PROMPT = (
 )
 
 _FIXED_CLARIFICATION_FOCUS = "Ask the user to clarify the original request."
+# Small models routinely answer small talk by echoing it back. Repeating the
+# question is not a reply, and there is nothing to search for, so a fixed
+# friendly line stands in. It states no external fact, exactly like the fixed
+# clarification focus above.
+_FIXED_CONVERSATIONAL_FOCUS = (
+    "I am a research agent, and I am ready to help. Ask me a question and I "
+    "will search public sources and answer with citations."
+)
 _SAFE_INJECTED_CLARIFICATION_FOCUSES = frozenset(
     {_FIXED_CLARIFICATION_FOCUS, "Clarify the original request."}
 )
@@ -352,6 +388,34 @@ class PlanningDraft(BaseModel):
         )
 
 
+def is_conversational_request(request: str) -> bool:
+    """Detect small talk aimed at the agent itself rather than at the public web.
+
+    Greetings and pleasantries are frequently question-shaped ("how are you
+    today?"), and searching the web for them returns nothing an answer can cite.
+    Matching is anchored and token-bounded so that a real question sharing a
+    word with a greeting ("how are Siemens turbines built?") never qualifies.
+    """
+    normalized = " ".join(_TOKEN_PATTERN.findall(request.lower()))
+    if not normalized:
+        return False
+    return (
+        any(
+            normalized == phrase or normalized.startswith(f"{phrase} ")
+            for phrase in _CONVERSATIONAL_PHRASES
+        )
+        and len(_TOKEN_PATTERN.findall(normalized)) <= _MAX_CONVERSATIONAL_TOKENS
+    )
+
+
+def _reply_only_echoes_request(*, request: str, decision: PlanningDecision) -> bool:
+    """Detect a direct reply whose focus contributes no word of its own."""
+
+    if decision.task_category is not TaskCategory.DIRECT_REPLY:
+        return False
+    return not (_meaningful_tokens(decision.answer_focus) - _meaningful_tokens(request))
+
+
 def _direct_reply_restates_the_request(
     *, request: str, decision: PlanningDecision
 ) -> bool:
@@ -361,11 +425,14 @@ def _direct_reply_restates_the_request(
     that contributes no topic of its own to a question holds no answer: the run
     would complete by repeating the question. Routing such a question to search
     is the only way this agent can answer it, with evidence, at all. A greeting
-    is not a question, so it keeps its short direct reply.
+    is not a question, so it keeps its short direct reply, and small talk aimed
+    at the agent stays out of search for the same reason.
     """
     if decision.task_category is not TaskCategory.DIRECT_REPLY:
         return False
     if _QUESTION_PATTERN.search(request.strip()) is None:
+        return False
+    if is_conversational_request(request):
         return False
     return not (_meaningful_tokens(decision.answer_focus) - _meaningful_tokens(request))
 
@@ -502,6 +569,15 @@ class QueryPlanner:
         ):
             _validate_discarded_generated_text(decision)
             decision = _request_bounded_company_research_decision(request)
+        if is_conversational_request(request) and _reply_only_echoes_request(
+            request=request, decision=decision
+        ):
+            _validate_discarded_generated_text(decision)
+            decision = PlanningDecision(
+                task_category=TaskCategory.DIRECT_REPLY,
+                requires_search=False,
+                answer_focus=_FIXED_CONVERSATIONAL_FOCUS,
+            )
         if decision.task_category is TaskCategory.CLARIFICATION:
             _validate_discarded_generated_text(decision)
             decision = PlanningDecision(
@@ -792,6 +868,10 @@ def _validate_generated_policy(*, request: str, decision: PlanningDecision) -> N
     )
     direct_focus_is_invalid = (
         decision.task_category is TaskCategory.DIRECT_REPLY
+        # Small talk is answered from the agent's own words by definition: there
+        # is no external fact to stay scoped to, and the scope rule would reject
+        # every possible reply to "how are you today?".
+        and not is_conversational_request(request)
         and not _stays_scoped(
             request=request,
             candidate=decision.answer_focus,

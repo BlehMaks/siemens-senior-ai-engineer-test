@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from search_agent import OllamaResearchExecutor, OllamaRuntimeSettings, RunStatus
+from search_agent.planning import _FIXED_CONVERSATIONAL_FOCUS
 from search_agent.runtime import search_backends_from_environment
 from search_agent.tools.search import search_text_for
 
@@ -234,7 +235,9 @@ async def test_real_runtime_answers_greeting_without_search_or_fetch() -> None:
 
     assert result.snapshot.status is RunStatus.COMPLETED
     assert result.snapshot.answer is not None
-    assert result.snapshot.answer.answer_text == "Hello there"
+    # Echoing the greeting back is not a reply, so the fixed small-talk line
+    # stands in. It still reaches the user without a search or a fetch.
+    assert result.snapshot.answer.answer_text == _FIXED_CONVERSATIONAL_FOCUS
     assert result.snapshot.answer.citations == ()
     assert model_calls == 1
     assert search.calls == fetch_calls == 0

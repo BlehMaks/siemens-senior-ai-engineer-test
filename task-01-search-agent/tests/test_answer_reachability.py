@@ -4,7 +4,75 @@ from __future__ import annotations
 
 import pytest
 
+from search_agent.planning import (
+    _FIXED_CONVERSATIONAL_FOCUS,
+    AnswerScopePolicy,
+    PlanningPolicyError,
+    QueryPlanner,
+    TaskCategory,
+    is_conversational_request,
+)
+from search_agent.providers import FakeStructuredChatProvider
 from search_agent.tools.search import search_text_for
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    ["how are you today?", "hi there", "thanks!", "who are you?"],
+)
+def test_small_talk_is_recognised(request_text: str) -> None:
+    assert is_conversational_request(request_text)
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "how is the weather today?",
+        "what wikipedia says about germany?",
+        "how are Siemens turbines built?",
+    ],
+)
+def test_real_questions_are_not_small_talk(request_text: str) -> None:
+    assert not is_conversational_request(request_text)
+
+
+@pytest.mark.asyncio
+async def test_small_talk_answers_directly_instead_of_searching() -> None:
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "direct_reply",
+                "requires_search": False,
+                "answer_focus": "I am well, thank you for asking",
+            }
+        ]
+    )
+    planner = QueryPlanner(provider, repair_invalid_company_plans=True)
+
+    decision = await planner.plan("how are you today?")
+
+    assert decision.task_category is TaskCategory.DIRECT_REPLY
+    assert decision.requires_search is False
+    assert decision.answer_focus == "I am well, thank you for asking"
+
+
+@pytest.mark.asyncio
+async def test_small_talk_echo_is_replaced_by_a_real_reply() -> None:
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "direct_reply",
+                "requires_search": False,
+                "answer_focus": "How are you today",
+            }
+        ]
+    )
+    planner = QueryPlanner(provider, repair_invalid_company_plans=True)
+
+    decision = await planner.plan("how are you today?")
+
+    assert decision.task_category is TaskCategory.DIRECT_REPLY
+    assert decision.answer_focus == _FIXED_CONVERSATIONAL_FOCUS
 
 
 @pytest.mark.parametrize(
