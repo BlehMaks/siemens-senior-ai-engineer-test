@@ -58,7 +58,6 @@ _BARE_HOST_PATTERN = re.compile(
     rf"(?<![@\w]){_DOMAIN_NAME_PATTERN}(?=$|[\s,;:!?.])",
     flags=re.IGNORECASE,
 )
-_DOTTED_ACRONYM_PATTERN = re.compile(r"\b(?:[^\W\d_]\.){2,}", flags=re.UNICODE)
 _WEB_RESOURCE_CUE_TOKENS = frozenset(
     {
         "article",
@@ -622,7 +621,7 @@ class AnswerScopePolicy:
         for citation in answer.citations:
             if citation.evidence_id in verified_evidence_ids:
                 continue
-            for segment in _claim_segments(citation.claim):
+            for segment in _CLAIM_SEGMENT_PATTERN.split(citation.claim):
                 if not segment.strip():
                     continue
                 if not (
@@ -807,16 +806,6 @@ def _stays_scoped(
         not restrict_expansions
         or all(_YEAR_PATTERN.fullmatch(token) for token in added_tokens)
     )
-
-
-def _claim_segments(claim: str) -> list[str]:
-    # Sentence punctuation is a useful boundary for scope checks, but periods in
-    # dotted acronyms such as "U.S." are not sentence boundaries.
-    protected = _DOTTED_ACRONYM_PATTERN.sub(
-        lambda match: match.group(0).replace(".", ""),
-        claim,
-    )
-    return _CLAIM_SEGMENT_PATTERN.split(protected)
 
 
 def _verified_positional_evidence_ids(
