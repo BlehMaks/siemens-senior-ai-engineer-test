@@ -29,7 +29,10 @@ from .tools import (
 from .tools.search import parse_search_backends, validate_search_backends
 
 _MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
-_DEFAULT_SEARCH_BACKENDS = ("yahoo", "auto")
+# Every free endpoint here throttles independently, and a throttled attempt
+# raises instead of returning nothing. Ordering several of them means one
+# rate-limited provider no longer ends the run without evidence.
+_DEFAULT_SEARCH_BACKENDS = ("yahoo", "google", "auto", "mojeek", "duckduckgo", "brave")
 SearchBackendFactory = Callable[[], SyncSearchBackend]
 FetchClientFactory = Callable[[], httpx.AsyncClient]
 MemoryReaderFactory = Callable[[], RepositoryReviewedMemoryReader]

@@ -20,14 +20,16 @@ _URL_ADAPTER = TypeAdapter(AnyHttpUrl)
 _PERCENT_ESCAPE = re.compile(r"%[0-9A-Fa-f]{2}")
 _ROWS_PER_REQUESTED_HIT = 4
 _MAX_ATTEMPT_DURATION_MS = 600_000
-_MAX_SEARCH_BACKENDS = 2
+_MAX_SEARCH_BACKENDS = 6
 # Public search endpoints throttle bursts, and a throttled attempt raises rather
 # than returning nothing. One bounded second pass turns that transient refusal
 # into a result instead of ending the run without evidence.
 _SEARCH_SWEEPS = 2
 _SEARCH_RETRY_DELAY_SECONDS = 1.5
 _MAX_SEARCH_BACKENDS_TEXT = 64
-_SUPPORTED_SEARCH_BACKENDS = frozenset({"auto", "brave", "duckduckgo", "yahoo"})
+_SUPPORTED_SEARCH_BACKENDS = frozenset(
+    {"auto", "brave", "duckduckgo", "google", "mojeek", "yahoo"}
+)
 _SAFE_SEARCH_ARGUMENT = {
     SafeSearch.STRICT: "on",
     SafeSearch.MODERATE: "moderate",
@@ -116,7 +118,9 @@ def validate_search_backends(values: Sequence[str]) -> tuple[str, ...]:
         raise ValueError("search backends must be an ordered sequence")
     backends = tuple(values)
     if not 1 <= len(backends) <= _MAX_SEARCH_BACKENDS:
-        raise ValueError("search backends must contain one or two entries")
+        raise ValueError(
+            f"search backends must contain one to {_MAX_SEARCH_BACKENDS} entries"
+        )
     if any(
         not isinstance(backend, str)
         or not backend
