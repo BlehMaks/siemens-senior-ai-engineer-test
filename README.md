@@ -6,6 +6,10 @@ and are not part of the cloud runtime.
 
 ## Start here
 
+[`DELIVERABLES.md`](DELIVERABLES.md) maps every deliverable the assignment asks for
+to the file that answers it, and explains which of the two Task 1 agents to run for
+what. Start there if you are reviewing against the task text.
+
 The project uses Python 3.12 and [uv](https://docs.astral.sh/uv/). From a fresh
 clone, run the complete local submission check:
 
