@@ -25,6 +25,75 @@ expect_status() {
     fail "$operation returned HTTP $actual, expected $expected"
 }
 
+siemens_live_headline() {
+  local response_path=$1 python_bin=${PYTHON_BIN:-python3}
+  curl --fail --silent --show-error --location --connect-timeout 5 --max-time 20 \
+    --max-filesize 5242880 \
+    --header 'User-Agent: SiemensResearchAgentLiveCheck/0.1' \
+    --header 'Accept: text/html' \
+    --output "$response_path" \
+    'https://press.siemens.com/global/en'
+  "$python_bin" - "$response_path" <<'PY'
+from html.parser import HTMLParser
+import json
+from pathlib import Path
+import re
+import sys
+
+
+class SiemensHeadlineParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.in_title = False
+        self.ignored_depth = 0
+        self.title_parts: list[str] = []
+        self.titles: list[str] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        del attrs
+        if tag in {"script", "style"}:
+            self.ignored_depth += 1
+            return
+        if not self.ignored_depth and tag == "h3":
+            self.in_title = True
+            self.title_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if not self.ignored_depth and self.in_title:
+            self.title_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"} and self.ignored_depth:
+            self.ignored_depth -= 1
+            return
+        if not self.ignored_depth and tag == "h3" and self.in_title:
+            title = " ".join(" ".join(self.title_parts).split())
+            if 1 <= len(title) <= 250:
+                self.titles.append(title)
+            self.in_title = False
+
+
+parser = SiemensHeadlineParser()
+try:
+    parser.feed(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, UnicodeError) as exc:
+    raise SystemExit("could not read Siemens press page") from exc
+year_pattern = re.compile(r"\b20\d{2}\b")
+dated_titles = [
+    (max(int(year) for year in year_pattern.findall(title)), title)
+    for title in parser.titles
+    if year_pattern.search(title)
+]
+if not dated_titles:
+    raise SystemExit("Siemens press page did not contain a year-bearing headline")
+target_year = max(year for year, _title in dated_titles)
+target_title = next(title for year, title in dated_titles if year == target_year)
+print(json.dumps({"title": target_title, "year": target_year}, ensure_ascii=True))
+PY
+}
+
 validate_public_citations() {
   local response_path=$1 python_bin=${PYTHON_BIN:-python3}
   "$python_bin" - "$response_path" <<'PY'
@@ -54,10 +123,41 @@ except (KeyError, OSError, UnicodeError, ValueError, json.JSONDecodeError):
 PY
 }
 
+validate_expected_answer() {
+  local response_path=$1 expected=$2 python_bin=${PYTHON_BIN:-python3}
+  "$python_bin" - "$response_path" "$expected" <<'PY'
+import json
+from pathlib import Path
+import sys
+import unicodedata
+
+
+def normalized(value: str) -> str:
+    value = unicodedata.normalize("NFKC", value).casefold()
+    return " ".join(
+        value.translate(str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"'})).split()
+    )
+
+
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    answer = payload["answer"]["answer_text"]
+    expected = sys.argv[2]
+    if type(answer) is not str or normalized(expected) not in normalized(answer):
+        raise ValueError
+except (KeyError, OSError, UnicodeError, ValueError, json.JSONDecodeError):
+    print(
+        "completed live run did not contain the independently observed live fact",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
+}
+
 main() {
   [[ $# -eq 2 ]] || fail "usage: live_api_smoke.sh BASE_URL OUTPUT_DIR"
-  local base_url=${1%/} output_dir=$2 timeout query smoke_id auth status
-  local session_id run_id state deadline
+  local base_url=${1%/} output_dir=$2 timeout query expected_answer smoke_id auth status
+  local session_id run_id state deadline oracle target_year
 
   [[ $base_url =~ ^http://(127\.0\.0\.1|localhost):[1-9][0-9]{3,4}$ ]] ||
     fail "BASE_URL must be loopback HTTP"
@@ -71,13 +171,30 @@ main() {
   timeout=${LIVE_RUN_TIMEOUT_SECONDS:-600}
   [[ $timeout =~ ^[1-9][0-9]*$ && $timeout -ge 60 && $timeout -le 1800 ]] ||
     fail "LIVE_RUN_TIMEOUT_SECONDS must be between 60 and 1800"
-  query=${LIVE_RESEARCH_QUERY:-"Find the latest official Siemens sustainability report."}
-  [[ ${#query} -ge 3 && ${#query} -le 400 ]] ||
-    fail "LIVE_RESEARCH_QUERY must contain 3 to 400 characters"
 
   mkdir -p "$output_dir"
   LIVE_SMOKE_TEMP_DIR=$(mktemp -d -t sai-live-smoke.XXXXXX)
   trap cleanup EXIT
+
+  query=${LIVE_RESEARCH_QUERY:-}
+  expected_answer=${LIVE_EXPECTED_ANSWER_TEXT:-}
+  if [[ -z $query ]]; then
+    oracle=$(
+      siemens_live_headline "$LIVE_SMOKE_TEMP_DIR/siemens-press.html"
+    ) || fail "Siemens press-page preflight failed"
+    target_year=$(jq -er '.year | numbers' <<<"$oracle") ||
+      fail "Siemens press-page preflight returned an invalid year"
+    query="press.siemens.com/global/en first item headline contains $target_year"
+    if [[ -z $expected_answer ]]; then
+      expected_answer=$(jq -er '.title | strings' <<<"$oracle") ||
+        fail "Siemens press-page preflight returned an invalid title"
+    fi
+  fi
+  [[ ${#query} -ge 3 && ${#query} -le 400 ]] ||
+    fail "LIVE_RESEARCH_QUERY must contain 3 to 400 characters"
+  [[ -z $expected_answer || (${#expected_answer} -ge 1 && ${#expected_answer} -le 200) ]] ||
+    fail "LIVE_EXPECTED_ANSWER_TEXT must contain 1 to 200 characters"
+
   auth="$LIVE_SMOKE_TEMP_DIR/auth.curl"
   umask 077
   printf 'header = "Authorization: Bearer %s"\n' "$LIVE_API_KEY" > "$auth"
@@ -139,17 +256,22 @@ main() {
     fail "completed live run did not contain a grounded answer with citations"
   validate_public_citations "$output_dir/result.json" ||
     fail "completed live run did not contain public-web citations"
+  if [[ -n $expected_answer ]]; then
+    validate_expected_answer "$output_dir/result.json" "$expected_answer" || exit 1
+  fi
 
   jq -n \
     --arg session_id "$session_id" \
     --arg run_id "$run_id" \
     --arg query "$query" \
+    --arg expected_answer "$expected_answer" \
     --arg model "${LIVE_MODEL_NAME:-unknown}" \
     --argjson citation_count "$(jq '.answer.citations | length' "$output_dir/result.json")" \
     '{
       mode: "ollama-live",
       model: $model,
       query: $query,
+      expected_answer: (if $expected_answer == "" then null else $expected_answer end),
       session_id: $session_id,
       run_id: $run_id,
       state: "completed",
@@ -158,6 +280,7 @@ main() {
 
   printf '\nLive grounded answer:\n'
   jq -r '.answer.answer_text' "$output_dir/result.json"
+  [[ -z $expected_answer ]] || printf '\nExpected live fact: %s\n' "$expected_answer"
   printf '\nCitations:\n'
   jq -r '.answer.citations[] | "- \(.source_url) — \(.claim)"' "$output_dir/result.json"
   printf '\nLive API smoke passed: Ollama-backed run completed with public-web citations.\n'

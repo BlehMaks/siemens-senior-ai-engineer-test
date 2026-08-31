@@ -18,6 +18,7 @@ LIVE_SMOKE = TASK_ROOT / "scripts" / "live_api_smoke.sh"
 class _LiveApiHandler(BaseHTTPRequestHandler):
     grounded = True
     source_url = "https://www.siemens.com/global/en/company/sustainability.html"
+    answer_text = "A sufficiently long live research answer for validation."
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -49,7 +50,7 @@ class _LiveApiHandler(BaseHTTPRequestHandler):
                 {
                     "state": "completed",
                     "answer": {
-                        "answer_text": "A sufficiently long live research answer for validation.",
+                        "answer_text": self.answer_text,
                         "citations": citations,
                     },
                 },
@@ -74,9 +75,13 @@ def _run_live_smoke(
     *,
     grounded: bool,
     source_url: str = "https://www.siemens.com/global/en/company/sustainability.html",
+    query: str | None = "Research current Siemens sustainability commitments.",
+    expected_answer: str | None = None,
+    answer_text: str = "A sufficiently long live research answer for validation.",
 ) -> subprocess.CompletedProcess[str]:
     _LiveApiHandler.grounded = grounded
     _LiveApiHandler.source_url = source_url
+    _LiveApiHandler.answer_text = answer_text
     server = ThreadingHTTPServer(("127.0.0.1", 0), _LiveApiHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -84,10 +89,19 @@ def _run_live_smoke(
         **os.environ,
         "LIVE_API_KEY": os.urandom(24).hex(),
         "LIVE_MODEL_NAME": "qwen3:8b",
-        "LIVE_RESEARCH_QUERY": "Research current Siemens sustainability commitments.",
         "LIVE_RUN_TIMEOUT_SECONDS": "60",
+        "PYTHONPATH": os.pathsep.join(
+            (
+                str(TASK_ROOT.parent / "task-01-search-agent" / "src"),
+                str(TASK_ROOT.parent / "task-02-agent-api" / "src"),
+            )
+        ),
         "PYTHON_BIN": sys.executable,
     }
+    if query is not None:
+        env["LIVE_RESEARCH_QUERY"] = query
+    if expected_answer is not None:
+        env["LIVE_EXPECTED_ANSWER_TEXT"] = expected_answer
     try:
         return subprocess.run(
             [
@@ -117,7 +131,7 @@ def test_live_acceptance_is_explicitly_ollama_backed_and_user_friendly() -> None
     assert 'ollama pull "$model_name"' in source
     assert "AGENT_API_INFERENCE_MODE=ollama" in source
     assert "AGENT_MODEL_TRANSPORT_PROFILE=local" in source
-    assert "AGENT_SEARCH_BACKENDS=brave,auto" in source
+    assert "AGENT_SEARCH_BACKENDS=yahoo,auto" in source
     assert "AGENT_SEARCH_BACKENDS=duckduckgo" not in source
     assert "AGENT_API_INFERENCE_MODE=fake" not in source
     assert "live_api_smoke.sh" in source
@@ -160,10 +174,47 @@ def test_live_smoke_accepts_a_completed_grounded_response(tmp_path: Path) -> Non
     assert summary["citation_count"] == 1
 
 
-def test_live_smoke_uses_a_scope_stable_default_query() -> None:
+def test_live_smoke_uses_a_dynamic_html_fact_not_model_memory() -> None:
     source = LIVE_SMOKE.read_text(encoding="utf-8")
 
-    assert "Find the latest official Siemens sustainability report." in source
+    assert "first item headline contains $target_year" in source
+    assert "https://press.siemens.com/global/en" in source
+    assert 're.compile(r"\\b20\\d{2}\\b")' in source
+    assert "target_year = max" in source
+    assert "press.siemens.com/global/en first item headline contains" in source
+
+
+def test_live_smoke_checks_the_independently_observed_fact(tmp_path: Path) -> None:
+    expected = "Daily fact 9f642f"
+    accepted = _run_live_smoke(
+        tmp_path / "accepted",
+        grounded=True,
+        expected_answer=expected,
+        answer_text=f"The independently observed answer is {expected}.",
+    )
+    rejected = _run_live_smoke(
+        tmp_path / "rejected",
+        grounded=True,
+        expected_answer=expected,
+    )
+
+    assert accepted.returncode == 0, accepted.stderr
+    assert rejected.returncode != 0
+    assert "independently observed live fact" in rejected.stderr
+
+
+def test_live_smoke_normalizes_smart_punctuation_in_expected_fact(
+    tmp_path: Path,
+) -> None:
+    expected = "Siemens\u2019 current headline"
+    result = _run_live_smoke(
+        tmp_path,
+        grounded=True,
+        expected_answer=expected,
+        answer_text="Siemens' current headline is independently verified.",
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_live_smoke_rejects_an_ungrounded_response(tmp_path: Path) -> None:

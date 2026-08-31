@@ -34,10 +34,22 @@ are separate opt-in operations and are not implied by a green local gate.
 ## Live acceptance reports `search_failed`
 
 Confirm that the machine can reach public search providers and that the live script
-uses the ordered `brave,auto` backend configuration. A green deterministic gate does
-not exercise external search. Keyless Brave is primary because the direct DuckDuckGo
-backend can return no results for otherwise valid Siemens queries; DDGS `auto`
-remains a bounded metasearch fallback for transient provider differences.
+uses the ordered `yahoo,auto` backend configuration and the `us-en` search region. A
+green deterministic gate does not exercise external search. Yahoo and DDGS `auto`
+need no API key; the latter remains a bounded metasearch fallback for transient
+provider differences. Do not use the old `wt-wt` region with current DDGS releases:
+its Wikipedia fallback derives the invalid `wt.wikipedia.org` hostname.
+
+The default live check independently reads the first headline carrying the highest
+year visible on Siemens' public global press page, then asks the agent to find that
+exact current headline through ordinary HTML web research. This moving value is both
+company-specific and newer than the local model's training data, so a matching answer
+demonstrates that the search path ran. `Siemens press-page preflight failed` means the
+independent HTML oracle was unreachable or its public structure changed;
+`search_failed` means both configured search paths failed; `no_evidence` means search
+returned pages but none survived fetch, extraction, ranking, and evidence validation.
+Inspect the persisted reflection trace to distinguish `fetch.document`,
+`extract.document`, and `rank.evidence` failures.
 
 ## Submission audit reports a file
 

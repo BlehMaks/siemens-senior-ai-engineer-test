@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from html.parser import HTMLParser
 from io import BytesIO
+from math import isfinite
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -38,6 +39,7 @@ class ExtractionFailureReason(StrEnum):
     OUTPUT_TOO_LARGE = "output_too_large"
     PAGE_LIMIT = "page_limit"
     CONTENT_STREAM_TOO_LARGE = "content_stream_too_large"
+    TIMEOUT = "timeout"
 
 
 class ExtractionError(RuntimeError):
@@ -176,18 +178,23 @@ class LocalExtractor:
                 ExtractionFailureReason.NO_CONTENT,
                 "no main content was extracted",
             )
-        table_texts = _extract_html_tables(body)
-        normalized_text = _space_normalized(text)
-        for table_text in table_texts:
-            if _space_normalized(table_text) not in normalized_text:
-                text = f"{text}\n\n{table_text}"
-                normalized_text = _space_normalized(text)
         if len(text) + (len(title) if title is not None else 0) > self.max_output_chars:
             raise ExtractionError(
                 ExtractionFailureReason.OUTPUT_TOO_LARGE,
                 "extracted content exceeds the output limit",
             )
-        blocks = _html_blocks(body, source_text=text)
+        visible_blocks = _extract_html_visible_blocks(body)
+        table_blocks = tuple(
+            ExtractedBlock(text=table_text, table_index=index)
+            for index, table_text in enumerate(_extract_html_tables(body), start=1)
+        )
+        candidate_blocks = _deduplicated_blocks((*visible_blocks, *table_blocks))
+        text = _append_missing_blocks(
+            text,
+            candidate_blocks,
+            max_chars=self.max_output_chars - (len(title) if title is not None else 0),
+        )
+        blocks = _html_blocks(candidate_blocks, source_text=text)
         return ExtractedDocument(
             canonical_url=document.canonical_url,
             title=title,
@@ -408,23 +415,47 @@ def _extract_html_tables(body: bytes) -> tuple[str, ...]:
         return ()
 
 
-def _html_blocks(body: bytes, *, source_text: str) -> tuple[ExtractedBlock, ...]:
+def _extract_html_visible_blocks(body: bytes) -> tuple[ExtractedBlock, ...]:
     try:
         rendered = _decode_html(body)
         parser = _HTMLBlockParser()
         parser.feed(rendered)
         parser.close()
+        return _deduplicated_blocks(tuple(parser.blocks))
+    except Exception:
+        return ()
+
+
+def _append_missing_blocks(
+    source_text: str,
+    blocks: tuple[ExtractedBlock, ...],
+    *,
+    max_chars: int,
+) -> str:
+    normalized_source = _space_normalized(source_text)
+    for block in blocks:
+        normalized_block = _space_normalized(block.text)
+        if not normalized_block or normalized_block in normalized_source:
+            continue
+        addition = f"\n\n{block.text}"
+        if len(source_text) + len(addition) > max_chars:
+            continue
+        source_text += addition
+        normalized_source = _space_normalized(source_text)
+    return source_text
+
+
+def _html_blocks(
+    candidates: tuple[ExtractedBlock, ...], *, source_text: str
+) -> tuple[ExtractedBlock, ...]:
+    try:
         normalized_source = _space_normalized(source_text)
         selected = [
             block
-            for block in parser.blocks
+            for block in candidates
             if _space_normalized(block.text) in normalized_source
         ]
-        table_blocks = tuple(
-            ExtractedBlock(text=text, table_index=index)
-            for index, text in enumerate(_extract_html_tables(body), start=1)
-        )
-        return _deduplicated_blocks((*selected, *table_blocks))
+        return _deduplicated_blocks(tuple(selected))
     except Exception:
         return ()
 
@@ -597,6 +628,17 @@ class AsyncLocalExtractor:
     """Run bounded local parsing in a process that cancellation can terminate."""
 
     extractor: LocalExtractor = field(default_factory=LocalExtractor)
+    timeout_seconds: float = 15.0
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.timeout_seconds, bool)
+            or not isinstance(self.timeout_seconds, int | float)
+            or not isfinite(float(self.timeout_seconds))
+            or not 0.1 <= float(self.timeout_seconds) <= 60.0
+        ):
+            raise ValueError("extraction timeout must be between 0.1 and 60 seconds")
+        object.__setattr__(self, "timeout_seconds", float(self.timeout_seconds))
 
     async def extract(self, document: FetchedDocument) -> ExtractedDocument:
         try:
@@ -637,19 +679,18 @@ class AsyncLocalExtractor:
             env=_worker_environment(),
         )
         try:
-            stdout, _ = await process.communicate(payload)
+            stdout, _ = await asyncio.wait_for(
+                process.communicate(payload),
+                timeout=self.timeout_seconds,
+            )
+        except TimeoutError:
+            await _terminate_worker(process)
+            raise ExtractionError(
+                ExtractionFailureReason.TIMEOUT,
+                "content extraction timed out",
+            ) from None
         except BaseException:
-            if process.returncode is None:
-                with suppress(ProcessLookupError):
-                    process.kill()
-                reap_task = asyncio.create_task(process.wait())
-                while not reap_task.done():
-                    try:
-                        await asyncio.shield(reap_task)
-                    except asyncio.CancelledError:
-                        continue
-                with suppress(Exception):
-                    reap_task.result()
+            await _terminate_worker(process)
             raise
         if process.returncode != 0:
             raise ExtractionError(
@@ -663,6 +704,21 @@ class AsyncLocalExtractor:
             max_output_chars=self.extractor.max_output_chars,
             max_blocks=self.extractor.max_pdf_pages * 64,
         )
+
+
+async def _terminate_worker(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is not None:
+        return
+    with suppress(ProcessLookupError):
+        process.kill()
+    reap_task = asyncio.create_task(process.wait())
+    while not reap_task.done():
+        try:
+            await asyncio.shield(reap_task)
+        except asyncio.CancelledError:
+            continue
+    with suppress(Exception):
+        reap_task.result()
 
 
 def _decode_worker_result(

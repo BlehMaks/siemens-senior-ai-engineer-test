@@ -113,6 +113,34 @@ def test_preserves_tables_while_disabling_links_and_network_capabilities(
     assert "download" not in captured
 
 
+def test_appends_visible_headings_missed_by_main_content_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        extract_module,
+        "bare_extraction",
+        lambda *args, **kwargs: SimpleNamespace(
+            title="Press",
+            text='[{"embedded":"menu payload"}]',
+        ),
+    )
+    current_headline = (
+        "EFE Trenes de Chile modernizes passenger sales and booking "
+        "with Siemens' S3 Passenger"
+    )
+    html = (
+        "<html><body><script>ignored()</script><h2>Press Releases</h2>"
+        f"<h3>{current_headline}</h3></body></html>"
+    ).encode()
+
+    extracted = LocalExtractor().extract(_document(html))
+
+    assert current_headline in extracted.text
+    assert ExtractedBlock(text=current_headline, section=current_headline) in (
+        extracted.blocks
+    )
+
+
 def test_html_table_text_and_metadata_are_preserved() -> None:
     html = (_FIXTURES / "report_table.html").read_bytes()
 
@@ -353,6 +381,53 @@ async def test_async_local_extractor_reaps_process_when_cancelled(
         await task
     assert killed.is_set()
     assert reaped.is_set()
+
+
+@pytest.mark.asyncio
+async def test_async_local_extractor_times_out_and_reaps_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    killed = False
+    reaped = False
+
+    class BlockingProcess:
+        returncode: int | None = None
+
+        async def communicate(self, payload: bytes) -> tuple[bytes, bytes]:
+            del payload
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        def kill(self) -> None:
+            nonlocal killed
+            self.returncode = -9
+            killed = True
+
+        async def wait(self) -> int:
+            nonlocal reaped
+            reaped = True
+            return -9
+
+    async def create_process(*args: object, **kwargs: object) -> BlockingProcess:
+        del args, kwargs
+        return BlockingProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(ExtractionError) as error:
+        await AsyncLocalExtractor(timeout_seconds=0.1).extract(
+            _document(b"Siemens report", content_type="text/plain")
+        )
+
+    assert error.value.reason is ExtractionFailureReason.TIMEOUT
+    assert killed is True
+    assert reaped is True
+
+
+@pytest.mark.parametrize("timeout", [True, 0.0, 60.1, float("inf")])
+def test_async_local_extractor_rejects_invalid_timeout(timeout: object) -> None:
+    with pytest.raises(ValueError, match="extraction timeout"):
+        AsyncLocalExtractor(timeout_seconds=timeout)  # type: ignore[arg-type]
 
 
 def _install_worker_result(
