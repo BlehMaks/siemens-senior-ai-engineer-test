@@ -52,6 +52,26 @@ _WEB_TARGET_PATTERN = re.compile(
     rf"|{_DOMAIN_NAME_PATTERN}/[^\s]*)",
     flags=re.IGNORECASE,
 )
+_BARE_HOST_PATTERN = re.compile(
+    rf"(?<![@\w]){_DOMAIN_NAME_PATTERN}(?=$|[\s,;:!?])",
+    flags=re.IGNORECASE,
+)
+_PUBLIC_TLDS = frozenset(
+    {
+        "ai",
+        "biz",
+        "com",
+        "de",
+        "edu",
+        "eu",
+        "gov",
+        "info",
+        "io",
+        "net",
+        "org",
+        "uk",
+    }
+)
 _CLAIM_SEGMENT_PATTERN = re.compile(r"(?:\n+|;+|(?<!\d)[.!?]+|[.!?]+(?!\d))")
 _EXPLICIT_RESEARCH_REQUEST_PATTERN = re.compile(
     r"\A(?:(?:please|kindly)\s+)?"
@@ -327,8 +347,12 @@ def _is_structured_content_failure(exc: ProviderResponseError) -> bool:
 
 
 def _has_web_target(request: str) -> bool:
-    return (
-        _WEB_TARGET_PATTERN.search(unicodedata.normalize("NFKC", request)) is not None
+    normalized = unicodedata.normalize("NFKC", request)
+    if _WEB_TARGET_PATTERN.search(normalized) is not None:
+        return True
+    return any(
+        match.group(0).rsplit(".", maxsplit=1)[-1].casefold() in _PUBLIC_TLDS
+        for match in _BARE_HOST_PATTERN.finditer(normalized)
     )
 
 

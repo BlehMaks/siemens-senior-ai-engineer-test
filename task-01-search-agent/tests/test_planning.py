@@ -142,8 +142,16 @@ async def test_query_planner_repairs_company_research_budget() -> None:
 
 
 @pytest.mark.asyncio
-async def test_query_planner_repairs_malformed_url_target_plan() -> None:
-    request = "press.siemens.com/global/en first item headline contains 2026"
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "press.siemens.com/global/en first item headline contains 2026",
+        "press.siemens.com first item headline contains 2026",
+    ],
+)
+async def test_query_planner_repairs_malformed_url_target_plan(
+    request_text: str,
+) -> None:
     provider = FakeStructuredChatProvider(
         responses=[
             {
@@ -152,7 +160,7 @@ async def test_query_planner_repairs_malformed_url_target_plan() -> None:
                 "answer_focus": "Siemens press headline 2026",
                 "query_plan": {
                     "tool_budget": {"max_search_queries": 1, "max_fetches": 5},
-                    "searches": [{"text": request, "max_results": "5"}],
+                    "searches": [{"text": request_text, "max_results": "5"}],
                 },
             }
         ]
@@ -160,15 +168,15 @@ async def test_query_planner_repairs_malformed_url_target_plan() -> None:
 
     outcome = await QueryPlanner(
         provider, repair_invalid_company_plans=True
-    ).plan_with_metadata(request)
+    ).plan_with_metadata(request_text)
 
     assert outcome.decision == PlanningDecision(
         task_category=TaskCategory.COMPANY_RESEARCH,
         requires_search=True,
-        answer_focus=request,
+        answer_focus=request_text,
         query_plan=QueryPlan(
             tool_budget=ToolBudget(max_search_queries=1, max_fetches=5),
-            searches=(SearchQuery(text=request, max_results=5),),
+            searches=(SearchQuery(text=request_text, max_results=5),),
         ),
     )
     assert outcome.metadata.provider_name == "deterministic-planning-repair"
