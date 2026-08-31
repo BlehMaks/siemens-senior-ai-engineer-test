@@ -43,9 +43,13 @@ _TOKEN_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
 _POLICY_WORD_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
 _ACRONYM_PATTERN = re.compile(r"\b[A-Z]{2,8}\b")
 _YEAR_PATTERN = re.compile(r"(?:19|20)\d{2}\Z")
+_DOMAIN_NAME_PATTERN = (
+    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"[a-z]{2,}"
+)
 _WEB_TARGET_PATTERN = re.compile(
-    r"(?:(?:https?://)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
-    r"[a-z]{2,}(?:/[^\s]*)?)",
+    rf"(?<![@\w])(?:https?://{_DOMAIN_NAME_PATTERN}(?:/[^\s]*)?"
+    rf"|{_DOMAIN_NAME_PATTERN}/[^\s]*)",
     flags=re.IGNORECASE,
 )
 _CLAIM_SEGMENT_PATTERN = re.compile(r"(?:\n+|;+|(?<!\d)[.!?]+|[.!?]+(?!\d))")
@@ -54,6 +58,21 @@ _EXPLICIT_RESEARCH_REQUEST_PATTERN = re.compile(
     r"(?:(?:can|could|would)\s+you\s+(?:(?:please|kindly)\s+)?)?"
     r"(?:find|locate|look\s+up|research|search|retrieve)\b"
 )
+_RESEARCH_REQUEST_PREFIX_TOKENS = {
+    "can",
+    "could",
+    "find",
+    "kindly",
+    "locate",
+    "look",
+    "please",
+    "research",
+    "retrieve",
+    "search",
+    "up",
+    "would",
+    "you",
+}
 _SCOPE_GENERIC_TOKENS = {
     "a",
     "an",
@@ -374,7 +393,7 @@ class QueryPlanner:
             if self._repair_invalid_company_plans and (
                 draft.task_category is TaskCategory.COMPANY_RESEARCH
                 or _has_web_target(request)
-                or (not context and _explicitly_requests_research(request))
+                or _explicitly_requests_research(request)
             ):
                 decision = _request_bounded_company_research_decision(request)
             else:
@@ -384,10 +403,7 @@ class QueryPlanner:
         if (
             self._repair_invalid_company_plans
             and decision.task_category is not TaskCategory.COMPANY_RESEARCH
-            and (
-                _has_web_target(request)
-                or (not context and _explicitly_requests_research(request))
-            )
+            and (_has_web_target(request) or _explicitly_requests_research(request))
         ):
             _validate_discarded_generated_text(decision)
             decision = _request_bounded_company_research_decision(request)
@@ -766,9 +782,10 @@ def _normalized_policy_text(text: str) -> str:
 
 
 def _explicitly_requests_research(request: str) -> bool:
-    return (
-        _EXPLICIT_RESEARCH_REQUEST_PATTERN.match(_normalized_policy_text(request))
-        is not None
+    return _EXPLICIT_RESEARCH_REQUEST_PATTERN.match(
+        _normalized_policy_text(request)
+    ) is not None and bool(
+        _meaningful_tokens(request) - _RESEARCH_REQUEST_PREFIX_TOKENS
     )
 
 

@@ -224,7 +224,11 @@ async def test_query_planner_does_not_mask_provider_failure_for_a_web_target() -
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_text",
-    ["What is Siemens?", "What does https:// mean?"],
+    [
+        "What is Siemens?",
+        "What does https:// mean?",
+        "What does pathlib.Path represent?",
+    ],
 )
 async def test_query_planner_does_not_force_search_for_an_ordinary_question(
     request_text: str,
@@ -266,8 +270,16 @@ async def test_query_planner_rejects_prohibited_text_before_repair() -> None:
 
 
 @pytest.mark.asyncio
-async def test_query_planner_repairs_web_target_with_context() -> None:
-    request = "press.siemens.com/global/en first item headline contains 2026"
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "press.siemens.com/global/en first item headline contains 2026",
+        "Could you please find the latest Siemens sustainability report?",
+    ],
+)
+async def test_query_planner_repairs_research_request_with_context(
+    request_text: str,
+) -> None:
     context = (
         ConversationTurn(
             request="What is Siemens?",
@@ -281,12 +293,12 @@ async def test_query_planner_repairs_web_target_with_context() -> None:
                 {
                     "task_category": "direct_reply",
                     "requires_search": False,
-                    "answer_focus": request,
+                    "answer_focus": request_text,
                 }
             ]
         ),
         repair_invalid_company_plans=True,
-    ).plan_with_context(request, conversation_context=context)
+    ).plan_with_context(request_text, conversation_context=context)
 
     assert outcome.decision.task_category is TaskCategory.COMPANY_RESEARCH
     assert outcome.decision.requires_search is True
@@ -304,14 +316,19 @@ async def test_malformed_repair_preserves_ollama_attempt_metadata() -> None:
         return httpx.Response(
             200,
             json={
-                "model": "qwen3:8b",
+                "model": "resolved-qwen3:8b",
+                "done_reason": "stop",
+                "prompt_eval_count": 321,
+                "eval_count": 45,
+                "total_duration": 9876,
+                "load_duration": 54,
                 "message": {"content": "not valid structured JSON"},
             },
         )
 
     outcome = await QueryPlanner(
         OllamaStructuredChatProvider(
-            model_name="qwen3:8b",
+            model_name="requested-qwen3:8b",
             max_retries=1,
             transport=httpx.MockTransport(handler),
         ),
@@ -322,8 +339,13 @@ async def test_malformed_repair_preserves_ollama_attempt_metadata() -> None:
 
     assert attempts == 2
     assert outcome.metadata.provider_name == "ollama"
-    assert outcome.metadata.model_name == "qwen3:8b"
+    assert outcome.metadata.model_name == "resolved-qwen3:8b"
     assert outcome.metadata.attempt_count == 2
+    assert outcome.metadata.done_reason == "stop"
+    assert outcome.metadata.prompt_eval_count == 321
+    assert outcome.metadata.eval_count == 45
+    assert outcome.metadata.total_duration_ns == 9876
+    assert outcome.metadata.load_duration_ns == 54
 
 
 @pytest.mark.asyncio

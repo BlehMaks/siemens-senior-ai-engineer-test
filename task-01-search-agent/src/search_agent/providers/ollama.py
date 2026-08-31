@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from contextlib import suppress
 from dataclasses import dataclass
 
 import httpx
@@ -54,6 +55,7 @@ class OllamaStructuredChatProvider:
         attempts = 0
         while True:
             attempts += 1
+            response: httpx.Response | None = None
             try:
                 payload = self._build_payload(
                     messages=messages,
@@ -75,9 +77,9 @@ class OllamaStructuredChatProvider:
             except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:
                 raise ProviderResponseError(
                     "ollama returned invalid structured content",
-                    metadata=ProviderMetadata(
-                        provider_name="ollama",
-                        model_name=self.model_name,
+                    metadata=_response_metadata(
+                        response,
+                        default_model=self.model_name,
                         attempt_count=attempts,
                     ),
                 ) from exc
@@ -140,17 +142,48 @@ class OllamaStructuredChatProvider:
         parsed = response_model.model_validate_json(content)
         return ProviderResult(
             response=parsed,
-            metadata=ProviderMetadata(
-                provider_name="ollama",
-                model_name=str(payload.get("model", self.model_name)),
+            metadata=_metadata_from_payload(
+                payload,
+                default_model=self.model_name,
                 attempt_count=attempt_count,
-                done_reason=_optional_str(payload.get("done_reason")),
-                prompt_eval_count=_optional_int(payload.get("prompt_eval_count")),
-                eval_count=_optional_int(payload.get("eval_count")),
-                total_duration_ns=_optional_int(payload.get("total_duration")),
-                load_duration_ns=_optional_int(payload.get("load_duration")),
             ),
         )
+
+
+def _response_metadata(
+    response: httpx.Response | None,
+    *,
+    default_model: str,
+    attempt_count: int,
+) -> ProviderMetadata:
+    payload: object = None
+    if response is not None:
+        with suppress(json.JSONDecodeError, UnicodeDecodeError):
+            payload = response.json()
+    return _metadata_from_payload(
+        payload,
+        default_model=default_model,
+        attempt_count=attempt_count,
+    )
+
+
+def _metadata_from_payload(
+    payload: object,
+    *,
+    default_model: str,
+    attempt_count: int,
+) -> ProviderMetadata:
+    data = payload if isinstance(payload, dict) else {}
+    return ProviderMetadata(
+        provider_name="ollama",
+        model_name=str(data.get("model", default_model)),
+        attempt_count=attempt_count,
+        done_reason=_optional_str(data.get("done_reason")),
+        prompt_eval_count=_optional_int(data.get("prompt_eval_count")),
+        eval_count=_optional_int(data.get("eval_count")),
+        total_duration_ns=_optional_int(data.get("total_duration")),
+        load_duration_ns=_optional_int(data.get("load_duration")),
+    )
 
 
 def _optional_int(value: object) -> int | None:
