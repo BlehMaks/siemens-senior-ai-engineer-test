@@ -328,9 +328,11 @@ def render_research_ui(prefilled_api_key: str | None = None) -> str:
     """
     if not prefilled_api_key:
         return RESEARCH_UI_HTML
-    return _UI_KEY_TEMPLATE.replace(
+    # The notice is substituted first: a key that happens to contain the notice
+    # placeholder must reach the page unchanged.
+    return _UI_KEY_TEMPLATE.replace("__API_KEY_NOTICE__", _PREFILLED_NOTICE).replace(
         "__API_KEY_VALUE__", f' value="{escape(prefilled_api_key, quote=True)}"'
-    ).replace("__API_KEY_NOTICE__", _PREFILLED_NOTICE)
+    )
 
 
 UI_RESPONSE_HEADERS = {

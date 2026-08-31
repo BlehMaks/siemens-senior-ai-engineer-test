@@ -85,39 +85,13 @@ _QUESTION_PATTERN = re.compile(
 )
 _CLAIM_SEGMENT_PATTERN = re.compile(r"(?:\n+|;+|(?<!\d)[.!?]+|[.!?]+(?!\d))")
 _LETTER_PATTERN = re.compile(r"[^\W\d_]", flags=re.UNICODE)
-# A period closing one of these never ends a sentence, so splitting there would
-# judge mid-sentence fragments that can hold no topic of their own.
-_SENTENCE_ABBREVIATIONS = frozenset(
-    {
-        "ag",
-        "co",
-        "corp",
-        "dr",
-        "eg",
-        "etc",
-        "gmbh",
-        "ie",
-        "inc",
-        "jr",
-        "llc",
-        "ltd",
-        "mr",
-        "mrs",
-        "ms",
-        "no",
-        "plc",
-        "prof",
-        "sr",
-        "st",
-        "vs",
-    }
+_QUESTION_PATTERN = re.compile(
+    r"\?|\A(?:what|who|whom|whose|where|when|why|which|how|is|are|was|were|do|does"
+    r"|did|can|could|will|would|should|has|have|had|tell|give|list|name)\b",
+    flags=re.IGNORECASE,
 )
-_ABBREVIATION_PERIOD_PATTERN = re.compile(
-    r"(?<![^\W\d_])([^\W\d_]{1,5})\.(?=\s)", flags=re.UNICODE
-)
-_BRACKETED_SPAN_PATTERN = re.compile(r"\([^()]*\)|\[[^\[\]]*\]|\{[^{}]*\}")
-# Private-use stand-ins keep bracketed punctuation out of the sentence splitter.
-_PROTECTED_PUNCTUATION = {";": "\ue001", ".": "\ue002", "!": "\ue003", "?": "\ue004"}
+_CLAIM_SEGMENT_PATTERN = re.compile(r"(?:\n+|;+|(?<!\d)[.!?]+|[.!?]+(?!\d))")
+_LETTER_PATTERN = re.compile(r"[^\W\d_]", flags=re.UNICODE)
 _EXPLICIT_RESEARCH_REQUEST_PATTERN = re.compile(
     r"\A(?:(?:please|kindly)\s+)?"
     r"(?:(?:can|could|would)\s+you\s+(?:(?:please|kindly)\s+)?)?"
@@ -912,36 +886,7 @@ def _stays_scoped(
 
 def _claim_segments(claim: str) -> list[str]:
     protected = _DOTTED_ACRONYM_PATTERN.sub(_DOTTED_ACRONYM_BOUNDARY, claim)
-    protected = _BRACKETED_SPAN_PATTERN.sub(_protected_bracketed_span, protected)
-    protected = _ABBREVIATION_PERIOD_PATTERN.sub(_protected_abbreviation, protected)
-    return [
-        _restored_punctuation(segment)
-        for segment in _CLAIM_SEGMENT_PATTERN.split(protected)
-    ]
-
-
-def _protected_abbreviation(match: re.Match[str]) -> str:
-    # "Co. Ltd. in Shanghai" is one sentence; only a known abbreviation is spared,
-    # so an ordinary sentence end still separates appended content.
-    if match.group(1).casefold() not in _SENTENCE_ABBREVIATIONS:
-        return match.group()
-    return match.group(1) + _PROTECTED_PUNCTUATION["."]
-
-
-def _protected_bracketed_span(match: re.Match[str]) -> str:
-    # A parenthetical aside, a pronunciation or a footnote marker is part of the
-    # sentence around it, so its punctuation never ends a sentence. Judging such
-    # a fragment as its own sentence would reject verbatim encyclopedic prose.
-    span = match.group()
-    for character, replacement in _PROTECTED_PUNCTUATION.items():
-        span = span.replace(character, replacement)
-    return span
-
-
-def _restored_punctuation(segment: str) -> str:
-    for character, replacement in _PROTECTED_PUNCTUATION.items():
-        segment = segment.replace(replacement, character)
-    return segment
+    return _CLAIM_SEGMENT_PATTERN.split(protected)
 
 
 def _claim_stays_scoped(*, request: str, answer_focus: str, claim: str) -> bool:
@@ -963,7 +908,7 @@ def _claim_segment_stays_scoped(
 ) -> bool:
     scopes = (request, answer_focus)
     if not any(
-        _stays_scoped(request=scope, candidate=segment, min_shared_tokens=1)
+        _stays_scoped(request=scope, candidate=segment, min_shared_tokens=2)
         for scope in scopes
     ):
         return False
