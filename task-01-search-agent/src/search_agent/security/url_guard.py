@@ -119,7 +119,7 @@ class UrlGuard:
 
         # Every answer must be public. Accepting one public result beside one private
         # result would leave address selection to the HTTP stack and reopen SSRF.
-        if any(not _is_public_address(address) for address in addresses):
+        if any(not is_public_address(address) for address in addresses):
             raise PolicyViolationError(
                 PolicyReason.BLOCKED_ADDRESS, "URL resolves to a non-public address"
             )
@@ -235,7 +235,7 @@ def _parse_ip(host: str) -> IpAddress | None:
         return None
 
 
-def _is_public_address(address: IpAddress) -> bool:
+def is_public_address(address: IpAddress) -> bool:
     if any(address in network for network in _EXPLICITLY_NON_PUBLIC_NETWORKS):
         return False
     if (
@@ -249,6 +249,8 @@ def _is_public_address(address: IpAddress) -> bool:
     ):
         return False
     if isinstance(address, ipaddress.IPv6Address):
+        if address.is_site_local:
+            return False
         # Transition forms can hide an IPv4 destination from a superficial IPv6 check.
         if address.ipv4_mapped is not None or address.sixtofour is not None:
             return False

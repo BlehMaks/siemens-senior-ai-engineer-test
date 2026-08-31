@@ -200,6 +200,29 @@ def test_live_smoke_rejects_public_web_validation_bypasses(
     assert "public-web" in result.stderr
 
 
+@pytest.mark.parametrize(
+    "source_url",
+    [
+        "https://exam\nple.com/private-evidence",
+        "https://exam\rple.com/private-evidence",
+        "https://exam\tple.com/private-evidence",
+    ],
+    ids=["line-feed", "carriage-return", "tab"],
+)
+def test_live_smoke_rejects_control_characters_in_citation_hosts(
+    tmp_path: Path,
+    source_url: str,
+) -> None:
+    result = _run_live_smoke(
+        tmp_path,
+        grounded=True,
+        source_url=source_url,
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert "public-web" in result.stderr
+
+
 def test_local_live_api_entrypoint_binds_only_to_loopback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

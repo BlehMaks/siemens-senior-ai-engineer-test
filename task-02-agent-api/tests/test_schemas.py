@@ -361,6 +361,35 @@ def test_public_answer_rejects_non_public_or_sensitive_source_urls(
 @pytest.mark.parametrize(
     "source_url",
     [
+        "https://224.0.0.1/report",
+        "https://[ff02::1]/report",
+        "https://[fec0::1]/report",
+    ],
+    ids=["ipv4-multicast", "ipv6-multicast", "ipv6-site-local"],
+)
+def test_public_answer_rejects_non_unicast_source_urls(source_url: str) -> None:
+    special_use_answer = ScopedAnswer(
+        answer_text="The response must cite a globally reachable unicast source.",
+        citations=(
+            Citation.model_validate(
+                {
+                    "claim": "The source supports the answer.",
+                    "evidence_id": "ev-source-one",
+                    "source_url": source_url,
+                }
+            ),
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="citation URL"):
+        RunStatusResponse.model_validate(
+            {**status_values(RunState.COMPLETED), "answer": special_use_answer}
+        )
+
+
+@pytest.mark.parametrize(
+    "source_url",
+    [
         "https://example.com/oauth/client-secret-management",
         "https://example.com/report?topic=client_secret_management",
         "https://example.com/report?q=credential+rotation+guide",

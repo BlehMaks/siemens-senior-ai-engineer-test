@@ -24,6 +24,7 @@ from search_agent.memory.contracts import (
     contains_sensitive_memory_hostname,
     contains_sensitive_memory_text,
 )
+from search_agent.security.url_guard import is_public_address
 
 from .ports import TERMINAL_RUN_STATES, RunFailureCode, RunState
 
@@ -189,6 +190,10 @@ def _reject_sensitive_text(value: str) -> str:
 def require_public_source_url(value: str) -> None:
     """Reject citation URLs that reveal credentials or non-public infrastructure."""
 
+    if "\\" in value or any(
+        ord(character) <= 0x20 or ord(character) == 0x7F for character in value
+    ):
+        raise ValueError("citation URL is not safe to expose")
     try:
         parsed = urlsplit(value)
         host = parsed.hostname
@@ -201,7 +206,6 @@ def require_public_source_url(value: str) -> None:
         or parsed.username is not None
         or parsed.password is not None
         or host is None
-        or "\\" in value
     ):
         raise ValueError("citation URL is not safe to expose")
     normalized_host = host.rstrip(".").casefold()
@@ -234,7 +238,7 @@ def require_public_source_url(value: str) -> None:
         ):
             raise ValueError("citation URL is not public") from None
     else:
-        if not address.is_global:
+        if not is_public_address(address):
             raise ValueError("citation URL is not public")
     if parsed.fragment:
         raise ValueError("citation URL fragments are not public")
