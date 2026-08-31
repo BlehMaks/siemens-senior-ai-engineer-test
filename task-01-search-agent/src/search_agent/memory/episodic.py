@@ -12,6 +12,7 @@ from urllib.parse import parse_qsl, unquote, unquote_plus, urlsplit
 from pydantic import TypeAdapter, ValidationError
 
 from ..contracts import (
+    MAX_RUN_HITS,
     ActionTraceRecord,
     Citation,
     ExtractedEvidence,
@@ -71,8 +72,6 @@ _SENSITIVE_QUERY_SUFFIXES = (
     "_signature",
     "_token",
 )
-# A valid plan can issue at most eight searches with five hits per search.
-_MAX_RUN_HITS = 40
 _FAILURE_CODES = {
     FailureReason.BUDGET_EXHAUSTED: FailureCode.BUDGET_EXHAUSTED,
     FailureReason.CANCELLED: FailureCode.CANCELLED,
@@ -400,7 +399,7 @@ def _validate_run_result(result: RunResult) -> RunResult:
             or len(result.trace) > 96
             or any(type(record) is not ActionTraceRecord for record in result.trace)
             or type(result.snapshot.hits) is not tuple
-            or len(result.snapshot.hits) > _MAX_RUN_HITS
+            or len(result.snapshot.hits) > MAX_RUN_HITS
             or any(type(hit) is not SearchHit for hit in result.snapshot.hits)
             or type(result.snapshot.evidence) is not tuple
             or len(result.snapshot.evidence) > 24

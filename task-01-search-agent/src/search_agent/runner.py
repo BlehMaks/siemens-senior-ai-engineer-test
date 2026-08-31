@@ -17,11 +17,13 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from numbers import Real
 from typing import Literal, Protocol, TypeVar, cast
+from urllib.parse import urldefrag
 
 from pydantic import AnyHttpUrl, Field, TypeAdapter, ValidationError, model_validator
 
 from .answering import AnswerAbstained, AnswerValidator
 from .contracts import (
+    MAX_RUN_HITS,
     ActionTraceRecord,
     ConversationTurn,
     EventType,
@@ -82,7 +84,8 @@ _DEFAULT_FETCH_RESERVATION_BYTES = 2 * 1024 * 1024
 _EXPLICIT_URL_PATTERN = re.compile(
     r"(?<![@\w])https?://[^\s<>\"']+", flags=re.IGNORECASE
 )
-_URL_TRAILING_PUNCTUATION = ".,;:!?)]}"
+_URL_TRAILING_PUNCTUATION = ".,;:!?"
+_URL_CLOSING_DELIMITERS = {")": "(", "]": "[", "}": "{"}
 _URL_ADAPTER = TypeAdapter(AnyHttpUrl)
 _SYNTHESIS_SYSTEM_PROMPT = (
     "Create a cited answer using only the evidence records in the user message. "
@@ -838,7 +841,7 @@ class ResearchRunner:
     ) -> tuple[list[SearchHit], int]:
         assert decision.query_plan is not None
         hits = list(_requested_url_hits(request))
-        seen_urls = {str(hit.url) for hit in hits}
+        seen_urls = {_url_resource_key(hit.url) for hit in hits}
         successful_searches = 0
         if hits:
             self._record(
@@ -853,6 +856,19 @@ class ResearchRunner:
                 ),
             )
         for query in decision.query_plan.searches:
+            if len(hits) == MAX_RUN_HITS:
+                self._record(
+                    trace,
+                    ActionTraceRecord(
+                        stage=TraceStage.SEARCH,
+                        action="search.collect",
+                        outcome=TraceOutcome.TRUNCATED,
+                        reason="hit_limit",
+                        safe_id=run_id,
+                        count=len(hits),
+                    ),
+                )
+                break
             ledger.start_iteration()
             ledger.consume_query()
             try:
@@ -948,11 +964,13 @@ class ResearchRunner:
                 continue
             successful_searches += 1
             for hit in normalized:
-                canonical_url = str(hit.url)
+                canonical_url = _url_resource_key(hit.url)
                 if canonical_url in seen_urls:
                     continue
                 seen_urls.add(canonical_url)
                 hits.append(hit)
+                if len(hits) == MAX_RUN_HITS:
+                    break
         return hits, successful_searches
 
     async def _collect_evidence(
@@ -965,11 +983,16 @@ class ResearchRunner:
         trace: list[ActionTraceRecord],
     ) -> list[EvidenceRecord]:
         assert decision.query_plan is not None
-        selected = hits[: decision.query_plan.tool_budget.max_fetches]
+        max_attempts = decision.query_plan.tool_budget.max_fetches
         documents: list[
             tuple[SearchHit, ExtractedDocument, ResearchDocument, datetime]
         ] = []
-        for hit in selected:
+        for index, hit in enumerate(hits):
+            # Keep the accepted plan's fetch budget in the successful case. If every
+            # planned candidate fails, continue only until one fallback source works;
+            # the run-level page/byte/time budgets remain hard limits.
+            if index >= max_attempts and documents:
+                break
             ledger.start_iteration()
             ledger.reserve_page()
             source_hash = _safe_hash(str(hit.url))
@@ -1448,7 +1471,7 @@ def _requested_url_hits(request: str) -> tuple[SearchHit, ...]:
     hits: list[SearchHit] = []
     seen_urls: set[str] = set()
     for match in _EXPLICIT_URL_PATTERN.finditer(request):
-        candidate = match.group(0).rstrip(_URL_TRAILING_PUNCTUATION)
+        candidate = _trim_url_candidate(match.group(0))
         try:
             hit = SearchHit(
                 title="User-requested source",
@@ -1458,7 +1481,7 @@ def _requested_url_hits(request: str) -> tuple[SearchHit, ...]:
             )
         except ValidationError:
             continue
-        canonical_url = str(hit.url)
+        canonical_url = _url_resource_key(hit.url)
         if canonical_url in seen_urls:
             continue
         seen_urls.add(canonical_url)
@@ -1466,6 +1489,21 @@ def _requested_url_hits(request: str) -> tuple[SearchHit, ...]:
         if len(hits) == 20:
             break
     return tuple(hits)
+
+
+def _trim_url_candidate(candidate: str) -> str:
+    candidate = candidate.rstrip(_URL_TRAILING_PUNCTUATION)
+    while candidate:
+        closing = candidate[-1]
+        opening = _URL_CLOSING_DELIMITERS.get(closing)
+        if opening is None or candidate.count(closing) <= candidate.count(opening):
+            return candidate
+        candidate = candidate[:-1].rstrip(_URL_TRAILING_PUNCTUATION)
+    return candidate
+
+
+def _url_resource_key(url: AnyHttpUrl) -> str:
+    return urldefrag(str(url)).url
 
 
 def _validated_provider_metadata(value: object) -> ProviderMetadata:

@@ -14,6 +14,9 @@ from pydantic import (
     model_validator,
 )
 
+# Public run output and reflection share this hard container boundary.
+MAX_RUN_HITS = 40
+
 OpaqueId = Annotated[
     str,
     StringConstraints(
