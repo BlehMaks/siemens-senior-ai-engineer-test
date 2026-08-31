@@ -1048,6 +1048,32 @@ def test_answer_scope_policy_keeps_decimal_facts_in_one_segment() -> None:
     )
 
 
+def test_answer_scope_policy_keeps_scoped_dotted_acronyms_together() -> None:
+    answer = _scoped_answer("Siemens announces U.S. manufacturing investment")
+
+    assert (
+        AnswerScopePolicy.validate(
+            request="Find the Siemens manufacturing announcement",
+            answer_focus="Siemens manufacturing announcement",
+            answer=answer,
+        )
+        is answer
+    )
+
+
+def test_answer_scope_policy_checks_both_sides_of_dotted_acronyms() -> None:
+    answer = _scoped_answer(
+        "Siemens expansion reached the U.S. Berlin weather is sunny"
+    )
+
+    with pytest.raises(PlanningPolicyError, match="claim must stay scoped"):
+        AnswerScopePolicy.validate(
+            request="Find the Siemens expansion report",
+            answer_focus="Siemens expansion report",
+            answer=answer,
+        )
+
+
 def test_answer_scope_policy_requires_evidence_for_positional_quote() -> None:
     request = (
         "Find and return the exact first listed headline at "

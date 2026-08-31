@@ -58,6 +58,8 @@ _BARE_HOST_PATTERN = re.compile(
     rf"(?<![@\w]){_DOMAIN_NAME_PATTERN}(?=$|[\s,;:!?.])",
     flags=re.IGNORECASE,
 )
+_DOTTED_ACRONYM_PATTERN = re.compile(r"\b(?:[^\W\d_]\.){2,}", flags=re.UNICODE)
+_DOTTED_ACRONYM_BOUNDARY = "\ue000"
 _WEB_RESOURCE_CUE_TOKENS = frozenset(
     {
         "article",
@@ -621,20 +623,13 @@ class AnswerScopePolicy:
         for citation in answer.citations:
             if citation.evidence_id in verified_evidence_ids:
                 continue
-            for segment in _CLAIM_SEGMENT_PATTERN.split(citation.claim):
+            for segment in _claim_segments(citation.claim):
                 if not segment.strip():
                     continue
-                if not (
-                    _stays_scoped(
-                        request=request,
-                        candidate=segment,
-                        min_shared_tokens=2,
-                    )
-                    or _stays_scoped(
-                        request=answer_focus,
-                        candidate=segment,
-                        min_shared_tokens=2,
-                    )
+                if not _claim_segment_stays_scoped(
+                    request=request,
+                    answer_focus=answer_focus,
+                    segment=segment,
                 ):
                     raise PlanningPolicyError(
                         "answer claim must stay scoped to the research request"
@@ -805,6 +800,36 @@ def _stays_scoped(
     return shared_count >= required_shared and (
         not restrict_expansions
         or all(_YEAR_PATTERN.fullmatch(token) for token in added_tokens)
+    )
+
+
+def _claim_segments(claim: str) -> list[str]:
+    protected = _DOTTED_ACRONYM_PATTERN.sub(_DOTTED_ACRONYM_BOUNDARY, claim)
+    return _CLAIM_SEGMENT_PATTERN.split(protected)
+
+
+def _claim_segment_stays_scoped(
+    *, request: str, answer_focus: str, segment: str
+) -> bool:
+    scopes = (request, answer_focus)
+    if not any(
+        _stays_scoped(request=scope, candidate=segment, min_shared_tokens=2)
+        for scope in scopes
+    ):
+        return False
+    if _DOTTED_ACRONYM_BOUNDARY not in segment:
+        return True
+    adjacent_text = (
+        part
+        for part in segment.split(_DOTTED_ACRONYM_BOUNDARY)
+        if _meaningful_tokens(part)
+    )
+    return all(
+        any(
+            _stays_scoped(request=scope, candidate=part, min_shared_tokens=1)
+            for scope in scopes
+        )
+        for part in adjacent_text
     )
 
 
