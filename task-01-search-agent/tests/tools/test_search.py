@@ -390,6 +390,7 @@ async def test_search_uses_auto_by_default() -> None:
     )
 
     assert backend.calls[0][1]["backend"] == "auto"
+    assert backend.calls[0][1]["region"] == "us-en"
 
 
 @pytest.mark.asyncio
@@ -524,6 +525,7 @@ async def test_search_failure_carries_only_safe_attempt_metadata() -> None:
     [
         ("auto", ("auto",)),
         ("brave,auto", ("brave", "auto")),
+        ("yahoo,auto", ("yahoo", "auto")),
         ("auto,duckduckgo", ("auto", "duckduckgo")),
         ("duckduckgo,auto", ("duckduckgo", "auto")),
     ],

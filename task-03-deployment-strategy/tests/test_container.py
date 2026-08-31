@@ -322,6 +322,7 @@ def test_local_ollama_mode_reuses_the_bounded_research_executor(
     assert executor.settings.base_url == "http://127.0.0.1:11434"
     assert executor.settings.transport_profile == "local"
     assert executor.settings.search_backends == ("auto",)
+    assert executor.settings.search_region == "us-en"
     assert executor.model_auth is None
     assert executor.memory_reader_factory is not None
 
@@ -399,7 +400,7 @@ def test_local_process_can_use_authenticated_cloud_ollama(
     monkeypatch.setenv("AGENT_MODEL_BASE_URL", model_origin)
     monkeypatch.setenv("AGENT_MODEL_TRANSPORT_PROFILE", "cloud")
     monkeypatch.setenv("AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE", model_origin)
-    monkeypatch.setenv("AGENT_SEARCH_BACKENDS", "brave,auto")
+    monkeypatch.setenv("AGENT_SEARCH_BACKENDS", "yahoo,auto")
 
     executor = _run_executor(
         "ollama", cloud_settings=None, database_path=tmp_path / "memory.sqlite3"
@@ -407,7 +408,7 @@ def test_local_process_can_use_authenticated_cloud_ollama(
 
     assert isinstance(executor, OllamaResearchExecutor)
     assert isinstance(executor.model_auth, GoogleIdTokenAuth)
-    assert executor.settings.search_backends == ("brave", "auto")
+    assert executor.settings.search_backends == ("yahoo", "auto")
     assert executor.memory_reader_factory is not None
 
 

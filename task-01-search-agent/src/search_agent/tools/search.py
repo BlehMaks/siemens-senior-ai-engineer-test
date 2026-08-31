@@ -22,7 +22,7 @@ _ROWS_PER_REQUESTED_HIT = 4
 _MAX_ATTEMPT_DURATION_MS = 600_000
 _MAX_SEARCH_BACKENDS = 2
 _MAX_SEARCH_BACKENDS_TEXT = 64
-_SUPPORTED_SEARCH_BACKENDS = frozenset({"auto", "brave", "duckduckgo"})
+_SUPPORTED_SEARCH_BACKENDS = frozenset({"auto", "brave", "duckduckgo", "yahoo"})
 _SAFE_SEARCH_ARGUMENT = {
     SafeSearch.STRICT: "on",
     SafeSearch.MODERATE: "moderate",
@@ -129,7 +129,7 @@ def validate_search_backends(values: Sequence[str]) -> tuple[str, ...]:
 class SearchAdapter:
     backend: SyncSearchBackend
     site_policy: SitePolicy
-    region: str = "wt-wt"
+    region: str = "us-en"
     backend_names: tuple[str, ...] = ("auto",)
     backend_name: str | None = None
 

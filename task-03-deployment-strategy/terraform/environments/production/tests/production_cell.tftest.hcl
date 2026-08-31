@@ -35,7 +35,7 @@ run "production_cell_wires_private_model_to_real_worker" {
       output.production_cell.worker_service.runtime.model_base_url == output.production_cell.model_plane.service_uri &&
       output.production_cell.worker_service.runtime.model_google_id_token_audience == output.production_cell.model_plane.service_uri &&
       output.production_cell.worker_service.runtime.model_name == output.production_cell.model_plane.model_name &&
-      jsonencode(output.production_cell.worker_service.runtime.search_backends) == jsonencode(["brave", "auto"])
+      jsonencode(output.production_cell.worker_service.runtime.search_backends) == jsonencode(["yahoo", "auto"])
     )
     error_message = "Production must wire the private model and resilient search order into the real worker."
   }

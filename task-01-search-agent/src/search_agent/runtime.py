@@ -59,7 +59,9 @@ class OllamaRuntimeSettings:
     google_id_token_audience: str | None = None
     timeout_seconds: float = 120.0
     max_retries: int = 1
-    search_region: str = "wt-wt"
+    # DDGS derives the Wikipedia hostname from the language suffix. ``wt-wt``
+    # produces the invalid host wt.wikipedia.org; use DDGS's documented locale.
+    search_region: str = "us-en"
     search_backends: tuple[str, ...] = ("auto",)
     search_backend: str | None = None
 

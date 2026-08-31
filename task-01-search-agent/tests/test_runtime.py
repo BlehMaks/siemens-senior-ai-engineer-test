@@ -75,6 +75,7 @@ def test_runtime_settings_default_to_auto_and_preserve_singular_backend() -> Non
 
     assert defaults.search_backends == ("auto",)
     assert defaults.search_backend == "auto"
+    assert defaults.search_region == "us-en"
     assert legacy.search_backends == ("duckduckgo",)
     assert legacy.search_backend == "duckduckgo"
 

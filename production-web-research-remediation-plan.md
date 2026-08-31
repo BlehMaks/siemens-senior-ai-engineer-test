@@ -288,7 +288,10 @@ API-->>Client: Public terminal result
   `AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE`, and worker service-account invoker IAM on
   the model service.
 - `AGENT_SEARCH_BACKENDS`: ordered comma-separated ASCII allow-list, defaulting to
-  `auto`, with optional `duckduckgo` fallback for deterministic tests.
+  `auto`; production uses the keyless `yahoo,auto` fallback pair, while
+  `duckduckgo` remains available for deterministic compatibility tests.
+- `AGENT_SEARCH_REGION`: clean DDGS locale, defaulting to `us-en`; the legacy
+  pseudo-region `wt-wt` is not valid for the Wikipedia engine used by `auto`.
 - `AGENT_ACTION_LOG_LEVEL`: bounded logging verbosity selector; logging failure is
   non-fatal.
 

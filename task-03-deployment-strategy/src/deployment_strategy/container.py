@@ -232,7 +232,7 @@ def _run_executor(
         max_retries=_bounded_integer(
             "AGENT_MODEL_MAX_RETRIES", default=1, minimum=0, maximum=5
         ),
-        search_region=os.environ.get("AGENT_SEARCH_REGION", "wt-wt"),
+        search_region=os.environ.get("AGENT_SEARCH_REGION", "us-en"),
         search_backends=search_backends_from_environment(os.environ),
     )
     auth = (

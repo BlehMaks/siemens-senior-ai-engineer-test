@@ -159,14 +159,14 @@ variable "worker_max_instances" {
 variable "search_backends" {
   description = "Ordered web-search fallback list."
   type        = list(string)
-  default     = ["brave", "auto"]
+  default     = ["yahoo", "auto"]
 
   validation {
     condition = (
       length(var.search_backends) >= 1 &&
       length(var.search_backends) <= 2 &&
       length(distinct(var.search_backends)) == length(var.search_backends) &&
-      alltrue([for backend in var.search_backends : contains(["auto", "brave", "duckduckgo"], backend)])
+      alltrue([for backend in var.search_backends : contains(["auto", "brave", "duckduckgo", "yahoo"], backend)])
     )
     error_message = "search_backends must contain one or two unique supported backend names."
   }
