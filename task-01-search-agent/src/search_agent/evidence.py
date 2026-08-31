@@ -57,6 +57,7 @@ class EvidenceRecord:
     content_hash: str
     source_title: str
     title_provenance_hash: str
+    selected_chunks_provenance_hash: str
     selected_context: SelectedContext | None = None
     selected_chunks: tuple[ResearchChunk, ...] = ()
 
@@ -190,6 +191,9 @@ def build_evidence(
         content_hash=content_hash,
         source_title=title,
         title_provenance_hash=_title_provenance_hash(hit_url, title),
+        selected_chunks_provenance_hash=_selected_chunks_provenance_hash(
+            checked_chunks
+        ),
         selected_context=selected_context,
         selected_chunks=checked_chunks,
     )
@@ -242,6 +246,10 @@ def validate_record(record: EvidenceRecord) -> None:
             raise ValueError("summary does not match source text")
         if _validated_quotes(public.quotes, source_text) != public.quotes:
             raise ValueError("quotes are not strictly normalized")
+        if record.selected_chunks_provenance_hash != (
+            _selected_chunks_provenance_hash(record.selected_chunks)
+        ):
+            raise ValueError("selected chunk provenance does not match")
         if record.selected_context is not None:
             validate_selected_context(record.selected_context)
             if public.quotes != record.selected_context.quotes:
@@ -354,6 +362,15 @@ def _chunk_provenance(chunk: ResearchChunk) -> tuple[object, ...]:
         chunk.retrieved_at,
         chunk.text,
     )
+
+
+def _selected_chunks_provenance_hash(chunks: object) -> str:
+    if type(chunks) is not tuple or any(
+        type(chunk) is not ResearchChunk for chunk in chunks
+    ):
+        raise ValueError("selected chunks must use exact immutable types")
+    payload = "\n".join(repr(_chunk_provenance(chunk)) for chunk in chunks)
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def _normalize_text(value: object, *, field: str, limit: int) -> str:

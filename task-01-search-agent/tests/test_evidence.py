@@ -138,7 +138,7 @@ def test_builds_evidence_quotes_from_relevant_late_document_chunks() -> None:
     validate_record(record)
 
 
-def test_rejects_forged_selected_chunk_location() -> None:
+def test_rejects_forged_selected_chunk_location_at_both_boundaries() -> None:
     document = ExtractedDocument(
         canonical_url="https://example.com/report",
         title="Siemens sustainability report",
@@ -164,6 +164,21 @@ def test_rejects_forged_selected_chunk_location() -> None:
         )
 
     assert error.value.reason is EvidenceFailureReason.INVALID_DATA
+
+    record = build_evidence(
+        _hit(),
+        document,
+        retrieved_at=_NOW,
+        quotes=(selected.chunks[0].text,),
+        selected_chunks=selected.chunks,
+        now=_NOW,
+    )
+    object.__setattr__(record, "selected_chunks", (forged,))
+
+    with pytest.raises(EvidenceValidationError) as recheck_error:
+        validate_record(record)
+
+    assert recheck_error.value.reason is EvidenceFailureReason.INVALID_DATA
 
 
 def test_rejects_url_provenance_mismatch() -> None:

@@ -270,6 +270,7 @@ def test_record_subclass_is_rejected_before_hostile_property_access() -> None:
         content_hash=record.content_hash,
         source_title=record.source_title,
         title_provenance_hash=record.title_provenance_hash,
+        selected_chunks_provenance_hash=record.selected_chunks_provenance_hash,
     )
 
     with pytest.raises(AnswerAbstained) as error:
