@@ -13,12 +13,13 @@ from itertools import islice
 from pydantic import AnyHttpUrl, TypeAdapter, ValidationError
 
 from .contracts import ExtractedEvidence, SearchHit
-from .documents import ResearchChunk
+from .documents import ResearchChunk, ResearchDocument
 from .retrieval import (
     RetrievalError,
     RetrievalFailureReason,
     SelectedContext,
     build_research_document,
+    chunk_document,
     retrieve_context,
     validate_selected_context,
 )
@@ -137,6 +138,15 @@ def build_evidence(
                 document,
                 retrieved_at=checked_retrieved_at,
             )
+        if research_document is not None:
+            provenance_chunks = checked_chunks
+            if selected_context is not None:
+                provenance_chunks = (*provenance_chunks, *selected_context.chunks)
+            _validate_chunk_provenance(
+                provenance_chunks,
+                research_document,
+                request_text=request_text or research_document.title,
+            )
     except RetrievalError:
         raise EvidenceValidationError(
             EvidenceFailureReason.INVALID_DATA,
@@ -152,21 +162,12 @@ def build_evidence(
                 "selected chunk provenance does not match evidence",
             )
         for chunk in checked_chunks:
-            if type(chunk) is not ResearchChunk:
-                raise EvidenceValidationError(
-                    EvidenceFailureReason.INVALID_DATA,
-                    "selected chunk provenance does not match evidence",
-                )
             chunk_quote = _normalize_text(
                 chunk.text[:_MAX_PUBLIC_TEXT_CHARS].rstrip(),
                 field="selected chunk quote",
                 limit=_MAX_PUBLIC_TEXT_CHARS,
             )
-            if (
-                chunk.document_id != research_document.document_id
-                or chunk.canonical_url != hit_url
-                or chunk_quote not in normalized_quotes
-            ):
+            if chunk_quote not in normalized_quotes:
                 raise EvidenceValidationError(
                     EvidenceFailureReason.INVALID_DATA,
                     "selected chunk provenance does not match evidence",
@@ -307,6 +308,52 @@ def _materialized_chunks(values: object) -> tuple[ResearchChunk, ...]:
             "selected chunks must be a bounded sequence",
         )
     return chunks
+
+
+def _validate_chunk_provenance(
+    chunks: Sequence[ResearchChunk],
+    document: ResearchDocument,
+    *,
+    request_text: str,
+) -> None:
+    if not chunks:
+        return
+    if any(type(chunk) is not ResearchChunk for chunk in chunks):
+        raise RetrievalError(
+            RetrievalFailureReason.INVALID_CONTEXT,
+            "selected chunk has an invalid type",
+        )
+    canonical_by_id = {
+        chunk.chunk_id: chunk for chunk in chunk_document(request_text, document)
+    }
+    for chunk in chunks:
+        canonical = canonical_by_id.get(chunk.chunk_id)
+        if canonical is None or _chunk_provenance(chunk) != _chunk_provenance(
+            canonical
+        ):
+            raise RetrievalError(
+                RetrievalFailureReason.SOURCE_MISMATCH,
+                "selected chunk provenance does not match its document",
+            )
+
+
+def _chunk_provenance(chunk: ResearchChunk) -> tuple[object, ...]:
+    return (
+        chunk.chunk_id,
+        chunk.document_id,
+        chunk.canonical_url,
+        chunk.title,
+        chunk.source_type,
+        chunk.content_hash,
+        chunk.ordinal,
+        chunk.page_number,
+        chunk.section,
+        chunk.table_index,
+        chunk.published_at,
+        chunk.updated_at,
+        chunk.retrieved_at,
+        chunk.text,
+    )
 
 
 def _normalize_text(value: object, *, field: str, limit: int) -> str:

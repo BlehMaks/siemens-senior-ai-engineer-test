@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import overload
 
@@ -135,6 +136,34 @@ def test_builds_evidence_quotes_from_relevant_late_document_chunks() -> None:
     assert record.selected_context.chunks[0].page_number == 42
     assert record.selected_context.chunks[0].table_index == 1
     validate_record(record)
+
+
+def test_rejects_forged_selected_chunk_location() -> None:
+    document = ExtractedDocument(
+        canonical_url="https://example.com/report",
+        title="Siemens sustainability report",
+        text="Fresh nonce fact 71e5c4e8.",
+        blocks=(ExtractedBlock(text="Fresh nonce fact 71e5c4e8.", page_number=1),),
+    )
+    research_document = build_research_document(_hit(), document, retrieved_at=_NOW)
+    selected = select_context("nonce fact", (research_document,), top_k=1)
+    forged = replace(
+        selected.chunks[0],
+        page_number=999,
+        section="Fabricated location",
+    )
+
+    with pytest.raises(EvidenceValidationError) as error:
+        build_evidence(
+            _hit(),
+            document,
+            retrieved_at=_NOW,
+            quotes=(forged.text,),
+            selected_chunks=(forged,),
+            now=_NOW,
+        )
+
+    assert error.value.reason is EvidenceFailureReason.INVALID_DATA
 
 
 def test_rejects_url_provenance_mismatch() -> None:
