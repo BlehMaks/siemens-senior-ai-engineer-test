@@ -439,6 +439,10 @@ _VOID_HTML_TAGS = frozenset(
     }
 )
 _NON_VISIBLE_HTML_TAGS = frozenset({"script", "style", "template", "noscript"})
+_CSS_STRING_OR_COMMENT = re.compile(
+    r"""("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|/\*.*?(?:\*/|$)""",
+    flags=re.DOTALL,
+)
 
 
 def _starts_suppressed_html(tag: str, attrs: list[tuple[str, str | None]]) -> bool:
@@ -453,7 +457,7 @@ def _starts_suppressed_html(tag: str, attrs: list[tuple[str, str | None]]) -> bo
             return True
         if name != "style":
             continue
-        value = re.sub(r"/\*.*?(?:\*/|$)", "", value, flags=re.DOTALL)
+        value = _CSS_STRING_OR_COMMENT.sub(lambda match: match.group(1) or "", value)
         for declaration in value.split(";"):
             property_name, separator, property_value = declaration.partition(":")
             checked_value = property_value.split("!", 1)[0].strip()
