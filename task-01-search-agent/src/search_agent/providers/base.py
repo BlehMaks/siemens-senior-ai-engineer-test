@@ -56,7 +56,14 @@ class ProviderTransportError(ProviderError):
 
 
 class ProviderResponseError(ProviderError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        metadata: ProviderMetadata | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.metadata = metadata
 
 
 @dataclass

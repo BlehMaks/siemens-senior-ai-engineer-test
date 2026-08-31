@@ -74,7 +74,12 @@ class OllamaStructuredChatProvider:
                     raise ProviderTransportError("ollama request failed") from exc
             except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:
                 raise ProviderResponseError(
-                    "ollama returned invalid structured content"
+                    "ollama returned invalid structured content",
+                    metadata=ProviderMetadata(
+                        provider_name="ollama",
+                        model_name=self.model_name,
+                        attempt_count=attempts,
+                    ),
                 ) from exc
 
     def _build_payload(
