@@ -4,6 +4,7 @@ import base64
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from pydantic import AnyHttpUrl, TypeAdapter
 
 from search_agent import (
@@ -177,7 +178,10 @@ def test_dated_listing_keeps_date_with_following_heading_for_ranking() -> None:
     assert context.chunks[0].text.startswith("07 August 2026")
 
 
-def test_negated_first_listed_phrase_keeps_relevance_ranking() -> None:
+@pytest.mark.parametrize("instruction", ["Do not select", "Skip"])
+def test_negated_first_listed_phrase_keeps_relevance_ranking(
+    instruction: str,
+) -> None:
     desired = "desirednonce71e5c4e8"
     document = _listing_document(
         "https://example.com/listing",
@@ -192,7 +196,7 @@ def test_negated_first_listed_phrase_keeps_relevance_ranking() -> None:
     )
 
     context = select_context(
-        f"Do not select the first listed headline; return {desired} instead.",
+        f"{instruction} the first listed headline; return {desired} instead.",
         (document,),
         top_k=1,
     )

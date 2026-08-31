@@ -36,7 +36,8 @@ _FIRST_LISTED_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 _NEGATED_FIRST_LISTED_PATTERN = re.compile(
-    rf"\b(?:do\s+not|don't|not|without)\b[^.!?;:]{{0,48}}{_FIRST_LISTED_PHRASE}",
+    rf"\b(?:do\s+not|don't|not|without|skip|ignore|avoid|exclude)\b"
+    rf"[^.!?;:]{{0,48}}{_FIRST_LISTED_PHRASE}",
     flags=re.IGNORECASE,
 )
 _AUTHORITY = {
