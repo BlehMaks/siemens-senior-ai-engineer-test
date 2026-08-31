@@ -221,7 +221,7 @@ class OllamaResearchExecutor:
             auth=self.model_auth,
         )
         return ResearchRunner(
-            planner=QueryPlanner(provider),
+            planner=QueryPlanner(provider, repair_invalid_company_plans=True),
             searcher=SearchAdapter(
                 backend=self.search_backend_factory(),
                 site_policy=policy,

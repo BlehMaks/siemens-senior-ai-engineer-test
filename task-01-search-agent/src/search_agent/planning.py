@@ -271,9 +271,27 @@ class PlanningDraft(BaseModel):
         )
 
 
+def _request_bounded_company_research_decision(request: str) -> PlanningDecision:
+    return PlanningDecision(
+        task_category=TaskCategory.COMPANY_RESEARCH,
+        requires_search=True,
+        answer_focus=request,
+        query_plan=QueryPlan(
+            tool_budget=ToolBudget(max_search_queries=1, max_fetches=5),
+            searches=(SearchQuery(text=request, max_results=5),),
+        ),
+    )
+
+
 class QueryPlanner:
-    def __init__(self, provider: StructuredChatProvider) -> None:
+    def __init__(
+        self,
+        provider: StructuredChatProvider,
+        *,
+        repair_invalid_company_plans: bool = False,
+    ) -> None:
         self._provider = provider
+        self._repair_invalid_company_plans = repair_invalid_company_plans
 
     async def plan(self, request: str) -> PlanningDecision:
         return (await self.plan_with_metadata(request)).decision
@@ -298,11 +316,22 @@ class QueryPlanner:
             draft = PlanningDraft.model_validate(
                 result.response.model_dump(mode="python")
             )
-            decision = draft.to_decision()
         except ValidationError as exc:
             raise ProviderResponseError(
                 "planner output violated the public planning contract"
             ) from exc
+        try:
+            decision = draft.to_decision()
+        except ValidationError as exc:
+            if (
+                self._repair_invalid_company_plans
+                and draft.task_category is TaskCategory.COMPANY_RESEARCH
+            ):
+                decision = _request_bounded_company_research_decision(request)
+            else:
+                raise ProviderResponseError(
+                    "planner output violated the public planning contract"
+                ) from exc
         if decision.task_category is TaskCategory.CLARIFICATION:
             _validate_discarded_clarification(decision)
             decision = PlanningDecision(
@@ -310,11 +339,24 @@ class QueryPlanner:
                 requires_search=False,
                 answer_focus=_FIXED_CLARIFICATION_FOCUS,
             )
-        validate_planning_decision(
-            request=request,
-            decision=decision,
-            conversation_context=context,
-        )
+        try:
+            validate_planning_decision(
+                request=request,
+                decision=decision,
+                conversation_context=context,
+            )
+        except PlanningPolicyError:
+            if (
+                not self._repair_invalid_company_plans
+                or decision.task_category is not TaskCategory.COMPANY_RESEARCH
+            ):
+                raise
+            decision = _request_bounded_company_research_decision(request)
+            validate_planning_decision(
+                request=request,
+                decision=decision,
+                conversation_context=context,
+            )
         return PlanningOutcome(decision=decision, metadata=result.metadata)
 
 

@@ -72,6 +72,74 @@ async def test_query_planner_accepts_scoped_search_plan() -> None:
 
 
 @pytest.mark.asyncio
+async def test_query_planner_repairs_unscoped_company_research_plan() -> None:
+    request = "Find the latest official Siemens sustainability report."
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "company_research",
+                "requires_search": True,
+                "answer_focus": "Locate the newest Siemens ESG publication.",
+                "query_plan": {
+                    "tool_budget": {"max_search_queries": 1, "max_fetches": 3},
+                    "searches": [
+                        {
+                            "text": "site:siemens.com latest ESG report",
+                            "max_results": 3,
+                        }
+                    ],
+                },
+                "assistance": {
+                    "offer": "I can compare earlier editions.",
+                    "follow_up_queries": ["Siemens ESG report comparison"],
+                },
+            }
+        ]
+    )
+
+    decision = await QueryPlanner(provider, repair_invalid_company_plans=True).plan(
+        request
+    )
+
+    assert decision == PlanningDecision(
+        task_category=TaskCategory.COMPANY_RESEARCH,
+        requires_search=True,
+        answer_focus=request,
+        query_plan=QueryPlan(
+            tool_budget=ToolBudget(max_search_queries=1, max_fetches=5),
+            searches=(SearchQuery(text=request, max_results=5),),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_query_planner_repairs_company_research_budget() -> None:
+    request = "Find the latest official Siemens sustainability report."
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "company_research",
+                "requires_search": True,
+                "answer_focus": request,
+                "query_plan": {
+                    "tool_budget": {"max_search_queries": 1, "max_fetches": 1},
+                    "searches": [{"text": request, "max_results": 5}],
+                },
+            }
+        ]
+    )
+
+    decision = await QueryPlanner(provider, repair_invalid_company_plans=True).plan(
+        request
+    )
+
+    assert decision.query_plan == QueryPlan(
+        tool_budget=ToolBudget(max_search_queries=1, max_fetches=5),
+        searches=(SearchQuery(text=request, max_results=5),),
+    )
+
+
+@pytest.mark.asyncio
 async def test_query_planner_resolves_follow_up_only_from_bounded_untrusted_context() -> (
     None
 ):

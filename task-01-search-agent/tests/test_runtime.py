@@ -22,18 +22,22 @@ class _SearchBackend:
         rows: Sequence[object],
         *,
         failed_backends: frozenset[str] = frozenset(),
+        expected_max_results: int = 1,
     ) -> None:
         self.rows = rows
         self.failed_backends = failed_backends
+        self.expected_max_results = expected_max_results
         self.calls = 0
         self.backend_calls: list[str] = []
+        self.queries: list[str] = []
 
     def text(self, query: str, **kwargs: object) -> Sequence[object]:
         self.calls += 1
         backend = str(kwargs["backend"])
         self.backend_calls.append(backend)
+        self.queries.append(query)
         assert query
-        assert kwargs["max_results"] == 1
+        assert kwargs["max_results"] == self.expected_max_results
         if backend in self.failed_backends:
             raise RuntimeError("private backend failure")
         return self.rows
@@ -265,7 +269,7 @@ async def test_adversarial_cloud_trace_records_model_transport_profile() -> None
 
 @pytest.mark.asyncio
 async def test_real_runtime_searches_fetches_extracts_and_synthesizes() -> None:
-    claim = "Siemens reduced operational emissions by 20 percent."
+    claim = "The latest official Siemens sustainability report is available."
     source_url = "https://example.com/report"
     search = _SearchBackend(
         (
@@ -276,6 +280,7 @@ async def test_real_runtime_searches_fetches_extracts_and_synthesizes() -> None:
             },
         ),
         failed_backends=frozenset({"auto"}),
+        expected_max_results=5,
     )
     model_calls = 0
     fetched_hosts: list[str] = []
@@ -289,20 +294,23 @@ async def test_real_runtime_searches_fetches_extracts_and_synthesizes() -> None:
                 {
                     "task_category": "company_research",
                     "requires_search": True,
-                    "answer_focus": "Siemens operational emissions reduction",
+                    "answer_focus": "Locate the newest Siemens ESG publication.",
                     "query_plan": {
                         "tool_budget": {
                             "max_search_queries": 1,
-                            "max_fetches": 1,
+                            "max_fetches": 3,
                         },
                         "searches": [
                             {
-                                "text": "Siemens operational emissions reduction",
-                                "max_results": 1,
+                                "text": "site:siemens.com latest ESG report",
+                                "max_results": 3,
                             }
                         ],
                     },
-                    "assistance": None,
+                    "assistance": {
+                        "offer": "I can compare earlier editions.",
+                        "follow_up_queries": ["Siemens ESG report comparison"],
+                    },
                 }
             )
         evidence_payload = json.loads(payload["messages"][1]["content"])
@@ -351,11 +359,12 @@ async def test_real_runtime_searches_fetches_extracts_and_synthesizes() -> None:
         resolver=_Resolver(),
     )
 
+    request = "Find the latest official Siemens sustainability report."
     result = await executor.run(
         tenant_id="tenant-one",
         session_id="session-one",
         run_id="run-one",
-        request="Research Siemens operational emissions reduction",
+        request=request,
     )
 
     assert result.snapshot.status is RunStatus.COMPLETED
@@ -364,6 +373,7 @@ async def test_real_runtime_searches_fetches_extracts_and_synthesizes() -> None:
     assert str(result.snapshot.answer.citations[0].source_url) == source_url
     assert search.calls == 2
     assert search.backend_calls == ["auto", "duckduckgo"]
+    assert search.queries == [request, request]
     assert result.usage.search_queries == 1
     assert fetched_hosts == ["93.184.216.34"]
     assert model_calls == 2
