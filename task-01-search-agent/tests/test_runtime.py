@@ -69,12 +69,12 @@ def test_runtime_settings_fail_closed(model_name: str, base_url: str) -> None:
         OllamaRuntimeSettings(model_name=model_name, base_url=base_url)
 
 
-def test_runtime_settings_default_to_auto_and_preserve_singular_backend() -> None:
+def test_runtime_settings_default_to_resilient_backends_and_preserve_singular() -> None:
     defaults = OllamaRuntimeSettings(model_name="model")
     legacy = OllamaRuntimeSettings(model_name="model", search_backend="duckduckgo")
 
-    assert defaults.search_backends == ("auto",)
-    assert defaults.search_backend == "auto"
+    assert defaults.search_backends == ("yahoo", "auto")
+    assert defaults.search_backend == "yahoo"
     assert defaults.search_region == "us-en"
     assert legacy.search_backends == ("duckduckgo",)
     assert legacy.search_backend == "duckduckgo"
@@ -103,7 +103,7 @@ def test_runtime_settings_reject_conflicting_legacy_search_backend() -> None:
 def test_runtime_search_backend_environment_prefers_plural_and_supports_legacy() -> (
     None
 ):
-    assert search_backends_from_environment({}) == ("auto",)
+    assert search_backends_from_environment({}) == ("yahoo", "auto")
     assert search_backends_from_environment({"AGENT_SEARCH_BACKEND": "duckduckgo"}) == (
         "duckduckgo",
     )

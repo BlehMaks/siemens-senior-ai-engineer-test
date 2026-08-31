@@ -29,6 +29,7 @@ from .tools import (
 from .tools.search import parse_search_backends, validate_search_backends
 
 _MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
+_DEFAULT_SEARCH_BACKENDS = ("yahoo", "auto")
 SearchBackendFactory = Callable[[], SyncSearchBackend]
 FetchClientFactory = Callable[[], httpx.AsyncClient]
 MemoryReaderFactory = Callable[[], RepositoryReviewedMemoryReader]
@@ -45,7 +46,9 @@ def search_backends_from_environment(
 
     configured = environment.get("AGENT_SEARCH_BACKENDS")
     if configured is None:
-        configured = environment.get("AGENT_SEARCH_BACKEND", "auto")
+        configured = environment.get(
+            "AGENT_SEARCH_BACKEND", ",".join(_DEFAULT_SEARCH_BACKENDS)
+        )
     return parse_search_backends(configured)
 
 
@@ -62,7 +65,7 @@ class OllamaRuntimeSettings:
     # DDGS derives the Wikipedia hostname from the language suffix. ``wt-wt``
     # produces the invalid host wt.wikipedia.org; use DDGS's documented locale.
     search_region: str = "us-en"
-    search_backends: tuple[str, ...] = ("auto",)
+    search_backends: tuple[str, ...] = _DEFAULT_SEARCH_BACKENDS
     search_backend: str | None = None
 
     def __post_init__(self) -> None:
@@ -113,7 +116,9 @@ class OllamaRuntimeSettings:
                 raise ValueError(f"{name} must be a short clean ASCII value")
         backends = self.search_backends
         if self.search_backend is not None:
-            if backends != ("auto",) and backends != (self.search_backend,):
+            if backends != _DEFAULT_SEARCH_BACKENDS and backends != (
+                self.search_backend,
+            ):
                 raise ValueError("search_backend conflicts with search_backends")
             backends = (self.search_backend,)
         if not isinstance(backends, tuple):

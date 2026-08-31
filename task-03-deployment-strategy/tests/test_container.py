@@ -321,7 +321,7 @@ def test_local_ollama_mode_reuses_the_bounded_research_executor(
     assert executor.settings.model_name == "granite3.3:8b"
     assert executor.settings.base_url == "http://127.0.0.1:11434"
     assert executor.settings.transport_profile == "local"
-    assert executor.settings.search_backends == ("auto",)
+    assert executor.settings.search_backends == ("yahoo", "auto")
     assert executor.settings.search_region == "us-en"
     assert executor.model_auth is None
     assert executor.memory_reader_factory is not None
