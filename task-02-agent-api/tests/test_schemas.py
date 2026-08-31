@@ -300,6 +300,13 @@ def test_nested_public_answer_collections_are_bounded() -> None:
     [
         "https://alice:private-pass@example.com/report",
         "http://127.0.0.1:8080/private",
+        "http://127.0.0.01/private",
+        "http://0x7f.0.0.1/private",
+        "https://example.com:80/report",
+        "http://example.com:443/report",
+        "https://reviewer.test/report",
+        "https://reviewer.invalid/report",
+        "https://single-label/report",
         "https://example.com/report#access-token",
         "https://example.com/report?api_key=private",
         f"https://example.com/report/{_PASSWORD_FIELD}={_DISCLOSURE_SENTINEL}",

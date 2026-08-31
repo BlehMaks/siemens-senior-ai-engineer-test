@@ -113,6 +113,21 @@ _PUBLIC_MESSAGE_PATTERNS = (
         r")\s*(?:=|:)(?=.)"
     ),
 )
+_PUBLIC_SOURCE_PORTS = {"http": {None, 80}, "https": {None, 443}}
+_RESERVED_SOURCE_HOSTS = frozenset({"home.arpa", "localdomain", "localhost"})
+_RESERVED_SOURCE_SUFFIXES = (
+    ".example",
+    ".home.arpa",
+    ".internal",
+    ".invalid",
+    ".lan",
+    ".local",
+    ".localdomain",
+    ".localhost",
+    ".onion",
+    ".test",
+)
+_NUMERIC_HOST_LABEL = re.compile(r"(?i)(?:[0-9]+|0x[0-9a-f]+)")
 
 
 def _bounded_event_id(value: str) -> str:
@@ -155,7 +170,7 @@ def validate_public_answer(value: object) -> ScopedAnswer:
     _reject_sensitive_text(answer.answer_text)
     for citation in answer.citations:
         _reject_sensitive_text(citation.claim)
-        _require_public_source_url(str(citation.source_url))
+        require_public_source_url(str(citation.source_url))
     if answer.assistance is not None:
         _reject_sensitive_text(answer.assistance.offer)
         for query in answer.assistance.follow_up_queries:
@@ -171,21 +186,51 @@ def _reject_sensitive_text(value: str) -> str:
     return value
 
 
-def _require_public_source_url(value: str) -> None:
+def require_public_source_url(value: str) -> None:
     """Reject citation URLs that reveal credentials or non-public infrastructure."""
 
-    parsed = urlsplit(value)
-    host = parsed.hostname
-    if parsed.username is not None or parsed.password is not None or host is None:
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        port = parsed.port
+    except (UnicodeError, ValueError):
+        raise ValueError("citation URL is not safe to expose") from None
+    if (
+        parsed.scheme not in _PUBLIC_SOURCE_PORTS
+        or port not in _PUBLIC_SOURCE_PORTS[parsed.scheme]
+        or parsed.username is not None
+        or parsed.password is not None
+        or host is None
+        or "\\" in value
+    ):
         raise ValueError("citation URL is not safe to expose")
-    normalized_host = host.rstrip(".").lower()
+    normalized_host = host.rstrip(".").casefold()
     if contains_sensitive_memory_hostname(normalized_host):
         raise ValueError("citation URL contains sensitive material")
     try:
         address = ipaddress.ip_address(normalized_host)
     except ValueError:
-        if normalized_host == "localhost" or normalized_host.endswith(
-            (".localhost", ".local", ".internal")
+        try:
+            normalized_host = normalized_host.encode("idna").decode("ascii")
+        except UnicodeError:
+            raise ValueError("citation URL is not public") from None
+        labels = normalized_host.split(".")
+        if (
+            normalized_host in _RESERVED_SOURCE_HOSTS
+            or normalized_host.endswith(_RESERVED_SOURCE_SUFFIXES)
+            or len(normalized_host) > 253
+            or len(labels) < 2
+            or all(_NUMERIC_HOST_LABEL.fullmatch(label) for label in labels)
+            or any(
+                not label
+                or len(label) > 63
+                or label.startswith("-")
+                or label.endswith("-")
+                or not all(
+                    character.isalnum() or character == "-" for character in label
+                )
+                for label in labels
+            )
         ):
             raise ValueError("citation URL is not public") from None
     else:

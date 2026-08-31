@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -85,6 +86,7 @@ def _run_live_smoke(
         "LIVE_MODEL_NAME": "qwen3:8b",
         "LIVE_RESEARCH_QUERY": "Research current Siemens sustainability commitments.",
         "LIVE_RUN_TIMEOUT_SECONDS": "60",
+        "PYTHON_BIN": sys.executable,
     }
     try:
         return subprocess.run(
@@ -172,6 +174,29 @@ def test_live_smoke_rejects_private_loopback_citations(tmp_path: Path) -> None:
     )
 
     assert result.returncode != 0
+    assert "public-web" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "source_url",
+    [
+        "http://127.0.0.01/private-evidence",
+        "https://www.siemens.com:80/private-evidence",
+        "https://reviewer.test/private-evidence",
+    ],
+    ids=["alternate-loopback", "wrong-scheme-port", "reserved-test-domain"],
+)
+def test_live_smoke_rejects_public_web_validation_bypasses(
+    tmp_path: Path,
+    source_url: str,
+) -> None:
+    result = _run_live_smoke(
+        tmp_path,
+        grounded=True,
+        source_url=source_url,
+    )
+
+    assert result.returncode != 0, result.stdout
     assert "public-web" in result.stderr
 
 
