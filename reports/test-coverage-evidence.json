@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "measured_on": "2026-08-31",
+  "commands": [
+    "make coverage-report",
+    "coverage json"
+  ],
+  "current": {
+    "revision": "51495a7",
+    "tests": {
+      "passed": 1848,
+      "skipped": 3,
+      "collected": 1851
+    },
+    "coverage": {
+      "covered_statements": 12601,
+      "statements": 13855,
+      "statement_percent": 90.95,
+      "covered_branches": 3347,
+      "branches": 4274,
+      "branch_percent": 78.31,
+      "combined_percent": 87.97
+    },
+    "scopes": {
+      "scripts": {
+        "covered_statements": 544,
+        "statements": 618,
+        "covered_branches": 283,
+        "branches": 336,
+        "combined_percent": 86.69
+      },
+      "task_1": {
+        "covered_statements": 4428,
+        "statements": 5058,
+        "covered_branches": 1078,
+        "branches": 1520,
+        "combined_percent": 83.70
+      },
+      "task_2": {
+        "covered_statements": 4302,
+        "statements": 4831,
+        "covered_branches": 1113,
+        "branches": 1530,
+        "combined_percent": 85.13
+      },
+      "task_3": {
+        "covered_statements": 376,
+        "statements": 397,
+        "covered_branches": 61,
+        "branches": 76,
+        "combined_percent": 92.39
+      },
+      "task_4": {
+        "covered_statements": 946,
+        "statements": 946,
+        "covered_branches": 214,
+        "branches": 214,
+        "combined_percent": 100.0
+      },
+      "task_5": {
+        "covered_statements": 1345,
+        "statements": 1345,
+        "covered_branches": 396,
+        "branches": 396,
+        "combined_percent": 100.0
+      },
+      "task_6": {
+        "covered_statements": 660,
+        "statements": 660,
+        "covered_branches": 202,
+        "branches": 202,
+        "combined_percent": 100.0
+      }
+    }
+  },
+  "baseline": {
+    "revision": "b2256a1",
+    "tests": {
+      "passed": 1366,
+      "skipped": 5,
+      "collected": 1371
+    },
+    "coverage": {
+      "covered_statements": 8103,
+      "statements": 8981,
+      "statement_percent": 90.22,
+      "covered_branches": 2028,
+      "branches": 2668,
+      "branch_percent": 76.01,
+      "combined_percent": 86.97
+    },
+    "business_extension_scopes": {
+      "task_4": {
+        "covered_statements": 471,
+        "statements": 495,
+        "covered_branches": 81,
+        "branches": 94
+      },
+      "task_5": {
+        "covered_statements": 382,
+        "statements": 443,
+        "covered_branches": 84,
+        "branches": 116
+      },
+      "task_6": {
+        "covered_statements": 109,
+        "statements": 114,
+        "covered_branches": 20,
+        "branches": 22
+      }
+    }
+  },
+  "private_data_note": "The measured owner-populated checkout runs two Task 5 employer-catalog checks. A clean clone without Fuse.csv reports those same checks as explicit skips."
+}
