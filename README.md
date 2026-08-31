@@ -41,6 +41,17 @@ To exercise only the running agent and API from Tasks 1 to 3:
 make local-acceptance
 ```
 
+That target uses deterministic inference. To install or reuse Ollama, run the
+same API with a real local model and public web search, and verify a grounded answer
+with citations, use:
+
+```bash
+make local-live-acceptance
+```
+
+The interactive workflow and non-interactive reviewer options are documented in
+[local live-model acceptance](docs/local-live-acceptance.md).
+
 For a clean-computer walkthrough that also generates inspectable Task 4, Task 5,
 and Task 6 results, follow
 [`docs/local-testing.md`](docs/local-testing.md).
