@@ -32,6 +32,11 @@ from binary_classification.decision import (
     evaluate_decision_policy,
     load_cost_config,
 )
+from binary_classification.diagnostics import (
+    DiagnosticReference,
+    assess_drift,
+    fit_diagnostic_reference,
+)
 from binary_classification.modeling import (
     BinaryMetrics,
     CandidateMetrics,
@@ -47,7 +52,7 @@ from binary_classification.modeling import (
     split_train_holdout,
 )
 
-COMPARISON_SCHEMA_VERSION = "1.0"
+COMPARISON_SCHEMA_VERSION = "1.1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +184,7 @@ def _comparison_report(
     calibrated_calibration: CalibrationMetrics,
     scenario_metrics: tuple[DecisionMetrics, ...],
     calibrator: SigmoidCalibrator,
+    diagnostic_report: dict[str, Any],
     artifact_round_trip_parity: bool,
     runtime_seconds: float,
 ) -> dict[str, Any]:
@@ -201,6 +207,7 @@ def _comparison_report(
             "artifact_parity_tolerance": {"relative": 0.0, "absolute": 1e-12},
         },
         "decision_scenarios": [metric.to_dict() for metric in scenario_metrics],
+        "diagnostics": diagnostic_report,
     }
     return {
         "schema_version": COMPARISON_SCHEMA_VERSION,
@@ -291,6 +298,31 @@ def render_comparison_markdown(report: dict[str, Any]) -> str:
             f"{metrics['mean_expected_cost']:.6f} | "
             f"{metrics['mean_realized_cost']:.6f} |"
         )
+    diagnostics = extension["diagnostics"]
+    lines.extend(
+        [
+            "",
+            "## Training-fitted diagnostics",
+            "",
+            f"Status: `{diagnostics['status']}`. Thresholds are review policy, "
+            "not universal drift tests.",
+            "",
+        ]
+    )
+    if diagnostics["warnings"]:
+        lines.extend(
+            [
+                "| Warning | Feature | Observed | Policy threshold |",
+                "|---|---|---:|---:|",
+            ]
+        )
+        for warning in diagnostics["warnings"]:
+            lines.append(
+                f"| {warning['code']} | {warning['column']} | "
+                f"{warning['observed']} | {warning['threshold']} |"
+            )
+    else:
+        lines.append("No diagnostic policy warnings were raised.")
     lines.extend(
         [
             "",
@@ -356,6 +388,17 @@ def run_experiment(
 
     pipeline = build_pipeline(selected_model, schema, seed=seed)
     training_features = prepare_features(split.train, schema)
+    diagnostic_reference: DiagnosticReference | None = None
+    diagnostic_report: dict[str, Any] | None = None
+    if cost_scenarios:
+        diagnostic_reference = fit_diagnostic_reference(training_features, schema)
+        excluded = {"Class", *training_analysis.leakage.quarantined_columns}
+        diagnostic_input = split.holdout.drop(
+            columns=[column for column in split.holdout if column in excluded]
+        )
+        diagnostic_report = assess_drift(diagnostic_reference, diagnostic_input)
+        if diagnostic_report["status"] == "invalid_schema":
+            raise ValueError(f"Invalid holdout schema: {diagnostic_report['schema']}")
     holdout_features = prepare_features(split.holdout, schema)
     pipeline.fit(training_features, training_target)
     holdout_probabilities = pipeline.predict_proba(holdout_features)[:, 1]
@@ -380,12 +423,14 @@ def run_experiment(
     model_path = output / "selected-model.pkl"
     artifact: dict[str, Any] = {"pipeline": pipeline, "schema": schema}
     if calibrator is not None:
+        assert diagnostic_reference is not None
         artifact.update(
             {
-                "artifact_schema_version": "2.0",
+                "artifact_schema_version": "3.0",
                 "selected_model": selected_model,
                 "calibrator": calibrator,
                 "decision_scenarios": cost_scenarios,
+                "diagnostic_reference": diagnostic_reference,
             }
         )
     with model_path.open("wb") as model_file:
@@ -446,6 +491,7 @@ def run_experiment(
         encoding="utf-8",
     )
     if calibrator is not None and calibrated_probabilities is not None:
+        assert diagnostic_report is not None
         comparison = _comparison_report(
             result,
             dataset_fingerprint=_dataset_fingerprint(dataset.frame),
@@ -463,6 +509,7 @@ def run_experiment(
                 for scenario in cost_scenarios
             ),
             calibrator=calibrator,
+            diagnostic_report=diagnostic_report,
             artifact_round_trip_parity=artifact_round_trip_parity,
             runtime_seconds=perf_counter() - started,
         )

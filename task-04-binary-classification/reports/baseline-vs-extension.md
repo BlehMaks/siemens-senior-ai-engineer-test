@@ -20,6 +20,12 @@ The extension fits a sigmoid only on grouped out-of-fold training probabilities.
 | balanced-review | 1.000 | 1.000 | 0.300 | 1.000000 | 0.000000 | 0.250000 | 0.190287 | 0.250000 |
 | miss-averse-review | 1.000 | 8.000 | 0.750 | 0.333333 | 0.666667 | 0.250000 | 0.730817 | 0.583333 |
 
+## Training-fitted diagnostics
+
+Status: `ok`. Thresholds are review policy, not universal drift tests.
+
+No diagnostic policy warnings were raised.
+
 ## Limitations
 
 - Class semantics and real business costs are not provided.

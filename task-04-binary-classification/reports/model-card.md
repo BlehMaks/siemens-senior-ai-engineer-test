@@ -98,6 +98,22 @@ and expected versus realized scenario cost. The saved trusted artifact includes 
 pipeline, schema, sigmoid parameters, selected model, and scenarios; immediate reload
 checks probability parity to `1e-12` absolute tolerance.
 
+## Training-fitted diagnostic snapshot
+
+The opt-in extension stores one frozen diagnostic reference fitted only on the model
+training features. Holdout targets, groups, and probabilities are not inputs to the
+fit. The final comparison reports schema differences, missingness-rate changes,
+fixed-quantile numeric shifts relative to training IQR, constant-column changes, and
+unseen-category rates. Thresholds are explicit review policy and do not claim a
+universal statistical drift test.
+
+Warnings identify affected anonymized features but do not change or block baseline
+predictions. Only a missing or duplicate required model column is invalid and stops
+before final model fitting or prediction. JSON contains aggregates and warning codes,
+not fitted category vocabularies, raw rows, targets, or source IDs. The fitted
+reference remains inside the same trusted local pickle as the model; no remote
+monitor, mutable reference, or untrusted artifact loader is introduced.
+
 ## CatBoost decision
 
 The nonlinear candidate was assessed and stopped before execution. The effective

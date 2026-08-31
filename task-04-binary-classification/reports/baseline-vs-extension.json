@@ -334,6 +334,254 @@
         "true_positive": 4
       }
     ],
+    "diagnostics": {
+      "categorical_unseen": [
+        {
+          "column": "COD",
+          "observed_rows": 24,
+          "unseen_count": 0,
+          "unseen_rate": 0.0,
+          "warning": false
+        },
+        {
+          "column": "ERG",
+          "observed_rows": 24,
+          "unseen_count": 0,
+          "unseen_rate": 0.0,
+          "warning": false
+        },
+        {
+          "column": "GJAH",
+          "observed_rows": 24,
+          "unseen_count": 0,
+          "unseen_rate": 0.0,
+          "warning": false
+        },
+        {
+          "column": "MYR",
+          "observed_rows": 24,
+          "unseen_count": 0,
+          "unseen_rate": 0.0,
+          "warning": false
+        },
+        {
+          "column": "PKD",
+          "observed_rows": 24,
+          "unseen_count": 0,
+          "unseen_rate": 0.0,
+          "warning": false
+        },
+        {
+          "column": "RAS",
+          "observed_rows": 18,
+          "unseen_count": 0,
+          "unseen_rate": 0.0,
+          "warning": false
+        },
+        {
+          "column": "TOK",
+          "observed_rows": 24,
+          "unseen_count": 0,
+          "unseen_rate": 0.0,
+          "warning": false
+        },
+        {
+          "column": "KAT",
+          "observed_rows": 24,
+          "unseen_count": 0,
+          "unseen_rate": 0.0,
+          "warning": false
+        },
+        {
+          "column": "XIN",
+          "observed_rows": 24,
+          "unseen_count": 0,
+          "unseen_rate": 0.0,
+          "warning": false
+        }
+      ],
+      "missingness": [
+        {
+          "absolute_shift": 0.0,
+          "column": "BIB",
+          "current_rate": 0.0,
+          "training_rate": 0.0,
+          "warning": false
+        },
+        {
+          "absolute_shift": 0.0,
+          "column": "FAN",
+          "current_rate": 0.0,
+          "training_rate": 0.0,
+          "warning": false
+        },
+        {
+          "absolute_shift": 0.0,
+          "column": "LUK",
+          "current_rate": 0.0,
+          "training_rate": 0.0,
+          "warning": false
+        },
+        {
+          "absolute_shift": 0.0,
+          "column": "NUS",
+          "current_rate": 0.0,
+          "training_rate": 0.0,
+          "warning": false
+        },
+        {
+          "absolute_shift": 0.0,
+          "column": "SIS",
+          "current_rate": 0.0,
+          "training_rate": 0.0,
+          "warning": false
+        },
+        {
+          "absolute_shift": 0.0,
+          "column": "WET",
+          "current_rate": 0.0,
+          "training_rate": 0.0,
+          "warning": false
+        },
+        {
+          "absolute_shift": 0.0,
+          "column": "COD",
+          "current_rate": 0.0,
+          "training_rate": 0.0,
+          "warning": false
+        },
+        {
+          "absolute_shift": 0.0,
+          "column": "ERG",
+          "current_rate": 0.0,
+          "training_rate": 0.0,
+          "warning": false
+        },
+        {
+          "absolute_shift": 0.0,
+          "column": "GJAH",
+          "current_rate": 0.0,
+          "training_rate": 0.0,
+          "warning": false
+        },
+        {
+          "absolute_shift": 0.0,
+          "column": "MYR",
+          "current_rate": 0.0,
+          "training_rate": 0.0,
+          "warning": false
+        },
+        {
+          "absolute_shift": 0.0,
+          "column": "PKD",
+          "current_rate": 0.0,
+          "training_rate": 0.0,
+          "warning": false
+        },
+        {
+          "absolute_shift": 0.10416666666666666,
+          "column": "RAS",
+          "current_rate": 0.25,
+          "training_rate": 0.14583333333333334,
+          "warning": false
+        },
+        {
+          "absolute_shift": 0.0,
+          "column": "TOK",
+          "current_rate": 0.0,
+          "training_rate": 0.0,
+          "warning": false
+        },
+        {
+          "absolute_shift": 0.0,
+          "column": "KAT",
+          "current_rate": 0.0,
+          "training_rate": 0.0,
+          "warning": false
+        },
+        {
+          "absolute_shift": 0.0,
+          "column": "XIN",
+          "current_rate": 0.0,
+          "training_rate": 0.0,
+          "warning": false
+        }
+      ],
+      "mode_status": "evaluated",
+      "numeric_distribution": [
+        {
+          "column": "BIB",
+          "constant_reference": false,
+          "method": "fixed_quantile_shift_over_training_iqr",
+          "metric_status": "evaluated",
+          "observed_rows": 24,
+          "shift_iqr": 0.2857142857142857,
+          "warning": false
+        },
+        {
+          "column": "FAN",
+          "constant_reference": false,
+          "method": "fixed_quantile_shift_over_training_iqr",
+          "metric_status": "evaluated",
+          "observed_rows": 24,
+          "shift_iqr": 0.64,
+          "warning": false
+        },
+        {
+          "column": "LUK",
+          "constant_reference": false,
+          "method": "fixed_quantile_shift_over_training_iqr",
+          "metric_status": "evaluated",
+          "observed_rows": 24,
+          "shift_iqr": 0.5405405405405406,
+          "warning": false
+        },
+        {
+          "column": "NUS",
+          "constant_reference": false,
+          "method": "fixed_quantile_shift_over_training_iqr",
+          "metric_status": "evaluated",
+          "observed_rows": 24,
+          "shift_iqr": 0.5294117647058824,
+          "warning": false
+        },
+        {
+          "column": "SIS",
+          "constant_reference": false,
+          "method": "fixed_quantile_shift_over_training_iqr",
+          "metric_status": "evaluated",
+          "observed_rows": 24,
+          "shift_iqr": 0.5882352941176471,
+          "warning": false
+        },
+        {
+          "column": "WET",
+          "constant_reference": false,
+          "method": "fixed_quantile_shift_over_training_iqr",
+          "metric_status": "evaluated",
+          "observed_rows": 24,
+          "shift_iqr": 0.5,
+          "warning": false
+        }
+      ],
+      "policy": {
+        "interpretation": "Review policy thresholds, not universal drift tests.",
+        "missing_rate_delta_warning": 0.2,
+        "numeric_quantile_shift_iqr_warning": 1.0,
+        "unseen_category_rate_warning": 0.1
+      },
+      "reference": {
+        "fitted_on": "training_features_only",
+        "training_rows": 96
+      },
+      "schema": {
+        "duplicate_columns": [],
+        "missing_required_columns": [],
+        "unexpected_columns": []
+      },
+      "status": "ok",
+      "warnings": []
+    },
     "mode_status": "evaluated"
   },
   "delta": {
@@ -380,8 +628,8 @@
       "holdout": 24,
       "training": 96
     },
-    "runtime_seconds": 0.598619292024523,
+    "runtime_seconds": 0.609866000013426,
     "seed": 42
   },
-  "schema_version": "1.0"
+  "schema_version": "1.1"
 }

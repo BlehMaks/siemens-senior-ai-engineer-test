@@ -113,9 +113,24 @@ realized cost, automatic-decision coverage, review rate, and automatic error rat
 The trusted pickle also contains the calibrator and scenario configuration and is
 reloaded immediately to verify raw and calibrated probability parity.
 
+### Training-fitted diagnostics
+
+The extension also fits aggregate diagnostic references on training features only.
+It reports required or unexpected columns, per-feature missingness changes, fixed
+numeric-quantile shifts normalized by the training IQR, constant-column changes,
+and unseen-category rates. The configured thresholds are review policy, not
+universal drift tests. Warnings are recorded with affected feature names and never
+block evaluation; only missing or duplicate required model columns are invalid.
+
+The comparison JSON contains counts, rates, shifts, and warning codes only. It does
+not contain category vocabularies, raw feature values, targets, or source IDs. The
+fitted reference is stored only in the trusted local model artifact, alongside the
+encoder that already retains fitted categories. It is never updated from holdout or
+inference data, and this snapshot report is not a monitoring service.
+
 Failure is explicit: invalid, negative, non-finite, duplicate, wrongly labeled, or
 unknown-version cost configurations stop the run. The holdout is used only for the
 final comparison, never for model selection, sigmoid fitting, or policy setup.
 Private rows are not written to the aggregate reports. Real costs, target meaning,
-external validation, temporal drift, and production approval remain owner-owned
+external validation, temporal monitoring, and production approval remain owner-owned
 limitations.

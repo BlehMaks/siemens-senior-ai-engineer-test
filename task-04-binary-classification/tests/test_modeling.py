@@ -11,10 +11,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import binary_classification.evaluate as evaluate_module
 import binary_classification.modeling as modeling_module
 from binary_classification.analysis import analyze_training_frame, feature_group_ids
 from binary_classification.calibration import SigmoidCalibrator
 from binary_classification.decision import EXAMPLE_SCENARIOS, DecisionScenario
+from binary_classification.diagnostics import assess_drift
 from binary_classification.evaluate import render_comparison_markdown, run_experiment
 from binary_classification.modeling import (
     CANDIDATE_NAMES,
@@ -419,11 +421,16 @@ def test_extension_run_calibrates_serializes_and_writes_one_source_report(
     with (output / "selected-model.pkl").open("rb") as model_file:
         artifact: Any = pickle.load(model_file)
 
-    assert report["schema_version"] == "1.0"
+    assert report["schema_version"] == "1.1"
     assert report["assignment_baseline"]["selected_model"] == result.selected_model
     assert report["business_extension"]["mode_status"] == "evaluated"
     assert report["business_extension"]["calibration"]["artifact_round_trip_parity"]
     assert len(report["business_extension"]["decision_scenarios"]) == 2
+    diagnostics = report["business_extension"]["diagnostics"]
+    assert diagnostics["mode_status"] == "evaluated"
+    assert diagnostics["status"] in {"ok", "warning"}
+    assert diagnostics["reference"]["training_rows"] == result.training_rows
+    assert "observed_values" not in json.dumps(diagnostics)
     assert report["metadata"]["row_counts"] == {
         "training": result.training_rows,
         "holdout": result.holdout_rows,
@@ -434,10 +441,89 @@ def test_extension_run_calibrates_serializes_and_writes_one_source_report(
         "artifact_schema_version",
         "calibrator",
         "decision_scenarios",
+        "diagnostic_reference",
         "pipeline",
         "schema",
         "selected_model",
     }
+    assert artifact["artifact_schema_version"] == "3.0"
+
+
+def test_invalid_diagnostic_schema_blocks_before_final_model_fit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    part1, part2 = _synthetic_tables()
+    part1_path = tmp_path / "part1.csv"
+    part2_path = tmp_path / "part2.csv"
+    part1.to_csv(part1_path, sep=";", index=False)
+    part2.to_csv(part2_path, sep=";", index=False)
+
+    class ForbiddenPipeline:
+        def fit(self, *_: Any) -> None:
+            raise AssertionError("invalid schema must block before model fit")
+
+        def predict_proba(self, *_: Any) -> np.ndarray:
+            raise AssertionError("invalid schema must block before prediction")
+
+    monkeypatch.setattr(
+        evaluate_module,
+        "assess_drift",
+        lambda *_: {
+            "status": "invalid_schema",
+            "schema": {"missing_required_columns": ["numeric"]},
+        },
+    )
+    monkeypatch.setattr(
+        evaluate_module, "build_pipeline", lambda *_args, **_kwargs: ForbiddenPipeline()
+    )
+
+    with pytest.raises(ValueError, match="Invalid holdout schema"):
+        run_experiment(
+            part1_path,
+            part2_path,
+            tmp_path / "output",
+            cost_scenarios=(EXAMPLE_SCENARIOS["balanced-review"],),
+        )
+
+
+def test_diagnostic_warning_does_not_block_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    part1, part2 = _synthetic_tables()
+    part1_path = tmp_path / "part1.csv"
+    part2_path = tmp_path / "part2.csv"
+    part1.to_csv(part1_path, sep=";", index=False)
+    part2.to_csv(part2_path, sep=";", index=False)
+
+    def warning_assessment(*args: Any) -> dict[str, Any]:
+        report = assess_drift(*args)
+        report["status"] = "warning"
+        report["warnings"] = [
+            {
+                "code": "numeric_distribution_shift",
+                "column": "BIB",
+                "observed": 2.0,
+                "threshold": 1.0,
+            }
+        ]
+        return report
+
+    monkeypatch.setattr(evaluate_module, "assess_drift", warning_assessment)
+
+    run_experiment(
+        part1_path,
+        part2_path,
+        tmp_path / "output",
+        cost_scenarios=(EXAMPLE_SCENARIOS["balanced-review"],),
+    )
+
+    report = json.loads(
+        (tmp_path / "output" / "baseline-vs-extension.json").read_text(encoding="utf-8")
+    )
+    assert report["business_extension"]["diagnostics"]["status"] == "warning"
+    assert "numeric_distribution_shift" in (
+        tmp_path / "output" / "baseline-vs-extension.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_extension_rejects_duplicate_names_and_wrong_label_mapping() -> None:
