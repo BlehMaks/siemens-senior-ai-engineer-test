@@ -11,6 +11,7 @@ from google.cloud.firestore_v1.async_transaction import (
     AsyncTransaction,
     async_transactional,
 )
+from google.cloud.firestore_v1.base_query import FieldFilter
 from google.cloud.tasks_v2.types import HttpMethod, Task
 from google.protobuf.timestamp_pb2 import Timestamp  # type: ignore[import-untyped]
 
@@ -224,11 +225,11 @@ def _build_query(
     if document_id_prefix is not None:
         lower = query.document(document_id_prefix)
         upper = query.document(_prefix_upper_bound(document_id_prefix))
-        built = built.where("__name__", ">=", lower)
-        built = built.where("__name__", "<", upper)
+        built = built.where(filter=FieldFilter("__name__", ">=", lower))
+        built = built.where(filter=FieldFilter("__name__", "<", upper))
     if filters is not None:
         for key, value in filters.items():
-            built = built.where(key, "==", value)
+            built = built.where(filter=FieldFilter(key, "==", value))
     for field in order_by:
         if field.startswith("-"):
             built = built.order_by(field[1:], direction="DESCENDING")
@@ -312,7 +313,12 @@ class _FirestoreDocumentReference(Protocol):
 
 class _FirestoreQuery(Protocol):
     def where(
-        self, field_path: str, op_string: str, value: object
+        self,
+        field_path: str | None = None,
+        op_string: str | None = None,
+        value: object | None = None,
+        *,
+        filter: FieldFilter | None = None,
     ) -> _FirestoreQuery: ...
 
     def order_by(

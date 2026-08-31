@@ -8,6 +8,7 @@ import pytest
 from google.api_core.exceptions import AlreadyExists, InternalServerError, NotFound
 from google.auth.credentials import AnonymousCredentials
 from google.cloud.firestore_v1.async_client import AsyncClient
+from google.cloud.firestore_v1.base_query import FieldFilter
 from google.cloud.tasks_v2.types import Task
 
 import agent_api.storage.gcp as gcp_storage
@@ -80,7 +81,20 @@ class FakeQuery:
         self.cursor = None if start_after is None else dict(start_after)
         self.capped = limit
 
-    def where(self, field_path: str, op_string: str, value: object) -> FakeQuery:
+    def where(
+        self,
+        field_path: str | None = None,
+        op_string: str | None = None,
+        value: object | None = None,
+        *,
+        filter: FieldFilter | None = None,
+    ) -> FakeQuery:
+        if filter is not None:
+            field_path = filter.field_path
+            op_string = filter.op_string
+            value = filter.value
+        assert field_path is not None
+        assert op_string is not None
         assert op_string in {"==", ">=", "<"}
         return FakeQuery(
             self._store,
