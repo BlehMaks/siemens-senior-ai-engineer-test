@@ -226,7 +226,7 @@ main() {
     AGENT_MODEL_NAME="$model_name" \
     AGENT_MODEL_BASE_URL="$model_base_url" \
     AGENT_MODEL_TRANSPORT_PROFILE=local \
-    AGENT_SEARCH_BACKENDS=duckduckgo \
+    AGENT_SEARCH_BACKENDS=brave,auto \
     PORT="$api_port" \
     "$uv_bin" run --frozen --all-packages python -m deployment_strategy.container \
     > "$server_log" 2>&1 &

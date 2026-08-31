@@ -27,7 +27,8 @@ The workflow performs these gates:
 1. starts or reuses the loopback Ollama service;
 2. pulls or validates the requested model;
 3. runs `make local-submission` unless explicitly skipped;
-4. starts the API with `AGENT_API_INFERENCE_MODE=ollama` and DuckDuckGo search;
+4. starts the API with `AGENT_API_INFERENCE_MODE=ollama`, keyless Brave search,
+   and bounded DDGS metasearch as the ordered fallback;
 5. submits a real research request through the authenticated REST API;
 6. waits for completion and requires a non-empty grounded answer with at least one
    public-web citation;
@@ -88,7 +89,8 @@ The query must remain between 3 and 400 characters.
 
 - macOS, Linux, or WSL2 with Git, Make, `uv`, `curl`, `jq`, and OpenSSL;
 - enough free disk and memory for the selected model;
-- outbound access to Ollama's model registry, DuckDuckGo, and public source pages;
+- outbound access to Ollama's model registry, DDGS search providers, and public
+  source pages;
 - a free loopback port, default `8093` for the API and `11434` for Ollama.
 
 Automatic macOS installation uses Homebrew. Automatic Linux/WSL2 installation

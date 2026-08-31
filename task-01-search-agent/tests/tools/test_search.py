@@ -398,8 +398,8 @@ async def test_search_falls_back_after_exception_without_amplifying_result_limit
 ):
     backend = RoutingSearchBackend(
         responses={
-            "auto": RuntimeError("private backend failure"),
-            "duckduckgo": tuple(
+            "brave": RuntimeError("private backend failure"),
+            "auto": tuple(
                 {
                     "title": f"Result {index}",
                     "href": f"https://example.com/{index}",
@@ -412,7 +412,7 @@ async def test_search_falls_back_after_exception_without_amplifying_result_limit
     adapter = SearchAdapter(
         backend,
         SitePolicy(),
-        backend_names=("auto", "duckduckgo"),
+        backend_names=("brave", "auto"),
     )
 
     result = await adapter.search_with_metadata(
@@ -523,6 +523,7 @@ async def test_search_failure_carries_only_safe_attempt_metadata() -> None:
     ("value", "expected"),
     [
         ("auto", ("auto",)),
+        ("brave,auto", ("brave", "auto")),
         ("auto,duckduckgo", ("auto", "duckduckgo")),
         ("duckduckgo,auto", ("duckduckgo", "auto")),
     ],

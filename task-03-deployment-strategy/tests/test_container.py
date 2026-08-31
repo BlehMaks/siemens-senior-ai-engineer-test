@@ -399,7 +399,7 @@ def test_local_process_can_use_authenticated_cloud_ollama(
     monkeypatch.setenv("AGENT_MODEL_BASE_URL", model_origin)
     monkeypatch.setenv("AGENT_MODEL_TRANSPORT_PROFILE", "cloud")
     monkeypatch.setenv("AGENT_MODEL_GOOGLE_ID_TOKEN_AUDIENCE", model_origin)
-    monkeypatch.setenv("AGENT_SEARCH_BACKENDS", "auto,duckduckgo")
+    monkeypatch.setenv("AGENT_SEARCH_BACKENDS", "brave,auto")
 
     executor = _run_executor(
         "ollama", cloud_settings=None, database_path=tmp_path / "memory.sqlite3"
@@ -407,7 +407,7 @@ def test_local_process_can_use_authenticated_cloud_ollama(
 
     assert isinstance(executor, OllamaResearchExecutor)
     assert isinstance(executor.model_auth, GoogleIdTokenAuth)
-    assert executor.settings.search_backends == ("auto", "duckduckgo")
+    assert executor.settings.search_backends == ("brave", "auto")
     assert executor.memory_reader_factory is not None
 
 

@@ -117,7 +117,8 @@ def test_live_acceptance_is_explicitly_ollama_backed_and_user_friendly() -> None
     assert 'ollama pull "$model_name"' in source
     assert "AGENT_API_INFERENCE_MODE=ollama" in source
     assert "AGENT_MODEL_TRANSPORT_PROFILE=local" in source
-    assert "AGENT_SEARCH_BACKENDS=duckduckgo" in source
+    assert "AGENT_SEARCH_BACKENDS=brave,auto" in source
+    assert "AGENT_SEARCH_BACKENDS=duckduckgo" not in source
     assert "AGENT_API_INFERENCE_MODE=fake" not in source
     assert "live_api_smoke.sh" in source
     assert "api/ps" in source

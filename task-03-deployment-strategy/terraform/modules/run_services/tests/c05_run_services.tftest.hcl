@@ -136,7 +136,7 @@ run "cloud_ollama_contract_wires_one_authenticated_model_origin" {
     model_base_url                 = "https://sai-prod-model-abc.a.run.app"
     model_name                     = "granite3.3:8b-q4"
     model_google_id_token_audience = "https://sai-prod-model-abc.a.run.app"
-    search_backends                = ["auto", "duckduckgo"]
+    search_backends                = ["brave", "auto"]
   }
 
   assert {
@@ -145,7 +145,7 @@ run "cloud_ollama_contract_wires_one_authenticated_model_origin" {
       output.worker_service.runtime.model_transport_profile == "cloud" &&
       output.worker_service.runtime.model_base_url == output.worker_service.runtime.model_google_id_token_audience &&
       output.worker_service.runtime.model_name == "granite3.3:8b-q4" &&
-      jsonencode(output.worker_service.runtime.search_backends) == jsonencode(["auto", "duckduckgo"])
+      jsonencode(output.worker_service.runtime.search_backends) == jsonencode(["brave", "auto"])
     )
     error_message = "Cloud mode must wire the model origin, audience, model, and search fallback order."
   }

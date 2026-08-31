@@ -22,7 +22,7 @@ _ROWS_PER_REQUESTED_HIT = 4
 _MAX_ATTEMPT_DURATION_MS = 600_000
 _MAX_SEARCH_BACKENDS = 2
 _MAX_SEARCH_BACKENDS_TEXT = 64
-_SUPPORTED_SEARCH_BACKENDS = frozenset({"auto", "duckduckgo"})
+_SUPPORTED_SEARCH_BACKENDS = frozenset({"auto", "brave", "duckduckgo"})
 _SAFE_SEARCH_ARGUMENT = {
     SafeSearch.STRICT: "on",
     SafeSearch.MODERATE: "moderate",

@@ -31,6 +31,14 @@ dependency installation needs access to the configured package cache or index.
 Cloud deployment, live search, private-data reports, and external model downloads
 are separate opt-in operations and are not implied by a green local gate.
 
+## Live acceptance reports `search_failed`
+
+Confirm that the machine can reach public search providers and that the live script
+uses the ordered `brave,auto` backend configuration. A green deterministic gate does
+not exercise external search. Keyless Brave is primary because the direct DuckDuckGo
+backend can return no results for otherwise valid Siemens queries; DDGS `auto`
+remains a bounded metasearch fallback for transient provider differences.
+
 ## Submission audit reports a file
 
 Read the reported path before changing anything. Move private data and generated
