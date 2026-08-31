@@ -147,6 +147,7 @@ async def test_query_planner_repairs_company_research_budget() -> None:
     [
         "press.siemens.com/global/en first item headline contains 2026",
         "press.siemens.com first item headline contains 2026",
+        "Find press.siemens.com.",
         "siemens.com.cn first item headline contains 2026",
     ],
 )
@@ -237,6 +238,7 @@ async def test_query_planner_does_not_mask_provider_failure_for_a_web_target() -
         "What is Siemens?",
         "What does https:// mean?",
         "What does pathlib.Path represent?",
+        "What does response.url mean?",
         "What does typing.IO mean?",
     ],
 )

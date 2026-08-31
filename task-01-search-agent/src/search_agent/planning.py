@@ -53,7 +53,7 @@ _WEB_TARGET_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 _BARE_HOST_PATTERN = re.compile(
-    rf"(?<![@\w]){_DOMAIN_NAME_PATTERN}(?=$|[\s,;:!?])",
+    rf"(?<![@\w]){_DOMAIN_NAME_PATTERN}(?=$|[\s,;:!?.])",
     flags=re.IGNORECASE,
 )
 _WEB_RESOURCE_CUE_TOKENS = frozenset(
@@ -349,10 +349,12 @@ def _has_web_target(request: str) -> bool:
     normalized = unicodedata.normalize("NFKC", request)
     if _WEB_TARGET_PATTERN.search(normalized) is not None:
         return True
-    return _BARE_HOST_PATTERN.search(normalized) is not None and (
-        _explicitly_requests_research(request)
-        or bool(_meaningful_tokens(request) & _WEB_RESOURCE_CUE_TOKENS)
-    )
+    if _BARE_HOST_PATTERN.search(normalized) is None:
+        return False
+    if _explicitly_requests_research(request):
+        return True
+    request_without_hosts = _BARE_HOST_PATTERN.sub(" ", normalized)
+    return bool(_meaningful_tokens(request_without_hosts) & _WEB_RESOURCE_CUE_TOKENS)
 
 
 class QueryPlanner:
