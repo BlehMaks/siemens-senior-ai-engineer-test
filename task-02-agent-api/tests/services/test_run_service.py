@@ -166,25 +166,29 @@ async def test_terminal_idempotent_retry_returns_the_original_acceptance(
         (
             RunFailureCode.BUDGET_EXHAUSTED,
             RunState.FAILED,
-            "Run exhausted its configured budget.",
+            "The run reached its configured budget before it could finish. "
+            "Try a narrower question.",
             False,
         ),
         (
             RunFailureCode.NO_EVIDENCE,
             RunState.FAILED,
-            "No sufficient public evidence was found.",
+            "No public source with quotable evidence was found for this question. "
+            "Try naming the subject more specifically.",
             False,
         ),
         (
             RunFailureCode.SEARCH_FAILED,
             RunState.FAILED,
-            "Public evidence search failed.",
+            "Public web search is unavailable right now. Please try again.",
             True,
         ),
         (
             RunFailureCode.VALIDATION_FAILED,
             RunState.FAILED,
-            "Run output failed validation.",
+            "The sources found did not contain a passage that answers this "
+            "question, so no answer is given rather than an unsupported one. Try "
+            "rephrasing, or add the place, product or time period you mean.",
             False,
         ),
         (

@@ -361,11 +361,30 @@ class RunFailure(StrictModel):
     _message_is_public = field_validator("message")(_reject_sensitive_text)
 
 
+# Each message says what the agent could not do and what the user can do about
+# it. A bare "failed validation" reads as a defect to the person who asked, when
+# the run in fact refused to answer without citable public evidence.
 _PUBLIC_RUN_FAILURES: dict[RunFailureCode, tuple[str, bool]] = {
-    RunFailureCode.BUDGET_EXHAUSTED: ("Run exhausted its configured budget.", False),
-    RunFailureCode.NO_EVIDENCE: ("No sufficient public evidence was found.", False),
-    RunFailureCode.SEARCH_FAILED: ("Public evidence search failed.", True),
-    RunFailureCode.VALIDATION_FAILED: ("Run output failed validation.", False),
+    RunFailureCode.BUDGET_EXHAUSTED: (
+        "The run reached its configured budget before it could finish. "
+        "Try a narrower question.",
+        False,
+    ),
+    RunFailureCode.NO_EVIDENCE: (
+        "No public source with quotable evidence was found for this question. "
+        "Try naming the subject more specifically.",
+        False,
+    ),
+    RunFailureCode.SEARCH_FAILED: (
+        "Public web search is unavailable right now. Please try again.",
+        True,
+    ),
+    RunFailureCode.VALIDATION_FAILED: (
+        "The sources found did not contain a passage that answers this question, "
+        "so no answer is given rather than an unsupported one. Try rephrasing, or "
+        "add the place, product or time period you mean.",
+        False,
+    ),
     RunFailureCode.EXECUTION_FAILED: ("Run execution failed.", True),
     RunFailureCode.EXPIRED: ("Run expired before completion.", True),
 }
