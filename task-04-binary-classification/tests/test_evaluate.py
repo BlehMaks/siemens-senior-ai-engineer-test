@@ -69,6 +69,8 @@ def test_cli_requires_explicit_scenario_selection_for_extension(
         *,
         seed: int,
         cost_scenarios: tuple[Any, ...],
+        review_queue_path: Path | None,
+        owner_include_source_ids: bool,
     ) -> SimpleNamespace:
         captured.update(
             {
@@ -77,6 +79,8 @@ def test_cli_requires_explicit_scenario_selection_for_extension(
                 "output": output,
                 "seed": seed,
                 "cost_scenarios": cost_scenarios,
+                "review_queue_path": review_queue_path,
+                "owner_include_source_ids": owner_include_source_ids,
             }
         )
         return SimpleNamespace(
@@ -99,6 +103,9 @@ def test_cli_requires_explicit_scenario_selection_for_extension(
             "7",
             "--cost-scenario",
             "balanced-review",
+            "--review-queue",
+            "local-review.json",
+            "--owner-include-source-ids",
         ]
     )
 
@@ -107,6 +114,8 @@ def test_cli_requires_explicit_scenario_selection_for_extension(
     assert [scenario.name for scenario in captured["cost_scenarios"]] == [
         "balanced-review"
     ]
+    assert captured["review_queue_path"] == Path("local-review.json")
+    assert captured["owner_include_source_ids"] is True
     assert "selected=weighted_logistic" in capsys.readouterr().out
 
 

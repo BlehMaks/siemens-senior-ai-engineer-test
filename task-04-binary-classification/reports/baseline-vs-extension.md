@@ -26,9 +26,14 @@ Status: `ok`. Thresholds are review policy, not universal drift tests.
 
 No diagnostic policy warnings were raised.
 
+## Optional active-review queue
+
+Disabled; no local review queue path was requested.
+
 ## Limitations
 
 - Class semantics and real business costs are not provided.
 - Bundled scenarios are examples and require owner confirmation.
 - The holdout is evaluated only after model, calibration, and policy setup.
 - The small minority class makes calibration and cost estimates uncertain.
+- Review queue priorities are human-labeling aids, not approval decisions.

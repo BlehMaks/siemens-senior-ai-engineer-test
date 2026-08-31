@@ -114,6 +114,22 @@ not fitted category vocabularies, raw rows, targets, or source IDs. The fitted
 reference remains inside the same trusted local pickle as the model; no remote
 monitor, mutable reference, or untrusted artifact loader is introduced.
 
+## Optional active-review export
+
+An extension run may export reviewed cases for one explicitly chosen cost scenario
+to a caller-supplied local JSON path. The queue is disabled by default. Each item has
+a run-local opaque ID, a cost-avoidance priority, an uncertainty priority, and a
+reason explaining whether review uniquely minimized or tied expected cost. Ordering
+is deterministic and does not use the holdout target.
+
+The queue builder receives calibrated probabilities and the selected scenario only;
+it never receives labels or feature rows. Version-1 output excludes the probability,
+target, and raw feature values. Source IDs are also excluded unless the repository
+owner supplies the explicit owner-only flag and local path. Files containing source
+IDs are private local artifacts and must not be committed. This export supports human
+label collection only; it is not an approval decision, labeling service, database, or
+automated retraining loop.
+
 ## CatBoost decision
 
 The nonlinear candidate was assessed and stopped before execution. The effective
@@ -150,5 +166,7 @@ contain no source rows.
   model before deployment.
 - Assignment-baseline probabilities are uncalibrated; the opt-in sigmoid remains
   subject to owner confirmation and external validation.
-- Drift, temporal ordering, external validation, and live monitoring are not
-  available in the assignment data.
+- Temporal ordering, external validation, and live monitoring are not available in
+  the assignment data; the diagnostic snapshot does not replace them.
+- Active-review priorities depend on example costs and are not operational until an
+  owner confirms both the scenario and a real human-labeling process.

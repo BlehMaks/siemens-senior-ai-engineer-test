@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -17,6 +18,7 @@ _ACTION_ORDER: tuple[DecisionAction, ...] = (
     "class_1",
 )
 _CONFIG_SCHEMA_VERSION = "1.0"
+_REVIEW_QUEUE_SCHEMA_VERSION = "1.0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +228,66 @@ def evaluate_decision_policy(
         ),
         mean_realized_cost=float(np.mean(realized)),
     )
+
+
+def build_review_queue(
+    probabilities: NDArray[np.float64] | list[float],
+    scenario: DecisionScenario,
+    *,
+    source_ids: Sequence[str | int] | None = None,
+) -> dict[str, Any]:
+    """Build a target-free, feature-free queue for one operational scenario."""
+
+    scores = np.asarray(probabilities, dtype="float64")
+    if scores.ndim != 1 or not len(scores):
+        raise ValueError("review probabilities must be a non-empty vector")
+    if source_ids is not None and len(source_ids) != len(scores):
+        raise ValueError("source IDs and probabilities must have equal length")
+
+    candidates: list[tuple[float, float, int, dict[str, Any]]] = []
+    for position, score in enumerate(scores):
+        probability = float(score)
+        decision = choose_decision(probability, scenario)
+        if decision.action != "manual_review":
+            continue
+        automatic_cost = min(
+            probability * scenario.false_negative_cost,
+            (1.0 - probability) * scenario.false_positive_cost,
+        )
+        cost_avoidance = max(0.0, automatic_cost - scenario.review_cost)
+        uncertainty = 1.0 - 2.0 * abs(probability - 0.5)
+        item: dict[str, Any] = {
+            "priority": {
+                "cost_avoidance": cost_avoidance,
+                "uncertainty": uncertainty,
+            },
+            "reason": (
+                "manual_review_tied_for_lowest_expected_cost"
+                if len(decision.tied_actions) > 1
+                else "manual_review_has_lowest_expected_cost"
+            ),
+        }
+        if source_ids is not None:
+            item["source_id"] = source_ids[position]
+        candidates.append((-cost_avoidance, -uncertainty, position, item))
+
+    candidates.sort(key=lambda candidate: candidate[:3])
+    items = []
+    for rank, candidate in enumerate(candidates, start=1):
+        item = candidate[3]
+        items.append({"review_id": f"review-{rank:06d}", **item})
+    return {
+        "schema_version": _REVIEW_QUEUE_SCHEMA_VERSION,
+        "mode": "human_labeling_aid",
+        "scenario": scenario.name,
+        "source_ids_included": source_ids is not None,
+        "ordering": [
+            "cost_avoidance_desc",
+            "uncertainty_desc",
+            "source_position_asc",
+        ],
+        "items": items,
+    }
 
 
 def load_cost_config(path: str | Path) -> tuple[DecisionScenario, ...]:

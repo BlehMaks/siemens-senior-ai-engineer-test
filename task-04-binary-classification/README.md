@@ -128,6 +128,32 @@ fitted reference is stored only in the trusted local model artifact, alongside t
 encoder that already retains fitted categories. It is never updated from holdout or
 inference data, and this snapshot report is not a monitoring service.
 
+### Optional active-review queue
+
+The extension can write a separate local queue for one explicitly selected cost
+scenario. It exports only run-local opaque review IDs, cost-avoidance and uncertainty
+priority, and the reason manual review minimized or tied expected cost. Items are
+ordered by descending cost avoidance, descending uncertainty, and original run
+position. The queue is a human-labeling aid, not an automated approval workflow.
+
+The default remains disabled and writes no queue. Enable it explicitly:
+
+```bash
+uv run --locked python -m binary_classification.evaluate \
+  --part1 "$SIEMENS_TASK4_INPUT_DIR/Training_part1.csv" \
+  --part2 "$SIEMENS_TASK4_INPUT_DIR/Training_part2.csv" \
+  --output-dir /tmp/task4-extension \
+  --cost-scenario balanced-review \
+  --review-queue /tmp/task4-review-queue.json
+```
+
+The version-1 queue contains no target, calibrated probability, or raw feature value.
+Source IDs remain excluded unless the repository owner deliberately adds
+`--owner-include-source-ids`; that flag is accepted only with an explicit local queue
+path. Treat such an owner-only file as private and never commit it. Queue export
+requires exactly one scenario so the same case is not duplicated under comparison
+policies. It adds no database, remote service, or feedback-loop automation.
+
 Failure is explicit: invalid, negative, non-finite, duplicate, wrongly labeled, or
 unknown-version cost configurations stop the run. The holdout is used only for the
 final comparison, never for model selection, sigmoid fitting, or policy setup.

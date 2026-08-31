@@ -3,15 +3,87 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from binary_classification.decision import (
     EXAMPLE_SCENARIOS,
     DecisionScenario,
+    build_review_queue,
     choose_decision,
     evaluate_decision_policy,
     load_cost_config,
 )
+
+
+def test_review_queue_is_private_by_default_and_deterministically_prioritized() -> None:
+    scenario = DecisionScenario(
+        name="review",
+        false_positive_cost=1.0,
+        false_negative_cost=1.0,
+        review_cost=0.2,
+    )
+
+    first = build_review_queue([0.2, 0.5, 0.8, 0.05], scenario)
+    second = build_review_queue([0.2, 0.5, 0.8, 0.05], scenario)
+
+    assert first == second
+    assert set(first) == {
+        "schema_version",
+        "mode",
+        "scenario",
+        "source_ids_included",
+        "ordering",
+        "items",
+    }
+    assert first["schema_version"] == "1.0"
+    assert first["mode"] == "human_labeling_aid"
+    assert first["source_ids_included"] is False
+    assert [item["review_id"] for item in first["items"]] == [
+        "review-000001",
+        "review-000002",
+        "review-000003",
+    ]
+    assert [item["priority"] for item in first["items"]] == [
+        {"cost_avoidance": 0.3, "uncertainty": 1.0},
+        {"cost_avoidance": 0.0, "uncertainty": 0.4},
+        {"cost_avoidance": 0.0, "uncertainty": 0.3999999999999999},
+    ]
+    assert first["items"][0]["reason"] == ("manual_review_has_lowest_expected_cost")
+    assert first["items"][1]["reason"] == (
+        "manual_review_tied_for_lowest_expected_cost"
+    )
+    serialized = json.dumps(first)
+    assert all("source_id" not in item for item in first["items"])
+    assert "target" not in serialized
+    assert "probability" not in serialized
+    assert "feature" not in serialized
+
+
+def test_review_queue_includes_source_ids_only_when_explicitly_supplied() -> None:
+    scenario = DecisionScenario(
+        name="review",
+        false_positive_cost=1.0,
+        false_negative_cost=1.0,
+        review_cost=0.2,
+    )
+
+    queue = build_review_queue([0.5, 0.05], scenario, source_ids=[101, 102])
+
+    assert queue["source_ids_included"] is True
+    assert queue["items"][0]["source_id"] == 101
+
+
+def test_review_queue_rejects_invalid_vectors() -> None:
+    scenario = EXAMPLE_SCENARIOS["balanced-review"]
+    with pytest.raises(ValueError, match="non-empty vector"):
+        build_review_queue([], scenario)
+    with pytest.raises(ValueError, match="non-empty vector"):
+        build_review_queue(np.array([[0.5]]), scenario)
+    with pytest.raises(ValueError, match="equal length"):
+        build_review_queue([0.5], scenario, source_ids=[])
+    with pytest.raises(ValueError, match="probability"):
+        build_review_queue([float("nan")], scenario)
 
 
 def test_example_scenarios_choose_different_actions_from_the_same_probability() -> None:

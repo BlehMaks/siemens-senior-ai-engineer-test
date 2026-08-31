@@ -29,6 +29,7 @@ from binary_classification.decision import (
     EXAMPLE_SCENARIOS,
     DecisionMetrics,
     DecisionScenario,
+    build_review_queue,
     evaluate_decision_policy,
     load_cost_config,
 )
@@ -52,7 +53,7 @@ from binary_classification.modeling import (
     split_train_holdout,
 )
 
-COMPARISON_SCHEMA_VERSION = "1.1"
+COMPARISON_SCHEMA_VERSION = "1.2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +186,7 @@ def _comparison_report(
     scenario_metrics: tuple[DecisionMetrics, ...],
     calibrator: SigmoidCalibrator,
     diagnostic_report: dict[str, Any],
+    review_queue_summary: dict[str, Any],
     artifact_round_trip_parity: bool,
     runtime_seconds: float,
 ) -> dict[str, Any]:
@@ -208,6 +210,7 @@ def _comparison_report(
         },
         "decision_scenarios": [metric.to_dict() for metric in scenario_metrics],
         "diagnostics": diagnostic_report,
+        "active_review_queue": review_queue_summary,
     }
     return {
         "schema_version": COMPARISON_SCHEMA_VERSION,
@@ -237,6 +240,7 @@ def _comparison_report(
             "Bundled scenarios are examples and require owner confirmation.",
             "The holdout is evaluated only after model, calibration, and policy setup.",
             "The small minority class makes calibration and cost estimates uncertain.",
+            "Review queue priorities are human-labeling aids, not approval decisions.",
         ],
     }
 
@@ -323,6 +327,20 @@ def render_comparison_markdown(report: dict[str, Any]) -> str:
             )
     else:
         lines.append("No diagnostic policy warnings were raised.")
+    review_queue = extension["active_review_queue"]
+    lines.extend(["", "## Optional active-review queue", ""])
+    if review_queue["mode_status"] == "evaluated":
+        source_id_status = (
+            "included by the explicit owner-only flag"
+            if review_queue["source_ids_included"]
+            else "excluded"
+        )
+        lines.append(
+            f"Exported {review_queue['rows']} cases as a human-labeling aid. "
+            f"Source IDs were {source_id_status}."
+        )
+    else:
+        lines.append("Disabled; no local review queue path was requested.")
     lines.extend(
         [
             "",
@@ -355,8 +373,14 @@ def run_experiment(
     *,
     seed: int = 42,
     cost_scenarios: tuple[DecisionScenario, ...] = (),
+    review_queue_path: str | Path | None = None,
+    owner_include_source_ids: bool = False,
 ) -> ExperimentResult:
     started = perf_counter()
+    if owner_include_source_ids and review_queue_path is None:
+        raise ValueError("source IDs require an explicit local review queue path")
+    if review_queue_path is not None and len(cost_scenarios) != 1:
+        raise ValueError("review queue export requires exactly one cost scenario")
     scenario_names = [scenario.name for scenario in cost_scenarios]
     if len(scenario_names) != len(set(scenario_names)):
         raise ValueError("cost scenario names must be unique")
@@ -417,6 +441,34 @@ def run_experiment(
             fold_assignments=folds,
         )
         calibrated_probabilities = calibrator.predict(holdout_probabilities)
+
+    review_queue_summary: dict[str, Any] = {
+        "schema_version": "1.0",
+        "mode_status": "disabled",
+        "reason": "No local review queue path was requested.",
+    }
+    if review_queue_path is not None:
+        assert calibrated_probabilities is not None
+        queue = build_review_queue(
+            calibrated_probabilities,
+            cost_scenarios[0],
+            source_ids=(
+                cast(list[int], split.holdout["id"].tolist())
+                if owner_include_source_ids
+                else None
+            ),
+        )
+        queue_path = Path(review_queue_path)
+        queue_path.parent.mkdir(parents=True, exist_ok=True)
+        queue_path.write_text(
+            json.dumps(queue, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        review_queue_summary = {
+            "schema_version": queue["schema_version"],
+            "mode_status": "evaluated",
+            "rows": len(queue["items"]),
+            "source_ids_included": queue["source_ids_included"],
+        }
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -510,6 +562,7 @@ def run_experiment(
             ),
             calibrator=calibrator,
             diagnostic_report=diagnostic_report,
+            review_queue_summary=review_queue_summary,
             artifact_round_trip_parity=artifact_round_trip_parity,
             runtime_seconds=perf_counter() - started,
         )
@@ -538,6 +591,20 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Versioned JSON file containing owner-confirmed cost scenarios.",
     )
+    parser.add_argument(
+        "--review-queue",
+        type=Path,
+        help=(
+            "Optional local JSON output path for one scenario's human-labeling queue."
+        ),
+    )
+    parser.add_argument(
+        "--owner-include-source-ids",
+        action="store_true",
+        help=(
+            "Include private source IDs in the explicitly requested local review queue."
+        ),
+    )
     args = parser.parse_args(argv)
     scenarios = (
         load_cost_config(args.cost_config)
@@ -550,6 +617,8 @@ def main(argv: list[str] | None = None) -> int:
         args.output_dir,
         seed=args.seed,
         cost_scenarios=scenarios,
+        review_queue_path=args.review_queue,
+        owner_include_source_ids=args.owner_include_source_ids,
     )
     print(
         f"selected={result.selected_model} "

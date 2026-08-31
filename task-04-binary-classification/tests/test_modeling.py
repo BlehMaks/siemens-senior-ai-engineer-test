@@ -377,6 +377,12 @@ def test_end_to_end_run_serializes_pipeline_metrics_and_is_reproducible(
     second = run_experiment(part1_path, part2_path, tmp_path / "second", seed=19)
 
     assert first.to_dict() == second.to_dict()
+    assert (tmp_path / "first" / "metrics.json").read_bytes() == (
+        tmp_path / "second" / "metrics.json"
+    ).read_bytes()
+    assert (tmp_path / "first" / "selected-model.pkl").read_bytes() == (
+        tmp_path / "second" / "selected-model.pkl"
+    ).read_bytes()
     assert first.selected_model in CANDIDATE_NAMES
     assert 0.0 <= first.selected_threshold <= 1.0
     assert len(first.threshold_sensitivity) == 3
@@ -394,6 +400,10 @@ def test_end_to_end_run_serializes_pipeline_metrics_and_is_reproducible(
     with (tmp_path / "first" / "selected-model.pkl").open("rb") as model_file:
         restored: Any = pickle.load(model_file)
     assert set(restored) == {"pipeline", "schema"}
+    assert sorted(path.name for path in (tmp_path / "first").iterdir()) == [
+        "metrics.json",
+        "selected-model.pkl",
+    ]
 
 
 def test_extension_run_calibrates_serializes_and_writes_one_source_report(
@@ -421,7 +431,7 @@ def test_extension_run_calibrates_serializes_and_writes_one_source_report(
     with (output / "selected-model.pkl").open("rb") as model_file:
         artifact: Any = pickle.load(model_file)
 
-    assert report["schema_version"] == "1.1"
+    assert report["schema_version"] == "1.2"
     assert report["assignment_baseline"]["selected_model"] == result.selected_model
     assert report["business_extension"]["mode_status"] == "evaluated"
     assert report["business_extension"]["calibration"]["artifact_round_trip_parity"]
@@ -431,6 +441,11 @@ def test_extension_run_calibrates_serializes_and_writes_one_source_report(
     assert diagnostics["status"] in {"ok", "warning"}
     assert diagnostics["reference"]["training_rows"] == result.training_rows
     assert "observed_values" not in json.dumps(diagnostics)
+    assert report["business_extension"]["active_review_queue"] == {
+        "schema_version": "1.0",
+        "mode_status": "disabled",
+        "reason": "No local review queue path was requested.",
+    }
     assert report["metadata"]["row_counts"] == {
         "training": result.training_rows,
         "holdout": result.holdout_rows,
@@ -447,6 +462,100 @@ def test_extension_run_calibrates_serializes_and_writes_one_source_report(
         "selected_model",
     }
     assert artifact["artifact_schema_version"] == "3.0"
+
+
+def test_extension_exports_owner_review_queue_without_target_or_features(
+    tmp_path: Path,
+) -> None:
+    part1, part2 = _synthetic_tables()
+    part1_path = tmp_path / "part1.csv"
+    part2_path = tmp_path / "part2.csv"
+    part1.to_csv(part1_path, sep=";", index=False)
+    part2.to_csv(part2_path, sep=";", index=False)
+    output = tmp_path / "extension"
+    queue_path = tmp_path / "private" / "review-queue.json"
+    scenario = DecisionScenario(
+        name="owner-review",
+        false_positive_cost=1.0,
+        false_negative_cost=2.0,
+        review_cost=0.0,
+    )
+
+    result = run_experiment(
+        part1_path,
+        part2_path,
+        output,
+        seed=29,
+        cost_scenarios=(scenario,),
+        review_queue_path=queue_path,
+        owner_include_source_ids=True,
+    )
+
+    queue = json.loads(queue_path.read_text(encoding="utf-8"))
+    assert set(queue) == {
+        "schema_version",
+        "mode",
+        "scenario",
+        "source_ids_included",
+        "ordering",
+        "items",
+    }
+    assert queue["schema_version"] == "1.0"
+    assert queue["mode"] == "human_labeling_aid"
+    assert queue["source_ids_included"] is True
+    assert len(queue["items"]) == result.holdout_rows
+    assert all(
+        set(item) == {"review_id", "priority", "reason", "source_id"}
+        for item in queue["items"]
+    )
+    assert all(
+        set(item["priority"]) == {"cost_avoidance", "uncertainty"}
+        for item in queue["items"]
+    )
+    serialized_queue = json.dumps(queue)
+    assert "Class" not in serialized_queue
+    assert "target" not in serialized_queue
+    assert not any(
+        column in serialized_queue for column in part1.columns if column != "id"
+    )
+    report = json.loads(
+        (output / "baseline-vs-extension.json").read_text(encoding="utf-8")
+    )
+    assert report["business_extension"]["active_review_queue"] == {
+        "schema_version": "1.0",
+        "mode_status": "evaluated",
+        "rows": result.holdout_rows,
+        "source_ids_included": True,
+    }
+    assert "Source IDs were included by the explicit owner-only flag" in (
+        output / "baseline-vs-extension.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_review_queue_requires_local_path_and_exactly_one_scenario() -> None:
+    with pytest.raises(ValueError, match="explicit local review queue path"):
+        run_experiment(
+            "missing-part1",
+            "missing-part2",
+            "unused",
+            cost_scenarios=(EXAMPLE_SCENARIOS["balanced-review"],),
+            owner_include_source_ids=True,
+        )
+    with pytest.raises(ValueError, match="exactly one cost scenario"):
+        run_experiment(
+            "missing-part1",
+            "missing-part2",
+            "unused",
+            review_queue_path="review.json",
+        )
+    with pytest.raises(ValueError, match="exactly one cost scenario"):
+        run_experiment(
+            "missing-part1",
+            "missing-part2",
+            "unused",
+            cost_scenarios=tuple(EXAMPLE_SCENARIOS.values()),
+            review_queue_path="review.json",
+        )
 
 
 def test_invalid_diagnostic_schema_blocks_before_final_model_fit(
