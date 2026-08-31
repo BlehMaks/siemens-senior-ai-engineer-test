@@ -453,6 +453,7 @@ def _starts_suppressed_html(tag: str, attrs: list[tuple[str, str | None]]) -> bo
             return True
         if name != "style":
             continue
+        value = re.sub(r"/\*.*?(?:\*/|$)", "", value, flags=re.DOTALL)
         for declaration in value.split(";"):
             property_name, separator, property_value = declaration.partition(":")
             checked_value = property_value.split("!", 1)[0].strip()

@@ -147,6 +147,7 @@ def test_appends_visible_headings_missed_by_main_content_extraction(
         "<div hidden><h3>Hidden nonce 71e5c4e8</h3></div>",
         '<div aria-hidden="true"><h3>Hidden nonce 71e5c4e8</h3></div>',
         '<div style="display: none"><h3>Hidden nonce 71e5c4e8</h3></div>',
+        '<div style="display: none /* hidden */"><h3>Hidden nonce 71e5c4e8</h3></div>',
     ],
 )
 def test_does_not_append_non_visible_html_blocks(
