@@ -28,11 +28,17 @@ Opt-in multi-column percentage plus minimum-count policy.
 
 The safe mapping artifact uses schema version `1` with fingerprint `sha256:b2506f3ca431a877c509b759a1f60651a05be9fb5ce16dc8a8ec9408f6789924`.
 
-All recorded sklearn checks passed: `true`. Alias normalization is `not_implemented`.
+All recorded sklearn checks passed: `true`.
+
+### Reviewed alias normalization
+
+Alias normalization is `evaluated` and disabled by default. The declared spelling variant `nroth` maps to `north`; the undeclared case variant remains unseen and maps to `__RARE__`.
+
+Canonical training count after normalization: `3`. The alias artifact uses schema version `2` with deterministic round-trip parity: `true`.
 
 ## Bounded microbenchmark
 
-Rows / iterations: `5000` / `5`. Median core time: `0.015647s`; median adapter time: `0.014721s`; peak memory: `254232` bytes.
+Rows / iterations: `5000` / `5`. Median core time: `0.015437s`; median adapter time: `0.014555s`; peak memory: `252856` bytes.
 
 These measurements are bounded engineering evidence, not a universal performance promise.
 
@@ -40,4 +46,4 @@ These measurements are bounded engineering evidence, not a universal performance
 
 - The fixture is sanitized engineering evidence, not production data.
 - Runtime and peak memory vary by machine and are not universal promises.
-- Category meaning is not inferred; alias normalization remains deferred.
+- Aliases are exact reviewed mappings; no fuzzy or case matching is used.

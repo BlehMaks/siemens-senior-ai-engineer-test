@@ -3,7 +3,7 @@
 This package groups categories with insufficient training support into one
 collision-safe fallback label. The assignment helper remains dependency-free; the
 business extension is opt-in and adds a pandas/scikit-learn integration, a minimum
-count rule, diagnostics, and a safe mapping artifact.
+count rule, exact reviewed aliases, diagnostics, and a safe mapping artifact.
 
 ## Installation profiles
 
@@ -125,6 +125,28 @@ covered directly.
 plus the retained-category count. Transform never changes the training-fitted
 mapping.
 
+### Reviewed alias normalization
+
+An opt-in per-column map can consolidate known spelling variants before training
+frequencies are counted:
+
+```python
+transformer = CategoryConsolidationTransformer(
+    columns=("region",),
+    threshold_percent=25.0,
+    alias_maps={"region": {"nroth": "north"}},
+).fit(training)
+```
+
+Only exact declared aliases are changed. There is no fuzzy matching, case folding,
+or target-based inference: for example, `"North"` remains an unseen category unless
+it is declared separately. Canonical targets must already occur in that selected
+training column. Alias maps are flat; cycles, chains, reserved fallback/missing
+labels, unknown selected columns, and unknown canonical targets fail during `fit`.
+The validated map is copied at fit time, so later caller mutations cannot change
+inference behavior. Omitting `alias_maps`, passing `{}`, or using only empty
+per-column maps is the exact percentage/count behavior above.
+
 ### Safe mapping artifact
 
 Portable mappings use strict JSON, never pickle:
@@ -140,18 +162,21 @@ restored = load_mapping_artifact(artifact_json)
 ```
 
 The artifact records schema version, thresholds, full feature schema, retained and
-observed categories, fallback labels, and a SHA-256 fingerprint. The scalar codec
-supports only `None`, booleans, integers, floats (including explicit NaN/infinity
-tags), strings, and the package missing sentinel. Unsupported types, duplicate JSON
-keys, corrupt fingerprints, invalid mappings, and unknown schema versions fail
-closed. Loading parses data only and never executes code.
+observed categories, fallback labels, and a SHA-256 fingerprint. Default and empty
+alias configurations preserve the existing schema-v1 bytes. Enabled aliases use
+schema v2, which adds the sorted reviewed map; the loader supports both versions.
+The scalar codec supports only `None`, booleans, integers, floats (including
+explicit NaN/infinity tags), strings, and the package missing sentinel. Unsupported
+types, duplicate JSON keys, corrupt fingerprints, invalid mappings, and unknown
+schema versions fail closed. Loading parses data only and never executes code.
 
 ## Comparison report
 
 Generate both committed report formats from one sanitized evaluation object:
 
 ```bash
-uv run python -m category_consolidation.evaluation \
+PYTHONPATH=task-06-category-consolidation/src \
+  uv run --frozen python -m category_consolidation.evaluation \
   --output-dir task-06-category-consolidation/reports
 ```
 
@@ -162,9 +187,11 @@ Outputs:
 
 The report measures percent-only equivalence, per-column category/fallback/unseen
 statistics, `% + min_count` mapping differences, sklearn integration checks, safe
-artifact parity, and a bounded runtime/memory microbenchmark. Alias normalization
-is recorded as `not_implemented`; extension-only measures are not described as an
-improvement to the assignment baseline.
+artifact parity, reviewed-alias evidence, and a bounded runtime/memory
+microbenchmark. The alias fixture proves that a declared spelling variant contributes
+to its canonical training frequency while an undeclared case variant remains unseen.
+Extension-only measures are not described as an improvement to the assignment
+baseline.
 
 ## Verification
 
@@ -180,12 +207,12 @@ One-hot encoding gives each distinct category its own coefficient. Consolidating
 levels with weak training support reduces fragile sparse columns, but it does not
 prove that grouped categories are semantically equivalent. The transformer learns
 frequencies only from `fit` data and performs no target encoding, fuzzy matching,
-or alias inference.
+case inference, or alias inference.
 
 The committed fixture report is deterministic except for explicitly labeled local
 runtime/memory measurements. It is engineering evidence, not a universal
 performance promise. Real threshold and minimum-count choices remain owner policy.
-Reviewed explicit alias normalization is deferred and disabled.
+Reviewed explicit alias normalization remains disabled by default.
 
 Leakage-safe target encoding with smoothing and cross-fitting is an alternative for
 large categorical spaces where many levels still matter. Models with native

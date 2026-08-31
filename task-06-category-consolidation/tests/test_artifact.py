@@ -54,6 +54,54 @@ def test_artifact_round_trip_is_deterministic_and_reproduces_transform() -> None
     assert artifact_fingerprint(payload).startswith("sha256:")
 
 
+def test_empty_alias_policy_preserves_schema_v1_bytes() -> None:
+    transformer = _fitted_transformer()
+    empty_alias_transformer = CategoryConsolidationTransformer(
+        columns=("region", "channel"),
+        threshold_percent=30.0,
+        min_count=2,
+        alias_maps={"region": {}},
+    ).fit(
+        pd.DataFrame(
+            {
+                "region": ["north", "north", "south", None],
+                "channel": ["web", "web", "store", "partner"],
+                "value": [1, 2, 3, 4],
+            }
+        )
+    )
+
+    assert dump_mapping_artifact(empty_alias_transformer) == dump_mapping_artifact(
+        transformer
+    )
+    assert json.loads(dump_mapping_artifact(transformer))["schema_version"] == 1
+
+
+def test_alias_artifact_v2_is_deterministic_and_reproduces_transform() -> None:
+    frame = pd.DataFrame(
+        {"region": ["north", "nroth", "north", "south"], "value": range(4)}
+    )
+    first = CategoryConsolidationTransformer(
+        columns=("region",),
+        threshold_percent=60.0,
+        alias_maps={"region": {"nroth": "north", "noth": "north"}},
+    ).fit(frame)
+    second = CategoryConsolidationTransformer(
+        columns=("region",),
+        threshold_percent=60.0,
+        alias_maps={"region": {"noth": "north", "nroth": "north"}},
+    ).fit(frame)
+    payload = dump_mapping_artifact(first)
+    restored = load_mapping_artifact(payload)
+    inference = pd.DataFrame({"region": ["noth", "nroth", "North"], "value": range(3)})
+
+    assert json.loads(payload)["schema_version"] == 2
+    assert dump_mapping_artifact(second) == payload
+    assert dump_mapping_artifact(restored) == payload
+    assert restored.alias_maps_ == first.alias_maps_
+    assert restored.transform(inference).equals(first.transform(inference))
+
+
 def test_unfitted_transformer_cannot_be_serialized() -> None:
     transformer = CategoryConsolidationTransformer(
         columns=("region",), threshold_percent=10.0
@@ -131,6 +179,14 @@ def _mutated_payload(mutate: object) -> str:
 def test_unknown_schema_version_is_rejected() -> None:
     document = json.loads(dump_mapping_artifact(_fitted_transformer()))
     document["schema_version"] = 99
+
+    with pytest.raises(ArtifactValidationError, match="schema_version"):
+        load_mapping_artifact(json.dumps(document))
+
+
+def test_malformed_schema_version_is_rejected() -> None:
+    document = json.loads(dump_mapping_artifact(_fitted_transformer()))
+    document["schema_version"] = []
 
     with pytest.raises(ArtifactValidationError, match="schema_version"):
         load_mapping_artifact(json.dumps(document))
@@ -246,3 +302,81 @@ def test_resolved_label_collision_is_rejected() -> None:
 
     with pytest.raises(ArtifactValidationError, match="collides"):
         load_mapping_artifact(_mutated_payload(collide))
+
+
+def _alias_payload() -> dict[str, object]:
+    transformer = CategoryConsolidationTransformer(
+        columns=("region",),
+        threshold_percent=40.0,
+        alias_maps={"region": {"nroth": "north"}},
+    ).fit(_fitted_transformer_frame())
+    return cast(dict[str, object], json.loads(dump_mapping_artifact(transformer)))
+
+
+def _fitted_transformer_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "region": ["north", "north", "south", None],
+            "channel": ["web", "web", "store", "partner"],
+            "value": [1, 2, 3, 4],
+        }
+    )
+
+
+def _resign(document: dict[str, object]) -> str:
+    import hashlib
+
+    body = {
+        "schema_version": document["schema_version"],
+        "transformer": document["transformer"],
+    }
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    document["fingerprint"] = f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
+    return json.dumps(document)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda document: document["transformer"].update(alias_maps=[]), "object"),
+        (
+            lambda document: document["transformer"]["alias_maps"].update(region={}),
+            "entries must be a list",
+        ),
+        (
+            lambda document: document["transformer"]["alias_maps"].update(region=[[]]),
+            "entry must be an object",
+        ),
+        (
+            lambda document: document["transformer"]["alias_maps"]["region"][0].update(
+                extra=True
+            ),
+            "keys must be exactly",
+        ),
+        (
+            lambda document: document["transformer"]["alias_maps"]["region"].append(
+                document["transformer"]["alias_maps"]["region"][0]
+            ),
+            "must not contain duplicates",
+        ),
+        (
+            lambda document: document["transformer"].update(alias_maps={}),
+            "requires at least one",
+        ),
+        (
+            lambda document: document["transformer"]["alias_maps"]["region"][0].update(
+                canonical={"type": "str", "value": "unknown"}
+            ),
+            "invalid transformer state",
+        ),
+    ],
+)
+def test_invalid_alias_artifact_state_is_rejected(
+    mutate: object,
+    message: str,
+) -> None:
+    document = _alias_payload()
+    mutate(document)  # type: ignore[operator]
+
+    with pytest.raises(ArtifactValidationError, match=message):
+        load_mapping_artifact(_resign(document))

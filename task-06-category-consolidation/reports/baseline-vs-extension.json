@@ -26,7 +26,27 @@
   },
   "business_extension": {
     "alias_normalization": {
-      "mode_status": "not_implemented"
+      "artifact": {
+        "fingerprint": "sha256:3903e3a15f7f9dc28a79fb7a0795ef55be7c631976bb7f9719732d83a5df6cb8",
+        "round_trip": true,
+        "schema_version": 2
+      },
+      "canonical_retained": true,
+      "canonical_training_count": 3,
+      "declared_variant": "nroth",
+      "declared_variant_output": "north",
+      "enabled_by_default": false,
+      "matching": "exact_explicit_map_only",
+      "mode_status": "evaluated",
+      "policy": {
+        "region": {
+          "nroth": "north"
+        }
+      },
+      "target_values_used": false,
+      "undeclared_variant": "North",
+      "undeclared_variant_output": "__RARE__",
+      "undeclared_variant_unseen": true
     },
     "artifact": {
       "fingerprint": "sha256:b2506f3ca431a877c509b759a1f60651a05be9fb5ce16dc8a8ec9408f6789924",
@@ -62,11 +82,11 @@
       ]
     },
     "microbenchmark": {
-      "adapter_median_seconds": 0.014721167040988803,
-      "adapter_overhead_ratio": 0.9408224811032332,
-      "core_median_seconds": 0.015647125081159174,
+      "adapter_median_seconds": 0.014554915949702263,
+      "adapter_overhead_ratio": 0.942846397486024,
+      "core_median_seconds": 0.015437207999639213,
       "iterations": 5,
-      "peak_memory_bytes": 254232,
+      "peak_memory_bytes": 252856,
       "row_count": 5000
     },
     "mode_status": "evaluated",
@@ -96,7 +116,7 @@
   "limitations": [
     "The fixture is sanitized engineering evidence, not production data.",
     "Runtime and peak memory vary by machine and are not universal promises.",
-    "Category meaning is not inferred; alias normalization remains deferred."
+    "Aliases are exact reviewed mappings; no fuzzy or case matching is used."
   ],
   "metadata": {
     "configuration": {
@@ -115,7 +135,7 @@
       "scikit_learn": "1.9.0",
       "task_6": "0.1.0"
     },
-    "runtime_seconds": 0.16222737496718764,
+    "runtime_seconds": 0.15413924993481487,
     "seed": 0,
     "training_rows": 12
   },

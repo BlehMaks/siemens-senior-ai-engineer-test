@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Hashable, Sequence
+from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin  # type: ignore[import-untyped]
 from sklearn.utils.validation import check_is_fitted  # type: ignore[import-untyped]
 
+from .aliases import apply_aliases, validate_alias_maps
 from .core import MISSING_CATEGORY, RareCategoryConsolidator
 
 
@@ -44,12 +46,14 @@ class CategoryConsolidationTransformer(
         min_count: int | None = None,
         rare_label: Hashable = "__RARE__",
         missing_sentinel: Hashable = MISSING_CATEGORY,
+        alias_maps: Mapping[str, Mapping[Any, Any]] | None = None,
     ) -> None:
         self.columns = columns
         self.threshold_percent = threshold_percent
         self.min_count = min_count
         self.rare_label = rare_label
         self.missing_sentinel = missing_sentinel
+        self.alias_maps = alias_maps
 
     def fit(
         self,
@@ -61,9 +65,23 @@ class CategoryConsolidationTransformer(
         frame = _validate_frame(X)
         selected = _validate_selected_columns(self.columns, frame)
 
+        observed_by_column = {
+            column: _normalise_missing(frame[column].tolist(), self.missing_sentinel)
+            for column in selected
+        }
+        alias_maps = validate_alias_maps(
+            self.alias_maps,
+            selected_columns=selected,
+            observed_by_column=observed_by_column,
+            rare_label=self.rare_label,
+            missing_sentinel=self.missing_sentinel,
+        )
+
         consolidators: dict[str, RareCategoryConsolidator] = {}
         for column in selected:
-            values = _normalise_missing(frame[column].tolist(), self.missing_sentinel)
+            values = apply_aliases(
+                observed_by_column[column], alias_maps.get(column, {})
+            )
             consolidators[column] = RareCategoryConsolidator(
                 threshold_percent=self.threshold_percent,
                 min_count=self.min_count,
@@ -75,6 +93,7 @@ class CategoryConsolidationTransformer(
         self.feature_names_in_ = np.asarray(frame.columns, dtype=object)
         self.n_features_in_ = len(self.feature_names_in_)
         self.consolidators_ = consolidators
+        self.alias_maps_ = alias_maps
         return self
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
@@ -87,7 +106,9 @@ class CategoryConsolidationTransformer(
         X: pd.DataFrame,
     ) -> tuple[pd.DataFrame, dict[str, ColumnTransformDiagnostics]]:
         """Transform a DataFrame and return per-column drift summaries."""
-        check_is_fitted(self, attributes=["consolidators_", "feature_names_in_"])
+        check_is_fitted(
+            self, attributes=["alias_maps_", "consolidators_", "feature_names_in_"]
+        )
         frame = _validate_frame(X)
         actual_columns = tuple(frame.columns)
         expected_columns = tuple(self.feature_names_in_.tolist())
@@ -102,7 +123,10 @@ class CategoryConsolidationTransformer(
         output = frame.copy()
         diagnostics: dict[str, ColumnTransformDiagnostics] = {}
         for column, consolidator in self.consolidators_.items():
-            values = _normalise_missing(frame[column].tolist(), self.missing_sentinel)
+            normalised_values = _normalise_missing(
+                frame[column].tolist(), self.missing_sentinel
+            )
+            values = apply_aliases(normalised_values, self.alias_maps_.get(column, {}))
             result = consolidator.transform_with_diagnostics(values)
             output[column] = pd.Series(result.values, index=frame.index, dtype=object)
             row_count = len(result.values)

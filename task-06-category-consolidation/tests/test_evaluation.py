@@ -24,7 +24,19 @@ def test_report_recomputes_expected_aggregates() -> None:
 
     assert report["schema_version"] == 1
     assert baseline["single_column_output_equivalent"] is True
-    assert extension["alias_normalization"]["mode_status"] == "not_implemented"
+    aliases = extension["alias_normalization"]
+    assert aliases["mode_status"] == "evaluated"
+    assert aliases["enabled_by_default"] is False
+    assert aliases["matching"] == "exact_explicit_map_only"
+    assert aliases["target_values_used"] is False
+    assert aliases["canonical_training_count"] == 3
+    assert aliases["canonical_retained"] is True
+    assert aliases["declared_variant_output"] == "north"
+    assert aliases["undeclared_variant_output"] == "__RARE__"
+    assert aliases["undeclared_variant_unseen"] is True
+    assert aliases["artifact"]["schema_version"] == 2
+    assert aliases["artifact"]["fingerprint"].startswith("sha256:")
+    assert aliases["artifact"]["round_trip"] is True
     assert all(extension["sklearn_checks"].values())
     assert extension["artifact"]["fingerprint"].startswith("sha256:")
     for column in ("region", "channel"):
@@ -50,7 +62,8 @@ def test_json_and_markdown_are_written_from_same_report(tmp_path: Path) -> None:
     assert markdown == render_markdown(report)
     assert report["metadata"]["data_fingerprint"] in markdown
     assert report["business_extension"]["artifact"]["fingerprint"] in markdown
-    assert "not_implemented" in markdown
+    assert "exact reviewed mappings" in markdown
+    assert "schema version `2`" in markdown
 
 
 @pytest.mark.parametrize(

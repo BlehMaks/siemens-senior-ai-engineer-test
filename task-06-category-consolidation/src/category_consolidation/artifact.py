@@ -12,10 +12,13 @@ from typing import Any
 import numpy as np
 from sklearn.utils.validation import check_is_fitted  # type: ignore[import-untyped]
 
+from .aliases import validate_alias_maps
 from .core import MISSING_CATEGORY, RareCategoryConsolidator
 from .sklearn import CategoryConsolidationTransformer
 
 SCHEMA_VERSION = 1
+ALIAS_SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS = {SCHEMA_VERSION, ALIAS_SCHEMA_VERSION}
 
 
 class ArtifactValidationError(ValueError):
@@ -111,17 +114,23 @@ def dump_mapping_artifact(transformer: CategoryConsolidationTransformer) -> str:
             "resolved_rare_label": encode_scalar(consolidator.resolved_rare_label),
         }
 
+    config: dict[str, object] = {
+        "columns": list(transformer.selected_columns_),
+        "feature_names": transformer.feature_names_in_.tolist(),
+        "threshold_percent": transformer.threshold_percent,
+        "min_count": transformer.min_count,
+        "rare_label": encode_scalar(transformer.rare_label),
+        "missing_sentinel": encode_scalar(transformer.missing_sentinel),
+        "mappings": mappings,
+    }
+    schema_version = SCHEMA_VERSION
+    if transformer.alias_maps_:
+        schema_version = ALIAS_SCHEMA_VERSION
+        config["alias_maps"] = _encode_alias_maps(transformer.alias_maps_)
+
     body: dict[str, object] = {
-        "schema_version": SCHEMA_VERSION,
-        "transformer": {
-            "columns": list(transformer.selected_columns_),
-            "feature_names": transformer.feature_names_in_.tolist(),
-            "threshold_percent": transformer.threshold_percent,
-            "min_count": transformer.min_count,
-            "rare_label": encode_scalar(transformer.rare_label),
-            "missing_sentinel": encode_scalar(transformer.missing_sentinel),
-            "mappings": mappings,
-        },
+        "schema_version": schema_version,
+        "transformer": config,
     }
     document = {**body, "fingerprint": _fingerprint(body)}
     return json.dumps(document, indent=2, sort_keys=True, allow_nan=False) + "\n"
@@ -142,9 +151,13 @@ def load_mapping_artifact(payload: str) -> CategoryConsolidationTransformer:
     _require_keys(
         document, {"schema_version", "transformer", "fingerprint"}, "artifact"
     )
-    if document["schema_version"] != SCHEMA_VERSION:
+    schema_version = document["schema_version"]
+    if (
+        type(schema_version) is not int
+        or schema_version not in SUPPORTED_SCHEMA_VERSIONS
+    ):
         raise ArtifactValidationError(
-            f"unsupported artifact schema_version: {document['schema_version']!r}"
+            f"unsupported artifact schema_version: {schema_version!r}"
         )
     if not isinstance(document["fingerprint"], str):
         raise ArtifactValidationError("artifact fingerprint must be a string")
@@ -159,19 +172,18 @@ def load_mapping_artifact(payload: str) -> CategoryConsolidationTransformer:
     config = document["transformer"]
     if not isinstance(config, dict):
         raise ArtifactValidationError("transformer must be an object")
-    _require_keys(
-        config,
-        {
-            "columns",
-            "feature_names",
-            "threshold_percent",
-            "min_count",
-            "rare_label",
-            "missing_sentinel",
-            "mappings",
-        },
-        "transformer",
-    )
+    expected_config_keys = {
+        "columns",
+        "feature_names",
+        "threshold_percent",
+        "min_count",
+        "rare_label",
+        "missing_sentinel",
+        "mappings",
+    }
+    if schema_version == ALIAS_SCHEMA_VERSION:
+        expected_config_keys.add("alias_maps")
+    _require_keys(config, expected_config_keys, "transformer")
     columns = _validate_names(config["columns"], "columns", allow_empty=False)
     feature_names = _validate_names(
         config["feature_names"], "feature_names", allow_empty=False
@@ -185,12 +197,18 @@ def load_mapping_artifact(payload: str) -> CategoryConsolidationTransformer:
     rare_label = decode_scalar(config["rare_label"])
     missing_sentinel = decode_scalar(config["missing_sentinel"])
     try:
+        alias_maps = (
+            _decode_alias_maps(config["alias_maps"])
+            if schema_version == ALIAS_SCHEMA_VERSION
+            else {}
+        )
         transformer = CategoryConsolidationTransformer(
             columns=columns,
             threshold_percent=config["threshold_percent"],
             min_count=config["min_count"],
             rare_label=rare_label,
             missing_sentinel=missing_sentinel,
+            alias_maps=alias_maps or None,
         )
         consolidators = {
             column: _load_consolidator(
@@ -202,6 +220,20 @@ def load_mapping_artifact(payload: str) -> CategoryConsolidationTransformer:
             )
             for column in columns
         }
+        alias_maps = validate_alias_maps(
+            alias_maps,
+            selected_columns=columns,
+            observed_by_column={
+                column: tuple(consolidators[column].observed_categories)
+                for column in columns
+            },
+            rare_label=rare_label,
+            missing_sentinel=missing_sentinel,
+        )
+        if schema_version == ALIAS_SCHEMA_VERSION and not alias_maps:
+            raise ArtifactValidationError(
+                "schema version 2 requires at least one alias mapping"
+            )
     except ArtifactValidationError:
         raise
     except (TypeError, ValueError) as error:
@@ -213,6 +245,7 @@ def load_mapping_artifact(payload: str) -> CategoryConsolidationTransformer:
     transformer.feature_names_in_ = np.asarray(feature_names, dtype=object)
     transformer.n_features_in_ = len(feature_names)
     transformer.consolidators_ = consolidators
+    transformer.alias_maps_ = alias_maps
     return transformer
 
 
@@ -273,6 +306,45 @@ def _decode_scalar_list(value: object, label: str) -> frozenset[Hashable]:
     if len(result) != len(decoded):
         raise ArtifactValidationError(f"{label} must not contain duplicates")
     return result
+
+
+def _encode_alias_maps(
+    alias_maps: Mapping[str, Mapping[Hashable, Hashable]],
+) -> dict[str, list[dict[str, object]]]:
+    encoded: dict[str, list[dict[str, object]]] = {}
+    for column, policy in alias_maps.items():
+        entries: list[dict[str, object]] = [
+            {"alias": encode_scalar(alias), "canonical": encode_scalar(canonical)}
+            for alias, canonical in policy.items()
+        ]
+        encoded[column] = sorted(entries, key=_canonical_json)
+    return encoded
+
+
+def _decode_alias_maps(
+    value: object,
+) -> dict[str, dict[Hashable, Hashable]]:
+    if not isinstance(value, dict):
+        raise ArtifactValidationError("alias_maps must be an object by column")
+    decoded: dict[str, dict[Hashable, Hashable]] = {}
+    for column, raw_entries in value.items():
+        if not isinstance(raw_entries, list):
+            raise ArtifactValidationError("alias map entries must be a list")
+        aliases: dict[Hashable, Hashable] = {}
+        encoded_aliases: set[str] = set()
+        for raw_entry in raw_entries:
+            if not isinstance(raw_entry, dict):
+                raise ArtifactValidationError("alias map entry must be an object")
+            _require_keys(raw_entry, {"alias", "canonical"}, "alias map entry")
+            encoded_alias = _canonical_json(raw_entry["alias"])
+            if encoded_alias in encoded_aliases:
+                raise ArtifactValidationError("alias map must not contain duplicates")
+            encoded_aliases.add(encoded_alias)
+            alias = decode_scalar(raw_entry["alias"])
+            canonical = decode_scalar(raw_entry["canonical"])
+            aliases[alias] = canonical
+        decoded[column] = aliases
+    return decoded
 
 
 def _validate_names(

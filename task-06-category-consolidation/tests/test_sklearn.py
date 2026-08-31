@@ -11,6 +11,7 @@ from sklearn.base import clone  # type: ignore[import-untyped]
 from sklearn.pipeline import Pipeline  # type: ignore[import-untyped]
 from sklearn.utils.validation import NotFittedError  # type: ignore[import-untyped]
 
+from category_consolidation import MISSING_CATEGORY, UnhashableCategoryError
 from category_consolidation.sklearn import CategoryConsolidationTransformer
 
 
@@ -95,6 +96,110 @@ def test_clone_parameters_pipeline_and_pickle_are_supported() -> None:
     assert restored.transform(_training_frame()).equals(
         pipeline.transform(_training_frame())
     )
+
+
+def test_explicit_aliases_are_applied_before_fit_and_frozen_for_inference() -> None:
+    frame = pd.DataFrame(
+        {
+            "region": ["north", "north", "nroth", "south"],
+            "value": range(4),
+        }
+    )
+    policy = {"region": {"nroth": "north"}}
+    configured = CategoryConsolidationTransformer(
+        columns=("region",),
+        threshold_percent=60.0,
+        alias_maps=policy,
+    )
+    assert clone(configured).alias_maps == policy
+    transformer = configured.fit(frame, y=["target", "values", "are", "ignored"])
+    policy["region"]["nroth"] = "south"
+    inference = pd.DataFrame({"region": ["nroth", "North", "north"], "value": range(3)})
+
+    output, diagnostics = transformer.transform_with_diagnostics(inference)
+
+    assert transformer.transform(frame)["region"].tolist() == [
+        "north",
+        "north",
+        "north",
+        "__RARE__",
+    ]
+    assert transformer.consolidators_["region"].retained_categories == frozenset(
+        {"north"}
+    )
+    assert output["region"].tolist() == ["north", "__RARE__", "north"]
+    assert diagnostics["region"].unseen_count == 1
+    assert transformer.alias_maps_ == {"region": {"nroth": "north"}}
+
+
+def test_default_and_empty_alias_policies_are_exact_no_ops() -> None:
+    frame = _training_frame()
+    default = CategoryConsolidationTransformer(
+        columns=("region",), threshold_percent=40.0
+    ).fit(frame)
+    empty = CategoryConsolidationTransformer(
+        columns=("region",),
+        threshold_percent=40.0,
+        alias_maps={"region": {}},
+    ).fit(frame)
+
+    assert empty.alias_maps_ == {}
+    assert empty.transform(frame).equals(default.transform(frame))
+
+
+@pytest.mark.parametrize(
+    ("alias_maps", "exception", "message"),
+    [
+        ([], TypeError, "mapping by selected column"),
+        ({1: {}}, TypeError, "column names must be strings"),
+        ({"channel": {"store": "web"}}, ValueError, "not selected"),
+        ({"region": []}, TypeError, "must be a mapping"),
+        ({"region": {"nroth": ["north"]}}, TypeError, "must be hashable"),
+        ({"region": {"north": "north"}}, ValueError, "cycle"),
+        (
+            {"region": {"nroth": "nrth", "nrth": "north"}},
+            ValueError,
+            "collisions",
+        ),
+        ({"region": {"nroth": "unknown"}}, ValueError, "unknown canonical"),
+        ({"region": {"__RARE__": "north"}}, ValueError, "reserved"),
+        ({"region": {"nroth": MISSING_CATEGORY}}, ValueError, "reserved"),
+    ],
+)
+def test_invalid_alias_policies_are_rejected(
+    alias_maps: object,
+    exception: type[Exception],
+    message: str,
+) -> None:
+    with pytest.raises(exception, match=message):
+        CategoryConsolidationTransformer(
+            columns=("region",),
+            threshold_percent=40.0,
+            alias_maps=alias_maps,  # type: ignore[arg-type]
+        ).fit(_training_frame())
+
+
+def test_multi_node_alias_cycle_is_rejected() -> None:
+    with pytest.raises(ValueError, match="cycle"):
+        CategoryConsolidationTransformer(
+            columns=("region",),
+            threshold_percent=40.0,
+            alias_maps={"region": {"nroth": "nrth", "nrth": "nroth"}},
+        ).fit(_training_frame())
+
+
+def test_alias_validation_preserves_unhashable_value_error() -> None:
+    frame = _training_frame()
+    frame["region"] = pd.Series(
+        [["north"], "north", "south", None], index=frame.index, dtype=object
+    )
+
+    with pytest.raises(UnhashableCategoryError, match="index 0"):
+        CategoryConsolidationTransformer(
+            columns=("region",),
+            threshold_percent=40.0,
+            alias_maps={"region": {"nroth": "north"}},
+        ).fit(frame)
 
 
 def test_set_output_pandas_preserves_dataframe() -> None:

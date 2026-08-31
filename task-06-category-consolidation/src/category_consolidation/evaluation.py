@@ -84,6 +84,7 @@ def build_comparison_report(
         .equals(dual_output)
     )
     artifact_stable = restored.transform(inference).equals(dual_output)
+    alias_evidence = _evaluate_alias_normalization()
 
     percent_stats = _column_stats(
         input_frame=inference,
@@ -162,7 +163,7 @@ def build_comparison_report(
                 "fingerprint": artifact_fingerprint(artifact),
             },
             "microbenchmark": benchmark,
-            "alias_normalization": {"mode_status": "not_implemented"},
+            "alias_normalization": alias_evidence,
         },
         "delta": {
             "comparable_measures": {
@@ -182,7 +183,7 @@ def build_comparison_report(
         "limitations": [
             "The fixture is sanitized engineering evidence, not production data.",
             "Runtime and peak memory vary by machine and are not universal promises.",
-            "Category meaning is not inferred; alias normalization remains deferred.",
+            "Aliases are exact reviewed mappings; no fuzzy or case matching is used.",
         ],
     }
     return report
@@ -223,8 +224,24 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"`{extension['artifact']['fingerprint']}`.",
         "",
         "All recorded sklearn checks passed: "
-        f"`{str(all(extension['sklearn_checks'].values())).lower()}`. Alias "
-        f"normalization is `{extension['alias_normalization']['mode_status']}`.",
+        f"`{str(all(extension['sklearn_checks'].values())).lower()}`.",
+        "",
+        "### Reviewed alias normalization",
+        "",
+        "Alias normalization is "
+        f"`{extension['alias_normalization']['mode_status']}` and disabled by "
+        "default. The declared spelling variant "
+        f"`{extension['alias_normalization']['declared_variant']}` maps to "
+        f"`{extension['alias_normalization']['declared_variant_output']}`; the "
+        "undeclared case variant remains unseen and maps to "
+        f"`{extension['alias_normalization']['undeclared_variant_output']}`.",
+        "",
+        "Canonical training count after normalization: "
+        f"`{extension['alias_normalization']['canonical_training_count']}`. "
+        "The alias artifact uses schema version "
+        f"`{extension['alias_normalization']['artifact']['schema_version']}` with "
+        "deterministic round-trip parity: "
+        f"`{str(extension['alias_normalization']['artifact']['round_trip']).lower()}`.",
         "",
         "## Bounded microbenchmark",
         "",
@@ -330,6 +347,43 @@ def _inference_fixture() -> pd.DataFrame:
             "value": [20, 21, 22, 23, 24, 25],
         }
     )
+
+
+def _evaluate_alias_normalization() -> dict[str, object]:
+    training = pd.DataFrame(
+        {"region": ["north", "north", "nroth", "south"], "value": range(4)}
+    )
+    inference = pd.DataFrame({"region": ["nroth", "North", "north"], "value": range(3)})
+    transformer = CategoryConsolidationTransformer(
+        columns=("region",),
+        threshold_percent=60.0,
+        alias_maps={"region": {"nroth": "north"}},
+    ).fit(training)
+    training_output = transformer.transform(training)
+    output, diagnostics = transformer.transform_with_diagnostics(inference)
+    artifact = dump_mapping_artifact(transformer)
+    restored = load_mapping_artifact(artifact)
+    artifact_document = json.loads(artifact)
+    region = transformer.consolidators_["region"]
+    return {
+        "mode_status": "evaluated",
+        "enabled_by_default": False,
+        "matching": "exact_explicit_map_only",
+        "target_values_used": False,
+        "policy": {"region": {"nroth": "north"}},
+        "declared_variant": "nroth",
+        "declared_variant_output": output.loc[0, "region"],
+        "undeclared_variant": "North",
+        "undeclared_variant_output": output.loc[1, "region"],
+        "undeclared_variant_unseen": diagnostics["region"].unseen_count == 1,
+        "canonical_training_count": int((training_output["region"] == "north").sum()),
+        "canonical_retained": "north" in region.retained_categories,
+        "artifact": {
+            "schema_version": artifact_document["schema_version"],
+            "fingerprint": artifact_fingerprint(artifact),
+            "round_trip": restored.transform(inference).equals(output),
+        },
+    }
 
 
 def _column_stats(
