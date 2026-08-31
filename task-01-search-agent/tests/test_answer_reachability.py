@@ -1,9 +1,16 @@
-"""Regressions for defects that made ordinary requests unanswerable."""
+"""Regressions for the four defects that made ordinary requests unanswerable.
+
+Each test pins a behaviour that a live run needs and that previously failed:
+small talk was routed into web search, question words were sent to the search
+backends and to chunk ranking, whole multi-sentence passages were the only
+citable units, and a verbatim claim was judged off topic on spelling alone.
+"""
 
 from __future__ import annotations
 
 import pytest
 
+from search_agent.contracts import Citation, ScopedAnswer
 from search_agent.planning import (
     _FIXED_CONVERSATIONAL_FOCUS,
     AnswerScopePolicy,
@@ -116,3 +123,53 @@ def test_citable_spans_offer_each_sentence_of_a_quote() -> None:
 
 def test_citable_spans_drop_fragments_too_short_to_carry_a_claim() -> None:
     assert _citable_spans(("Yes. No. Maybe.",)) == []
+
+
+def _scoped(request: str, claim: str) -> None:
+    AnswerScopePolicy.validate(
+        request=request,
+        answer_focus=request,
+        answer=ScopedAnswer(
+            answer_text=claim,
+            citations=(
+                Citation(
+                    claim=claim,
+                    evidence_id="ev-test-record",
+                    source_url="https://example.com/page",
+                ),
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("request_text", "claim"),
+    [
+        (
+            "what wikipedia says about germany?",
+            "German Wikipedia is the German-language edition of Wikipedia.",
+        ),
+        (
+            "where can I find mcdonalds in munich?",
+            "McDonald's operates several Munich restaurants near Marienplatz.",
+        ),
+    ],
+)
+def test_claim_scope_accepts_the_subject_in_an_inflected_form(
+    request_text: str, claim: str
+) -> None:
+    _scoped(request_text, claim)
+
+
+def test_claim_scope_still_rejects_an_unrelated_passage() -> None:
+    with pytest.raises(PlanningPolicyError):
+        _scoped(
+            "where can I find mcdonalds in munich?",
+            "See what people are wearing and get a sense of the atmosphere.",
+        )
+
+
+def test_related_tokens_need_a_long_shared_prefix() -> None:
+    # "cars" and "card" share only three characters, so they must not pair up.
+    with pytest.raises(PlanningPolicyError):
+        _scoped("tell me about cars", "The card and the cart were both empty.")

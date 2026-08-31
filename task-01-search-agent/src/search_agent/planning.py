@@ -937,6 +937,7 @@ def _stays_scoped(
     candidate: str,
     min_shared_tokens: int = 1,
     restrict_expansions: bool = False,
+    match_related_tokens: bool = False,
 ) -> bool:
     normalized_request = " ".join(request.casefold().split())
     normalized_candidate = " ".join(candidate.casefold().split())
@@ -956,12 +957,47 @@ def _stays_scoped(
     )
     if required_shared == 0:
         return False
-    shared_count = len(request_tokens.intersection(candidate_tokens))
+    shared_count = (
+        _shares_topic_token(request_tokens, candidate_tokens)
+        if match_related_tokens
+        else len(request_tokens.intersection(candidate_tokens))
+    )
     added_tokens = candidate_tokens - request_tokens
     return shared_count >= required_shared and (
         not restrict_expansions
         or all(_YEAR_PATTERN.fullmatch(token) for token in added_tokens)
     )
+
+
+_MIN_RELATED_TOKEN_PREFIX = 4
+
+
+def _shares_topic_token(request_tokens: set[str], candidate_tokens: set[str]) -> int:
+    """Count topic tokens shared by a claim and its request, allowing inflection.
+
+    Claims are copied verbatim out of a page, so they carry the subject in
+    whatever form the page used: "German" for germany, "Wikipedians" for
+    wikipedia, "McDonald's" for mcdonalds. Exact token equality rejects those on
+    spelling alone. Relatedness needs a common prefix of at least
+    ``_MIN_RELATED_TOKEN_PREFIX`` characters, so short unrelated words never pair
+    up. This governs topical relatedness only; evidence grounding is unchanged.
+    """
+    shared = 0
+    for request_token in request_tokens:
+        if any(
+            request_token == candidate_token
+            or (
+                min(len(request_token), len(candidate_token))
+                >= _MIN_RELATED_TOKEN_PREFIX
+                and (
+                    request_token.startswith(candidate_token)
+                    or candidate_token.startswith(request_token)
+                )
+            )
+            for candidate_token in candidate_tokens
+        ):
+            shared += 1
+    return shared
 
 
 def _claim_segments(claim: str) -> list[str]:
@@ -971,7 +1007,12 @@ def _claim_segments(claim: str) -> list[str]:
 
 def _claim_stays_scoped(*, request: str, answer_focus: str, claim: str) -> bool:
     return any(
-        _stays_scoped(request=scope, candidate=claim, min_shared_tokens=2)
+        _stays_scoped(
+            request=scope,
+            candidate=claim,
+            min_shared_tokens=2,
+            match_related_tokens=True,
+        )
         for scope in (request, answer_focus)
     )
 
@@ -988,7 +1029,12 @@ def _claim_segment_stays_scoped(
 ) -> bool:
     scopes = (request, answer_focus)
     if not any(
-        _stays_scoped(request=scope, candidate=segment, min_shared_tokens=2)
+        _stays_scoped(
+            request=scope,
+            candidate=segment,
+            min_shared_tokens=2,
+            match_related_tokens=True,
+        )
         for scope in scopes
     ):
         return False
