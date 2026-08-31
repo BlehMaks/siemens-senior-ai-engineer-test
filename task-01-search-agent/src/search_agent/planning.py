@@ -56,20 +56,19 @@ _BARE_HOST_PATTERN = re.compile(
     rf"(?<![@\w]){_DOMAIN_NAME_PATTERN}(?=$|[\s,;:!?])",
     flags=re.IGNORECASE,
 )
-_PUBLIC_TLDS = frozenset(
+_WEB_RESOURCE_CUE_TOKENS = frozenset(
     {
-        "ai",
-        "biz",
-        "com",
-        "de",
-        "edu",
-        "eu",
-        "gov",
-        "info",
-        "io",
-        "net",
-        "org",
-        "uk",
+        "article",
+        "domain",
+        "headline",
+        "item",
+        "news",
+        "page",
+        "press",
+        "release",
+        "site",
+        "url",
+        "website",
     }
 )
 _CLAIM_SEGMENT_PATTERN = re.compile(r"(?:\n+|;+|(?<!\d)[.!?]+|[.!?]+(?!\d))")
@@ -350,9 +349,9 @@ def _has_web_target(request: str) -> bool:
     normalized = unicodedata.normalize("NFKC", request)
     if _WEB_TARGET_PATTERN.search(normalized) is not None:
         return True
-    return any(
-        match.group(0).rsplit(".", maxsplit=1)[-1].casefold() in _PUBLIC_TLDS
-        for match in _BARE_HOST_PATTERN.finditer(normalized)
+    return _BARE_HOST_PATTERN.search(normalized) is not None and (
+        _explicitly_requests_research(request)
+        or bool(_meaningful_tokens(request) & _WEB_RESOURCE_CUE_TOKENS)
     )
 
 
