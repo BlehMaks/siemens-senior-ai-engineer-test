@@ -179,9 +179,38 @@ def test_live_smoke_uses_a_dynamic_html_fact_not_model_memory() -> None:
 
     assert "first item headline contains $target_year" in source
     assert "https://press.siemens.com/global/en" in source
-    assert 're.compile(r"\\b20\\d{2}\\b")' in source
-    assert "target_year = max" in source
+    assert 'attributes.get("data-original")' in source
+    assert "target_year = max" not in source
     assert "press.siemens.com/global/en first item headline contains" in source
+
+
+def test_live_smoke_oracle_uses_the_first_dated_press_item(tmp_path: Path) -> None:
+    source = LIVE_SMOKE.read_text(encoding="utf-8")
+    oracle_program = source.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    page = tmp_path / "press.html"
+    page.write_text(
+        """
+        <h3>Popular topics</h3>
+        <span class="Date" data-original="2026-08-31">31 August 2026</span>
+        <h3>Fresh nonce headline 71e5c4e8</h3>
+        <span class="Date" data-original="2027-01-01">1 January 2027</span>
+        <h3>Later page item with a larger year</h3>
+        """,
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-", str(page)],
+        input=oracle_program,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert json.loads(result.stdout) == {
+        "title": "Fresh nonce headline 71e5c4e8",
+        "year": 2026,
+    }
 
 
 def test_live_smoke_checks_the_independently_observed_fact(tmp_path: Path) -> None:

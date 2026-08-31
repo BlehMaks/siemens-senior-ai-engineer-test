@@ -37,7 +37,6 @@ siemens_live_headline() {
 from html.parser import HTMLParser
 import json
 from pathlib import Path
-import re
 import sys
 
 
@@ -47,16 +46,33 @@ class SiemensHeadlineParser(HTMLParser):
         self.in_title = False
         self.ignored_depth = 0
         self.title_parts: list[str] = []
-        self.titles: list[str] = []
+        self.pending_year: int | None = None
+        self.target_title: str | None = None
+        self.target_year: int | None = None
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
     ) -> None:
-        del attrs
+        attributes = dict(attrs)
         if tag in {"script", "style"}:
             self.ignored_depth += 1
             return
-        if not self.ignored_depth and tag == "h3":
+        classes = set((attributes.get("class") or "").split())
+        raw_date = attributes.get("data-original") or ""
+        if (
+            not self.ignored_depth
+            and tag == "span"
+            and classes.intersection({"Date", "StartDate"})
+            and len(raw_date) >= 4
+            and raw_date[:4].isdigit()
+        ):
+            self.pending_year = int(raw_date[:4])
+        if (
+            not self.ignored_depth
+            and tag == "h3"
+            and self.target_title is None
+            and self.pending_year is not None
+        ):
             self.in_title = True
             self.title_parts = []
 
@@ -71,8 +87,10 @@ class SiemensHeadlineParser(HTMLParser):
         if not self.ignored_depth and tag == "h3" and self.in_title:
             title = " ".join(" ".join(self.title_parts).split())
             if 1 <= len(title) <= 250:
-                self.titles.append(title)
+                self.target_title = title
+                self.target_year = self.pending_year
             self.in_title = False
+            self.pending_year = None
 
 
 parser = SiemensHeadlineParser()
@@ -80,17 +98,14 @@ try:
     parser.feed(Path(sys.argv[1]).read_text(encoding="utf-8"))
 except (OSError, UnicodeError) as exc:
     raise SystemExit("could not read Siemens press page") from exc
-year_pattern = re.compile(r"\b20\d{2}\b")
-dated_titles = [
-    (max(int(year) for year in year_pattern.findall(title)), title)
-    for title in parser.titles
-    if year_pattern.search(title)
-]
-if not dated_titles:
-    raise SystemExit("Siemens press page did not contain a year-bearing headline")
-target_year = max(year for year, _title in dated_titles)
-target_title = next(title for year, title in dated_titles if year == target_year)
-print(json.dumps({"title": target_title, "year": target_year}, ensure_ascii=True))
+if parser.target_title is None or parser.target_year is None:
+    raise SystemExit("Siemens press page did not contain a dated press item")
+print(
+    json.dumps(
+        {"title": parser.target_title, "year": parser.target_year},
+        ensure_ascii=True,
+    )
+)
 PY
 }
 
