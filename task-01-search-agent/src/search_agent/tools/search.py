@@ -36,6 +36,97 @@ _SAFE_SEARCH_ARGUMENT = {
 }
 
 
+# Planning policy copies the request verbatim into the search text, so questions
+# reach the backends as "what wikipedia says about germany?". Interrogative and
+# filler words carry no retrieval signal and measurably cost recall. Dropping
+# words keeps the text a subset of the request, so the scope policy still holds.
+QUERY_NOISE_WORDS = frozenset(
+    {
+        "a",
+        "about",
+        "am",
+        "an",
+        "and",
+        "any",
+        "are",
+        "at",
+        "be",
+        "been",
+        "can",
+        "could",
+        "did",
+        "do",
+        "does",
+        "for",
+        "from",
+        "give",
+        "had",
+        "has",
+        "have",
+        "how",
+        "i",
+        "in",
+        "is",
+        "it",
+        "its",
+        "list",
+        "me",
+        "my",
+        "name",
+        "of",
+        "on",
+        "or",
+        "please",
+        "say",
+        "says",
+        "should",
+        "tell",
+        "that",
+        "the",
+        "their",
+        "them",
+        "there",
+        "these",
+        "they",
+        "this",
+        "to",
+        "was",
+        "we",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "why",
+        "will",
+        "with",
+        "would",
+        "you",
+        "your",
+    }
+)
+_QUERY_TOKEN_PATTERN = re.compile(r"[^\W_]+(?:[.'\-][^\W_]+)*", flags=re.UNICODE)
+
+
+def search_text_for(text: str) -> str:
+    """Reduce a request-shaped query to its retrieval-bearing words.
+
+    Returns the original text when stripping would leave nothing, so a query
+    made entirely of common words still reaches the backend unchanged.
+    """
+
+    tokens = _QUERY_TOKEN_PATTERN.findall(text)
+    if not tokens:
+        return text
+    kept = [token for token in tokens if token.lower() not in QUERY_NOISE_WORDS]
+    if not kept:
+        return " ".join(tokens)
+    return " ".join(kept)
+
+
 class SyncSearchBackend(Protocol):
     """The subset of ``DDGS`` used by the adapter."""
 
@@ -209,7 +300,7 @@ class SearchAdapter:
             try:
                 rows = await asyncio.to_thread(
                     self.backend.text,
-                    query.text,
+                    search_text_for(query.text),
                     region=self.region,
                     safesearch=_SAFE_SEARCH_ARGUMENT[self.site_policy.safe_search],
                     max_results=query.max_results,

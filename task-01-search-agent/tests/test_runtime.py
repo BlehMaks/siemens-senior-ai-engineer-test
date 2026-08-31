@@ -8,6 +8,7 @@ import pytest
 
 from search_agent import OllamaResearchExecutor, OllamaRuntimeSettings, RunStatus
 from search_agent.runtime import search_backends_from_environment
+from search_agent.tools.search import search_text_for
 
 
 class _Resolver:
@@ -388,7 +389,10 @@ async def test_real_runtime_searches_fetches_extracts_and_synthesizes() -> None:
     assert str(result.snapshot.answer.citations[0].source_url) == source_url
     assert search.calls == 2
     assert search.backend_calls == ["auto", "duckduckgo"]
-    assert search.queries == [request, request]
+    # Interrogative and filler words are stripped before the query reaches a
+    # backend; the remaining words are still a subset of the request.
+    expected_query = search_text_for(request)
+    assert search.queries == [expected_query, expected_query]
     assert result.usage.search_queries == 1
     assert fetched_hosts == ["93.184.216.34"]
     assert model_calls == 2
