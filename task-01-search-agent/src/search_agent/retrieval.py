@@ -19,6 +19,7 @@ from .documents import (
     normalize_document_text,
 )
 from .tools import ExtractedBlock, ExtractedDocument
+from .tools.search import QUERY_NOISE_WORDS
 
 _MAX_DOCUMENTS = 24
 _MAX_SELECTED_CHUNKS = 8
@@ -273,7 +274,7 @@ def chunk_document(
             RetrievalFailureReason.INVALID_INPUT,
             "max_chunk_chars is outside its bound",
         )
-    query_tokens = frozenset(_tokens(request))
+    query_tokens = _topical_query_tokens(request)
     exact_terms = frozenset(token for token in query_tokens if _is_exact_term(token))
     authority = _AUTHORITY[document.source_type]
     freshness = _freshness(
@@ -475,6 +476,19 @@ def _hard_wrap(value: str, *, max_chars: int) -> tuple[str, ...]:
     if remaining:
         result.append(remaining)
     return tuple(result)
+
+
+def _topical_query_tokens(request: str) -> frozenset[str]:
+    """Rank on the request's topic words only.
+
+    Interrogative and filler words occur in nearly every chunk, so counting them
+    lets an off-topic passage that merely shares "where" and "in" outrank the
+    passage that actually carries the subject. Falls back to every token when the
+    request is made entirely of common words.
+    """
+    tokens = frozenset(_tokens(request))
+    topical = frozenset(token for token in tokens if token not in QUERY_NOISE_WORDS)
+    return topical or tokens
 
 
 def _lexical_scores(
