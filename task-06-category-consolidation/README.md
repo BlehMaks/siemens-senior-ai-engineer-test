@@ -1,7 +1,9 @@
 # Task 6: Functions for categorical attributes
 
 This package groups categories with insufficient training support into one
-collision-safe fallback label. The assignment helper remains dependency-free; the
+collision-safe fallback label. The task's three required explanations, on
+logistic regression, on an alternative encoding, and on an algorithm needing no
+pre-treatment, are in [`reports/observations.md`](reports/observations.md). The assignment helper remains dependency-free; the
 business extension is opt-in and adds a pandas/scikit-learn integration, a minimum
 count rule, exact reviewed aliases, diagnostics, and a safe mapping artifact.
 

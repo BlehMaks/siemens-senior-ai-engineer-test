@@ -10,6 +10,9 @@ Use `Fuse.csv` to return five similar alternatives for every material. The assig
 
 The deliverables are the data analysis and the code for the description-based similarity model.
 
+The short account of the observations, the results, and the reasoning behind them
+is [`reports/observations.md`](reports/observations.md).
+
 ## Observed data constraints
 
 The semicolon-delimited dataset has 998 unique part IDs and 32 columns. `PART_DESCRIPTION` is missing for 335 rows; among non-empty descriptions, 81 are duplicates. Missingness is severe in several technical fields, including pre-arcing time, maximum power dissipation, product diameter, and additional features. Most nominally numeric attributes contain units, ranges, qualifiers, or free text and therefore load as strings.

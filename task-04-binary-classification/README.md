@@ -4,6 +4,9 @@
 
 Join `Training_part1.csv` and `Training_part2.csv` on `id`, then develop a binary classifier for the `Class` target. Deliver the preprocessing description and model-development code.
 
+The short account of the observations, the results, and the reasoning behind them
+is [`reports/observations.md`](reports/observations.md).
+
 ## Observed data constraints
 
 The supplied files use semicolon delimiters. Each has 4,070 rows but only 3,700 unique `id` values. Both files contain 370 exact duplicate rows, and neither has IDs missing from the other. A naive many-to-many merge would duplicate observations, so the pipeline must remove exact duplicates and validate a one-to-one join before modeling.
