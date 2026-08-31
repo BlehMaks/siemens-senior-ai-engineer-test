@@ -114,6 +114,9 @@ IAM change list is in the [cloud manifest](docs/cloud-resource-manifest.md).
 
 ## Review map
 
+- [Canonical review presentation](docs/presentation/siemens-senior-ai-engineer-overview.pptx)
+  is the latest submission deck; the older files under `presentation/` are retained
+  only as design-history snapshots.
 - [Architecture](docs/architecture.md) explains how Tasks 1 to 3 work together.
 - [Requirements traceability](docs/requirements-traceability.md) separates the
   original Tasks 4–6 assignment evidence from optional business extensions.

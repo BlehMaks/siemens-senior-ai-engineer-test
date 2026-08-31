@@ -181,7 +181,7 @@ async function build() {
     addText(slide, "Assignment baselines stay usable; business extensions remain explicit, tested, and reviewable.", {
       left: 56, top: 500, width: 780, height: 95,
     }, { fontSize: 28, color: COLORS.muted });
-    setSources(slide, ["README.md", "docs/extension-scope-freeze.md"]);
+    setSources(slide, ["README.md", "docs/adr/0007-business-extension-boundaries.md"]);
   }
 
   // 2 — Cumulative narrative overview.
