@@ -250,14 +250,34 @@ def build_messages(history):
     return [{"role": "system", "content": system_prompt()}, *conv]
 
 
+# Sent back once when the model searches and then answers without reading anything.
+# Asked what changed in Python 3.13 it did exactly that, and asserted from memory
+# that the version was unreleased, which was wrong. The prompt already tells it to
+# open a source; this makes the loop insist rather than hope.
+_READ_BEFORE_ANSWERING = (
+    "You have not opened any source yet. Your search results are titles and "
+    "snippets, not evidence, and your own memory may be out of date. Open the "
+    "most relevant result with TOOL open_url and answer from what you read. If "
+    "the pages do not contain the answer, say plainly that you could not verify it."
+)
+
+
 def run_loop(messages, chat_fn, on_progress=None, max_steps=MAX_STEPS):
     """Run the tool loop. `chat_fn(messages) -> assistant text`. Mutates messages.
     `on_progress(name, args)` is called before each tool runs (optional)."""
     last_call, repeats = None, 0
+    searched = opened = insisted = False
     for _ in range(max_steps):
         reply = chat_fn(messages).strip()
         name, args = parse_tool(reply)
         if name is None:
+            # A question that needed a search needs a source read too. Push back
+            # once; a second refusal is let through so the run still terminates.
+            if searched and not opened and not insisted:
+                insisted = True
+                messages.append({"role": "assistant", "content": reply})
+                messages.append({"role": "user", "content": _READ_BEFORE_ANSWERING})
+                continue
             return strip_tool_tail(reply)  # final answer
         # A weak model can repeat one identical (often broken) call until the step
         # budget is gone — minutes of nothing. Cut that off early.
@@ -286,6 +306,13 @@ def run_loop(messages, chat_fn, on_progress=None, max_steps=MAX_STEPS):
                 result = f"wrong arguments for {name}: {e}"
             except Exception as e:
                 result = f"tool error: {e}"
+        # Only a result the model can actually read counts as having read one.
+        if name == "web_search" and not result.startswith(
+            ("search error:", "no results")
+        ):
+            searched = True
+        elif name == "open_url" and not result.startswith("fetch error:"):
+            opened = True
         messages.append({"role": "assistant", "content": reply})
         messages.append({"role": "user", "content": f"TOOL RESULT ({name}):\n{result}"})
     return "(stopped: reached MAX_STEPS without a final answer)"

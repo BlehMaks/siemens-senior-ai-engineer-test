@@ -51,9 +51,12 @@ OpenAI-compatible endpoint regardless of how well the engine implements tool
 calls. The parser takes the first `TOOL` line and lets a JSON decoder find where
 the object ends, because models routinely emit several despite being told not to.
 
-**Search finds pages; `open_url` reads them.** The system prompt asks the model to
-open a source before stating any specific fact, rather than answering from search
-snippets. This is instruction, not enforcement — see the limitations below.
+**Search finds pages; `open_url` reads them.** The prompt asks the model to open a
+source rather than answer from snippets, and the loop enforces it: if the model
+searched but tries to answer without opening anything, the answer is refused once
+and it is told to read a result first. Asked what changed in Python 3.13, the
+model previously asserted from memory that the version was unreleased, which was
+wrong; it now opens the changelog and answers from it.
 
 **A clock is a tool, not mental arithmetic.** The model got timezone offsets
 backwards and live-clock pages are JavaScript-rendered, so `time_in` answers
@@ -79,10 +82,10 @@ These are real and observed, not hypothetical.
   not as a grounding guarantee. The bounded agent in this same task takes the
   opposite trade-off: it machine-verifies every claim against retrieved evidence
   and abstains when none supports an answer.
-- **Nothing forces the model to open a source.** Asked what changed in Python 3.13,
-  it ran two searches, opened nothing, and answered from its own belief that the
-  version was unreleased, which is wrong. The loop bounds and prompts the model;
-  it does not compel it to read before it speaks.
+- **The read-before-answering rule pushes back once, then yields.** A second
+  refusal is let through so the run always terminates, and a question that needed
+  no search is never pushed back at all. It removes the common failure, not every
+  one of them.
 - **Pages are fetched without JavaScript.** Live tickers and clocks come back as
   placeholders; the prompt tells the model to say so rather than fill the gap.
 - **No test suite.** This is a compact baseline, not a hardened service.
