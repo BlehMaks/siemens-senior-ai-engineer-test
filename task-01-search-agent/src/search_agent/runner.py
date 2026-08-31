@@ -66,6 +66,7 @@ from .providers import (
 from .retrieval import (
     ResearchDocument,
     RetrievalError,
+    _is_positional_request,
     build_research_document,
     select_context,
 )
@@ -1213,12 +1214,17 @@ class ResearchRunner:
         trace: list[ActionTraceRecord],
     ) -> ScopedAnswer:
         ledger.start_iteration()
+        positionally_scoped = _is_positional_request(decision.answer_focus)
         evidence_payload = [
             {
                 "evidence_id": record.evidence_id,
                 "source_url": record.source_url,
                 "source_title": record.source_title,
-                "excerpt": record.public.summary,
+                "excerpt": (
+                    " ".join(record.public.quotes)
+                    if positionally_scoped
+                    else record.public.summary
+                ),
                 "quotes": list(record.public.quotes),
                 "locations": [
                     {

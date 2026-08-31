@@ -179,10 +179,7 @@ def select_context(
             "retrieval input failed validation",
         ) from None
 
-    positional_requested = (
-        _FIRST_LISTED_PATTERN.search(request) is not None
-        and _NEGATED_FIRST_LISTED_PATTERN.search(request) is None
-    )
+    positional_requested = _is_positional_request(request)
     requested_resources = {
         match.group(0).rstrip(".,;:!?)]}").rstrip("/")
         for match in _EXPLICIT_URL_PATTERN.finditer(request)
@@ -193,33 +190,34 @@ def select_context(
         if not requested_resources
         or document.canonical_url.rstrip("/") in requested_resources
     }
+    if positional_requested and requested_resources and not applicable_documents:
+        raise RetrievalError(
+            RetrievalFailureReason.SOURCE_MISMATCH,
+            "the explicitly requested source was not retrieved",
+        )
     by_content: dict[str, ResearchChunk] = {}
-    positional: ResearchChunk | None = None
+    positional: tuple[ResearchChunk, ...] = ()
     for document in materialized:
         document_chunks = chunk_document(
             request, document, max_chunk_chars=max_chunk_chars
         )
         if (
-            positional is None
+            not positional
             and positional_requested
             and document.document_id in applicable_documents
         ):
-            positional = min(
-                (
-                    chunk
-                    for chunk in document_chunks
-                    if chunk.section is not None
-                    and chunk.text.endswith(f"\n{chunk.section}")
-                ),
-                key=lambda chunk: chunk.ordinal,
-                default=None,
-            )
+            positional = _first_structured_item(document_chunks)
         for chunk in document_chunks:
             previous = by_content.get(chunk.content_hash)
             if previous is None or _rank_key(chunk) < _rank_key(previous):
                 by_content[chunk.content_hash] = chunk
     ranked = sorted(by_content.values(), key=_rank_key)
-    selected = (positional,) if positional is not None else tuple(ranked[:top_k])
+    if positional_requested and not positional:
+        raise RetrievalError(
+            RetrievalFailureReason.NO_CONTEXT,
+            "the first listed item could not be resolved structurally",
+        )
+    selected = positional or tuple(ranked[:top_k])
     if not selected:
         raise RetrievalError(
             RetrievalFailureReason.NO_CONTEXT,
@@ -392,6 +390,44 @@ def _rank_key(chunk: ResearchChunk) -> tuple[float, float, float, float, int, st
         chunk.ordinal,
         chunk.chunk_id,
     )
+
+
+def _is_positional_request(request_text: str) -> bool:
+    request = _request(request_text)
+    return (
+        _FIRST_LISTED_PATTERN.search(request) is not None
+        and _NEGATED_FIRST_LISTED_PATTERN.search(request) is None
+    )
+
+
+def _first_structured_item(
+    chunks: Sequence[ResearchChunk],
+) -> tuple[ResearchChunk, ...]:
+    groups: list[tuple[ResearchChunk, ...]] = []
+    current: list[ResearchChunk] = []
+    for chunk in sorted(chunks, key=lambda item: item.ordinal):
+        if chunk.section is None:
+            if current:
+                groups.append(tuple(current))
+                current = []
+            continue
+        if current and chunk.section != current[-1].section:
+            groups.append(tuple(current))
+            current = []
+        current.append(chunk)
+    if current:
+        groups.append(tuple(current))
+    if not groups:
+        return ()
+
+    for group in groups:
+        section = " ".join((group[0].section or "").split())
+        for end in range(1, len(group) + 1):
+            combined = " ".join(chunk.text for chunk in group[:end])
+            combined = " ".join(combined.split())
+            if combined != section and combined.endswith(section):
+                return group[:end]
+    return (groups[0][0],)
 
 
 def _split_block(block: ExtractedBlock, *, max_chars: int) -> tuple[str, ...]:

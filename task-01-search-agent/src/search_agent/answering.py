@@ -117,11 +117,17 @@ class AnswerValidator:
                 )
             # Exact normalized containment is deliberately conservative. It is
             # explainable and cannot turn model similarity into fabricated support.
-            support_texts = (
-                record.source_text,
-                record.public.summary,
-                *record.public.quotes,
-            )
+            if record.selected_chunks:
+                support_texts = (
+                    *record.public.quotes,
+                    " ".join(record.public.quotes),
+                )
+            else:
+                support_texts = (
+                    record.source_text,
+                    record.public.summary,
+                    *record.public.quotes,
+                )
             if not any(
                 _contains_exact_text(support, claim) for support in support_texts
             ):

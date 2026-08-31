@@ -13,6 +13,8 @@ from search_agent import (
     FetchedDocument,
     LocalExtractor,
     ResearchDocument,
+    RetrievalError,
+    RetrievalFailureReason,
     SearchHit,
     SourceType,
     build_research_document,
@@ -152,6 +154,7 @@ def test_dated_listing_keeps_date_with_following_heading_for_ranking() -> None:
                 '<span class="Date" data-original="2026-08-07">'
                 "07 August 2026</span>"
                 f"<h3>{first_headline}</h3>"
+                "<p>Details about the first listed release.</p>"
                 "</li><li>"
                 '<span class="StartDate" data-original="2026-08-06">'
                 "06 August 2026</span>"
@@ -238,6 +241,80 @@ def test_first_listed_phrase_targets_the_explicit_url() -> None:
     )
 
     assert context.chunks[0].canonical_url == target_url
+
+
+def test_first_listed_undated_heading_keeps_document_order() -> None:
+    first = "Alpha manufacturing launch"
+    decoy = "Exact first listed headline result release announcement"
+    document = _listing_document(
+        "https://example.com/listings",
+        title="Listings",
+        blocks=(
+            ExtractedBlock(text=first, section=first),
+            ExtractedBlock(text=decoy, section=decoy),
+        ),
+    )
+
+    context = select_context(
+        "Return the exact first listed headline",
+        (document,),
+        top_k=2,
+    )
+
+    assert context.chunks == (context.chunks[0],)
+    assert context.quotes == (first,)
+
+
+def test_first_listed_rejects_missing_explicit_source() -> None:
+    unrelated = _listing_document(
+        "https://example.com/unrelated",
+        title="Unrelated",
+        blocks=(
+            ExtractedBlock(
+                text="31 August 2026\nUnrelated listing headline",
+                section="Unrelated listing headline",
+            ),
+        ),
+    )
+
+    with pytest.raises(RetrievalError) as error:
+        select_context(
+            "Return the exact first listed headline at "
+            "https://press.siemens.com/global/en",
+            (unrelated,),
+            top_k=1,
+        )
+
+    assert error.value.reason is RetrievalFailureReason.SOURCE_MISMATCH
+
+
+def test_first_listed_keeps_one_item_across_small_chunks() -> None:
+    first = "Alpha " + "manufacturing " * 12 + "launch"
+    decoy = "Exact first listed headline result release announcement"
+    document = _listing_document(
+        "https://example.com/listings",
+        title="Listings",
+        blocks=(
+            ExtractedBlock(
+                text=f"31 August 2026\n{first}",
+                section=first,
+            ),
+            ExtractedBlock(
+                text=f"30 August 2026\n{decoy}",
+                section=decoy,
+            ),
+        ),
+    )
+
+    context = select_context(
+        "Return the exact first listed headline",
+        (document,),
+        top_k=2,
+        max_chunk_chars=80,
+    )
+
+    assert all(chunk.section == first for chunk in context.chunks)
+    assert decoy not in " ".join(context.quotes)
 
 
 def test_document_and_chunk_ids_ignore_incidental_whitespace() -> None:
