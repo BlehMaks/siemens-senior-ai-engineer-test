@@ -219,16 +219,7 @@ def select_context(
             if previous is None or _rank_key(chunk) < _rank_key(previous):
                 by_content[chunk.content_hash] = chunk
     ranked = sorted(by_content.values(), key=_rank_key)
-    if positional is not None:
-        ranked = [
-            positional,
-            *(
-                chunk
-                for chunk in ranked
-                if chunk.content_hash != positional.content_hash
-            ),
-        ]
-    selected = tuple(ranked[:top_k])
+    selected = (positional,) if positional is not None else tuple(ranked[:top_k])
     if not selected:
         raise RetrievalError(
             RetrievalFailureReason.NO_CONTEXT,

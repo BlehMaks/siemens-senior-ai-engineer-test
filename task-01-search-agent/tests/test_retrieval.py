@@ -176,6 +176,10 @@ def test_dated_listing_keeps_date_with_following_heading_for_ranking() -> None:
 
     assert first_headline in context.chunks[0].text
     assert context.chunks[0].text.startswith("07 August 2026")
+    assert len(context.chunks) == 1
+    assert len(context.quotes) == 1
+    assert first_headline in context.quotes[0]
+    assert "CES 2026" not in context.quotes[0]
 
 
 @pytest.mark.parametrize("instruction", ["Do not select", "Skip"])
