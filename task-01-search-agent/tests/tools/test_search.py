@@ -304,7 +304,9 @@ async def test_search_scans_only_bounded_rows_and_stops_after_enough_hits() -> N
 async def test_hostile_sequence_iteration_is_sanitized() -> None:
     with pytest.raises(SearchFailure, match="invalid result") as caught:
         await SearchAdapter(
-            FakeSearchBackend(rows=ExplodingSequence()), SitePolicy()
+            FakeSearchBackend(rows=ExplodingSequence()),
+            SitePolicy(),
+            retry_delay_seconds=0.0,
         ).search(SearchQuery(text="siemens annual report", max_results=2))
 
     assert caught.value.__cause__ is None
@@ -349,7 +351,7 @@ async def test_backend_exception_becomes_sanitized_search_failure() -> None:
     backend = FakeSearchBackend(error=RuntimeError("credential=top-secret"))
 
     with pytest.raises(SearchFailure, match=r"^search backend failed$") as caught:
-        await SearchAdapter(backend, SitePolicy()).search(
+        await SearchAdapter(backend, SitePolicy(), retry_delay_seconds=0.0).search(
             SearchQuery(text="siemens annual report", max_results=2)
         )
 
@@ -362,7 +364,7 @@ async def test_mapping_exception_becomes_sanitized_search_failure() -> None:
     backend = FakeSearchBackend(rows=(ExplodingMapping(),))
 
     with pytest.raises(SearchFailure, match="invalid result") as caught:
-        await SearchAdapter(backend, SitePolicy()).search(
+        await SearchAdapter(backend, SitePolicy(), retry_delay_seconds=0.0).search(
             SearchQuery(text="siemens annual report", max_results=2)
         )
 
@@ -376,7 +378,7 @@ async def test_malformed_backend_envelope_becomes_search_failure() -> None:
     backend.rows = "not a result sequence"
 
     with pytest.raises(SearchFailure, match="invalid result"):
-        await SearchAdapter(backend, SitePolicy()).search(
+        await SearchAdapter(backend, SitePolicy(), retry_delay_seconds=0.0).search(
             SearchQuery(text="siemens annual report", max_results=2)
         )
 
@@ -510,9 +512,13 @@ async def test_search_failure_carries_only_safe_attempt_metadata() -> None:
             backend,
             SitePolicy(),
             backend_names=("auto", "duckduckgo"),
+            retry_delay_seconds=0.0,
         ).search(SearchQuery(text="siemens annual report", max_results=1))
 
+    # Both bounded sweeps are recorded, and neither leaks backend detail.
     assert [attempt.outcome for attempt in caught.value.attempts] == [
+        SearchAttemptOutcome.EXCEPTION,
+        SearchAttemptOutcome.INVALID,
         SearchAttemptOutcome.EXCEPTION,
         SearchAttemptOutcome.INVALID,
     ]
@@ -563,3 +569,36 @@ def test_search_adapter_rejects_unbounded_or_unsupported_backend_order() -> None
         SearchAdapter(backend, SitePolicy(), backend_names=("auto", "auto"))
     with pytest.raises(ValueError):
         SearchAdapter(backend, SitePolicy(), backend_names=("bing",))
+
+
+@pytest.mark.asyncio
+async def test_throttled_backend_succeeds_on_the_bounded_retry_sweep() -> None:
+    # A public endpoint that refuses a burst raises rather than returning nothing,
+    # so one more sweep is what turns the refusal into evidence for the run.
+    class ThrottledOnceBackend:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def text(self, query: str, **kwargs: object) -> Sequence[object]:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("429 too many requests")
+            return (
+                {
+                    "title": "Siemens annual report",
+                    "href": "https://example.com/report",
+                    "body": "Annual report",
+                },
+            )
+
+    backend = ThrottledOnceBackend()
+    result = await SearchAdapter(
+        backend, SitePolicy(), retry_delay_seconds=0.0
+    ).search_with_metadata(SearchQuery(text="siemens annual report", max_results=1))
+
+    assert result.hits
+    assert backend.calls == 2
+    assert [attempt.outcome for attempt in result.attempts] == [
+        SearchAttemptOutcome.EXCEPTION,
+        SearchAttemptOutcome.SUCCESS,
+    ]

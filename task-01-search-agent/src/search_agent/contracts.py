@@ -108,6 +108,8 @@ class TraceOutcome(StrEnum):
     FAILED = "failed"
     SKIPPED = "skipped"
     TRUNCATED = "truncated"
+    # A bounded stage that was rejected and re-attempted rather than failing.
+    RETRIED = "retried"
 
 
 class EventType(StrEnum):

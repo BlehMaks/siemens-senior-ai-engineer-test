@@ -77,7 +77,7 @@ from .storage import (
     TaskDeliveryAuthError,
     migrate,
 )
-from .ui import RESEARCH_UI_HTML, UI_RESPONSE_HEADERS
+from .ui import RESEARCH_UI_HTML, UI_RESPONSE_HEADERS, render_research_ui
 from .workers import LocalWorker, QueueReceiver, RunExecutor, worker_lifespan
 
 _OPAQUE_ID = TypeAdapter(OpaqueId)
@@ -166,6 +166,7 @@ def create_app(
     queue_backend: str = "sqlite",
     queue_delivery_path: str = "/internal/tasks/run-delivery",
     task_delivery_enabled: bool = False,
+    ui_prefilled_api_key: str | None = None,
 ) -> FastAPI:
     provider = EnvPepperProvider() if pepper_provider is None else pepper_provider
     now = _utc_now if clock is None else clock
@@ -326,9 +327,16 @@ def create_app(
     )
     app.state.clock = now
 
+    # A review key belongs only in a local page, never in a deployed one.
+    ui_html = (
+        RESEARCH_UI_HTML
+        if production_environment
+        else render_research_ui(ui_prefilled_api_key)
+    )
+
     @app.get("/", include_in_schema=False, response_class=HTMLResponse)
     async def research_ui() -> HTMLResponse:
-        return HTMLResponse(RESEARCH_UI_HTML, headers=UI_RESPONSE_HEADERS)
+        return HTMLResponse(ui_html, headers=UI_RESPONSE_HEADERS)
 
     app.include_router(build_health_router(clock=now))
     app.include_router(build_session_router())

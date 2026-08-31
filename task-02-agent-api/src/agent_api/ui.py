@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from html import escape
+
 RESEARCH_UI_HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -141,7 +143,7 @@ RESEARCH_UI_HTML = """<!doctype html>
     <div class="connection"><span class="dot" id="health-dot"></span><span id="health">Checking service</span></div>
     <div class="spacer"></div>
     <div class="credentials">
-      <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste local API key">
+      <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste local API key"__API_KEY_VALUE__>
       <button class="secondary" id="new-session" type="button">New session</button>
     </div>
   </header>
@@ -154,7 +156,7 @@ RESEARCH_UI_HTML = """<!doctype html>
     <section class="composer">
       <textarea id="query" maxlength="400" placeholder="Ask a research question…" aria-label="Research question"></textarea>
       <div class="composer-row">
-        <small id="status" class="status">The API key stays in this tab and is never stored by the page.</small>
+        <small id="status" class="status">__API_KEY_NOTICE__</small>
         <button id="send" type="button">Run research</button>
       </div>
     </section>
@@ -306,6 +308,30 @@ RESEARCH_UI_HTML = """<!doctype html>
 </body>
 </html>
 """
+
+_UI_KEY_TEMPLATE = RESEARCH_UI_HTML
+_TAB_ONLY_NOTICE = "The API key stays in this tab and is never stored by the page."
+_PREFILLED_NOTICE = (
+    "This local review key was filled in by the process that started the API."
+)
+RESEARCH_UI_HTML = _UI_KEY_TEMPLATE.replace("__API_KEY_VALUE__", "").replace(
+    "__API_KEY_NOTICE__", _TAB_ONLY_NOTICE
+)
+
+
+def render_research_ui(prefilled_api_key: str | None = None) -> str:
+    """Render the reviewer UI, optionally with a local review key filled in.
+
+    Only a caller that already holds the key asks for this, and only for a
+    loopback review session, so the page shows what the terminal already printed
+    instead of asking a reviewer to paste it back.
+    """
+    if not prefilled_api_key:
+        return RESEARCH_UI_HTML
+    return _UI_KEY_TEMPLATE.replace(
+        "__API_KEY_VALUE__", f' value="{escape(prefilled_api_key, quote=True)}"'
+    ).replace("__API_KEY_NOTICE__", _PREFILLED_NOTICE)
+
 
 UI_RESPONSE_HEADERS = {
     "Cache-Control": "no-store",

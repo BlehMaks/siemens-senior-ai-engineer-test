@@ -21,6 +21,11 @@ _PERCENT_ESCAPE = re.compile(r"%[0-9A-Fa-f]{2}")
 _ROWS_PER_REQUESTED_HIT = 4
 _MAX_ATTEMPT_DURATION_MS = 600_000
 _MAX_SEARCH_BACKENDS = 2
+# Public search endpoints throttle bursts, and a throttled attempt raises rather
+# than returning nothing. One bounded second pass turns that transient refusal
+# into a result instead of ending the run without evidence.
+_SEARCH_SWEEPS = 2
+_SEARCH_RETRY_DELAY_SECONDS = 1.5
 _MAX_SEARCH_BACKENDS_TEXT = 64
 _SUPPORTED_SEARCH_BACKENDS = frozenset({"auto", "brave", "duckduckgo", "yahoo"})
 _SAFE_SEARCH_ARGUMENT = {
@@ -132,6 +137,8 @@ class SearchAdapter:
     region: str = "us-en"
     backend_names: tuple[str, ...] = ("auto",)
     backend_name: str | None = None
+    # Exposed so a test can exercise the retry sweep without waiting for it.
+    retry_delay_seconds: float = _SEARCH_RETRY_DELAY_SECONDS
 
     def __post_init__(self) -> None:
         names = self.backend_names
@@ -139,6 +146,10 @@ class SearchAdapter:
             if names != ("auto",) and names != (self.backend_name,):
                 raise ValueError("backend_name conflicts with backend_names")
             names = (self.backend_name,)
+        if not isinstance(self.retry_delay_seconds, (int, float)) or not (
+            0 <= self.retry_delay_seconds <= 10
+        ):
+            raise ValueError("retry_delay_seconds must be between 0 and 10")
         names = validate_search_backends(names)
         object.__setattr__(self, "backend_names", names)
         object.__setattr__(self, "backend_name", names[0])
@@ -152,6 +163,43 @@ class SearchAdapter:
         """Try configured backends in order and return safe attempt metadata."""
 
         attempts: list[SearchAttempt] = []
+        for sweep in range(_SEARCH_SWEEPS):
+            if sweep and self.retry_delay_seconds > 0:
+                await asyncio.sleep(self.retry_delay_seconds)
+            result = await self._sweep_backends(query, attempts)
+            if result is not None:
+                return result
+            # Only a throttled or broken backend is worth a second sweep; a clean
+            # empty result means the query genuinely found nothing.
+            if not all(
+                attempt.outcome
+                in {SearchAttemptOutcome.EXCEPTION, SearchAttemptOutcome.INVALID}
+                for attempt in attempts
+            ):
+                break
+
+        attempt_tuple = tuple(attempts)
+        if attempt_tuple and all(
+            attempt.outcome
+            in {SearchAttemptOutcome.EXCEPTION, SearchAttemptOutcome.INVALID}
+            for attempt in attempt_tuple
+        ):
+            message = (
+                "search backend returned an invalid result"
+                if any(
+                    attempt.outcome is SearchAttemptOutcome.INVALID
+                    for attempt in attempt_tuple
+                )
+                else "search backend failed"
+            )
+            raise SearchFailure(message, attempts=attempt_tuple) from None
+        return SearchResult(hits=(), attempts=attempt_tuple)
+
+    async def _sweep_backends(
+        self, query: SearchQuery, attempts: list[SearchAttempt]
+    ) -> SearchResult | None:
+        """Try every configured backend once, returning the first result with hits."""
+
         for backend_name in self.backend_names:
             started_ns = monotonic_ns()
             try:
@@ -210,23 +258,7 @@ class SearchAdapter:
                     hits=normalized.hits,
                     attempts=tuple(attempts),
                 )
-
-        attempt_tuple = tuple(attempts)
-        if attempt_tuple and all(
-            attempt.outcome
-            in {SearchAttemptOutcome.EXCEPTION, SearchAttemptOutcome.INVALID}
-            for attempt in attempt_tuple
-        ):
-            message = (
-                "search backend returned an invalid result"
-                if any(
-                    attempt.outcome is SearchAttemptOutcome.INVALID
-                    for attempt in attempt_tuple
-                )
-                else "search backend failed"
-            )
-            raise SearchFailure(message, attempts=attempt_tuple) from None
-        return SearchResult(hits=(), attempts=attempt_tuple)
+        return None
 
     def _normalize(
         self, rows: Sequence[object], max_results: int

@@ -242,9 +242,38 @@ async def test_query_planner_does_not_mask_provider_failure_for_a_web_target() -
         "What does typing.IO mean?",
     ],
 )
-async def test_query_planner_does_not_force_search_for_an_ordinary_question(
+async def test_query_planner_researches_a_question_a_direct_reply_only_echoes(
     request_text: str,
 ) -> None:
+    # Policy forbids new words in a direct-reply focus, so an echoed question can
+    # only complete by repeating itself. Searching is the one way to answer it.
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "direct_reply",
+                "requires_search": False,
+                "answer_focus": request_text,
+            }
+        ]
+    )
+
+    decision = await QueryPlanner(provider, repair_invalid_company_plans=True).plan(
+        request_text
+    )
+
+    assert decision.task_category is TaskCategory.COMPANY_RESEARCH
+    assert decision.requires_search is True
+    assert decision.query_plan is not None
+    assert decision.query_plan.searches[0].text == request_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_text", ["Hello!", "Thanks for the help.", "Good day"])
+async def test_query_planner_keeps_a_direct_reply_for_a_greeting(
+    request_text: str,
+) -> None:
+    # A greeting is not a question, so it needs no evidence and must not be sent
+    # to the search backends.
     provider = FakeStructuredChatProvider(
         responses=[
             {
@@ -261,6 +290,52 @@ async def test_query_planner_does_not_force_search_for_an_ordinary_question(
 
     assert decision.task_category is TaskCategory.DIRECT_REPLY
     assert decision.requires_search is False
+
+
+@pytest.mark.asyncio
+async def test_query_planner_keeps_a_direct_reply_that_adds_its_own_words() -> None:
+    # A focus that contributes a topic of its own is a real reply, not an echo.
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "direct_reply",
+                "requires_search": False,
+                "answer_focus": "Explain artificial intelligence.",
+            }
+        ]
+    )
+
+    decision = await QueryPlanner(provider, repair_invalid_company_plans=True).plan(
+        "What is AI?"
+    )
+
+    assert decision.task_category is TaskCategory.DIRECT_REPLY
+
+
+@pytest.mark.asyncio
+async def test_query_planner_drops_a_query_plan_a_direct_reply_did_not_need() -> None:
+    # Small models fill query_plan from the schema even when answering directly;
+    # the unused plan must not fail the run.
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "direct_reply",
+                "requires_search": False,
+                "answer_focus": "Hello!",
+                "query_plan": {
+                    "tool_budget": {"max_search_queries": 1, "max_fetches": 1},
+                    "searches": [{"text": "Hello!", "max_results": 1}],
+                },
+            }
+        ]
+    )
+
+    decision = await QueryPlanner(provider, repair_invalid_company_plans=True).plan(
+        "Hello!"
+    )
+
+    assert decision.task_category is TaskCategory.DIRECT_REPLY
+    assert decision.query_plan is None
 
 
 @pytest.mark.asyncio
@@ -1075,6 +1150,34 @@ def test_answer_scope_policy_rejects_a_weakly_related_claim() -> None:
         AnswerScopePolicy.validate(
             request="What is Siemens Xcelerator?",
             answer_focus="What is Siemens Xcelerator?",
+            answer=answer,
+        )
+
+
+def test_answer_scope_policy_keeps_abbreviations_inside_one_sentence() -> None:
+    # "Co. Ltd. in Shanghai" is one sentence, so its tail must not be judged alone.
+    answer = _scoped_answer(
+        "He became President and CEO of Siemens VDO Automotive Asia Pacific Co. "
+        "Ltd. in Shanghai, China, overseeing operations in the region"
+    )
+
+    assert (
+        AnswerScopePolicy.validate(
+            request="Who is the current CEO of Siemens AG?",
+            answer_focus="Who is the current CEO of Siemens AG?",
+            answer=answer,
+        )
+        is answer
+    )
+
+
+def test_answer_scope_policy_still_splits_an_ordinary_sentence_end() -> None:
+    answer = _scoped_answer("Siemens AG is a company. Berlin weather is sunny today")
+
+    with pytest.raises(PlanningPolicyError, match="claim must stay scoped"):
+        AnswerScopePolicy.validate(
+            request="Who is the current CEO of Siemens AG?",
+            answer_focus="Who is the current CEO of Siemens AG?",
             answer=answer,
         )
 

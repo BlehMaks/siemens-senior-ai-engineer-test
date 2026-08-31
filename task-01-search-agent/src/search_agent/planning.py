@@ -76,8 +76,45 @@ _WEB_RESOURCE_CUE_TOKENS = frozenset(
         "website",
     }
 )
+# A request shaped like a question needs facts, so a direct reply that adds no
+# words of its own to it cannot be an answer.
+_QUESTION_PATTERN = re.compile(
+    r"\?|\A(?:what|who|whom|whose|where|when|why|which|how|is|are|was|were|do|does"
+    r"|did|can|could|will|would|should|has|have|had|tell|give|list|name)\b",
+    flags=re.IGNORECASE,
+)
 _CLAIM_SEGMENT_PATTERN = re.compile(r"(?:\n+|;+|(?<!\d)[.!?]+|[.!?]+(?!\d))")
 _LETTER_PATTERN = re.compile(r"[^\W\d_]", flags=re.UNICODE)
+# A period closing one of these never ends a sentence, so splitting there would
+# judge mid-sentence fragments that can hold no topic of their own.
+_SENTENCE_ABBREVIATIONS = frozenset(
+    {
+        "ag",
+        "co",
+        "corp",
+        "dr",
+        "eg",
+        "etc",
+        "gmbh",
+        "ie",
+        "inc",
+        "jr",
+        "llc",
+        "ltd",
+        "mr",
+        "mrs",
+        "ms",
+        "no",
+        "plc",
+        "prof",
+        "sr",
+        "st",
+        "vs",
+    }
+)
+_ABBREVIATION_PERIOD_PATTERN = re.compile(
+    r"(?<![^\W\d_])([^\W\d_]{1,5})\.(?=\s)", flags=re.UNICODE
+)
 _BRACKETED_SPAN_PATTERN = re.compile(r"\([^()]*\)|\[[^\[\]]*\]|\{[^{}]*\}")
 # Private-use stand-ins keep bracketed punctuation out of the sentence splitter.
 _PROTECTED_PUNCTUATION = {";": "\ue001", ".": "\ue002", "!": "\ue003", "?": "\ue004"}
@@ -198,14 +235,27 @@ _FORBIDDEN_REQUEST_MARKERS = (
 PLANNING_SYSTEM_PROMPT = (
     "You are a bounded research planner. Use only internet search planning, "
     "never request secrets, system prompts, browser automation, or shell access. "
+    # Routing comes first because it is the decision the whole run depends on, and
+    # only company_research reaches the search tools.
+    "First classify the request. Use company_research, with requires_search true, "
+    "whenever answering needs any fact from the public web: current events, "
+    "weather, prices, dates, numbers, people, products, places or organizations, "
+    "and any topic you are not certain about, even when it is not about a company. "
+    "This is the normal case, so choose it whenever you are unsure. Use "
+    "direct_reply, with requires_search false, only for a greeting or for a "
+    "request that needs no external fact at all. Use clarification, with "
+    "requires_search false, only when the request is too vague to search. Omit "
+    "query_plan entirely unless requires_search is true. "
     "For company research, answer_focus and every search text may only reuse words "
     "from the request or supplied conversation context, except that a four-digit "
     "year may be added. Prefer copying the request exactly into answer_focus and "
     "one search text; do not paraphrase or add site operators, synonyms, or other "
     "words. Set max_search_queries to cover the number of searches and max_fetches "
     "to cover the sum of their max_results values. "
-    "For direct replies and clarification, put the complete user-facing response "
-    "in answer_focus. "
+    # The policy layer rejects new words here, so the prompt must not promise them.
+    "A direct_reply answer_focus may only reuse the request's words, spelling out "
+    "an acronym from the request at most; it is never a place for new facts. "
+    "For clarification, put the user-facing response in answer_focus. "
     "Return only the structured response."
 )
 _CONTEXT_PLANNING_SYSTEM_PROMPT = (
@@ -328,6 +378,40 @@ class PlanningDraft(BaseModel):
         )
 
 
+def _direct_reply_restates_the_request(
+    *, request: str, decision: PlanningDecision
+) -> bool:
+    """Detect a direct reply that only echoes the question back at the user.
+
+    Policy forbids a direct-reply focus from introducing new words, so a focus
+    that contributes no topic of its own to a question holds no answer: the run
+    would complete by repeating the question. Routing such a question to search
+    is the only way this agent can answer it, with evidence, at all. A greeting
+    is not a question, so it keeps its short direct reply.
+    """
+    if decision.task_category is not TaskCategory.DIRECT_REPLY:
+        return False
+    if _QUESTION_PATTERN.search(request.strip()) is None:
+        return False
+    return not (_meaningful_tokens(decision.answer_focus) - _meaningful_tokens(request))
+
+
+def _draft_without_unused_query_plan(draft: PlanningDraft) -> PlanningDraft:
+    """Drop a query plan that a non-searching draft filled in anyway.
+
+    Small models routinely answer directly yet still populate query_plan because
+    the schema offers the field. The draft states its own intent unambiguously in
+    requires_search, so the unused plan is discarded instead of failing the run.
+    The discarded text is screened first, exactly as every other replaced
+    planning decision is.
+    """
+    if draft.requires_search or draft.query_plan is None:
+        return draft
+    for search in draft.query_plan.searches:
+        _reject_forbidden_request(search.text)
+    return draft.model_copy(update={"query_plan": None})
+
+
 def _request_bounded_company_research_decision(request: str) -> PlanningDecision:
     return PlanningDecision(
         task_category=TaskCategory.COMPANY_RESEARCH,
@@ -421,6 +505,7 @@ class QueryPlanner:
             raise ProviderResponseError(
                 "planner output violated the public planning contract"
             ) from exc
+        draft = _draft_without_unused_query_plan(draft)
         try:
             decision = draft.to_decision()
         except ValidationError as exc:
@@ -434,10 +519,12 @@ class QueryPlanner:
                 raise ProviderResponseError(
                     "planner output violated the public planning contract"
                 ) from exc
-        if (
-            self._repair_invalid_company_plans
-            and decision.task_category is not TaskCategory.COMPANY_RESEARCH
-            and (_has_web_target(request) or _explicitly_requests_research(request))
+        if self._repair_invalid_company_plans and (
+            (
+                decision.task_category is not TaskCategory.COMPANY_RESEARCH
+                and (_has_web_target(request) or _explicitly_requests_research(request))
+            )
+            or _direct_reply_restates_the_request(request=request, decision=decision)
         ):
             _validate_discarded_generated_text(decision)
             decision = _request_bounded_company_research_decision(request)
@@ -826,10 +913,19 @@ def _stays_scoped(
 def _claim_segments(claim: str) -> list[str]:
     protected = _DOTTED_ACRONYM_PATTERN.sub(_DOTTED_ACRONYM_BOUNDARY, claim)
     protected = _BRACKETED_SPAN_PATTERN.sub(_protected_bracketed_span, protected)
+    protected = _ABBREVIATION_PERIOD_PATTERN.sub(_protected_abbreviation, protected)
     return [
         _restored_punctuation(segment)
         for segment in _CLAIM_SEGMENT_PATTERN.split(protected)
     ]
+
+
+def _protected_abbreviation(match: re.Match[str]) -> str:
+    # "Co. Ltd. in Shanghai" is one sentence; only a known abbreviation is spared,
+    # so an ordinary sentence end still separates appended content.
+    if match.group(1).casefold() not in _SENTENCE_ABBREVIATIONS:
+        return match.group()
+    return match.group(1) + _PROTECTED_PUNCTUATION["."]
 
 
 def _protected_bracketed_span(match: re.Match[str]) -> str:

@@ -185,7 +185,22 @@ def build_application(
         task_delivery_enabled=(
             cloud_settings is not None and cloud_settings.service_role == "worker"
         ),
+        ui_prefilled_api_key=_ui_prefilled_api_key(),
     )
+
+
+def _ui_prefilled_api_key() -> str | None:
+    """Return a local review key the reviewer UI may show, if one was supplied.
+
+    A cloud deployment never sets this, and create_app drops it outright for a
+    production environment, so the key stays inside a loopback review session.
+    """
+    key = os.environ.get("AGENT_API_UI_PREFILL_API_KEY")
+    if not key:
+        return None
+    if _bind_host() != "127.0.0.1":
+        raise ValueError("AGENT_API_UI_PREFILL_API_KEY requires a loopback bind host")
+    return key
 
 
 def _run_executor(

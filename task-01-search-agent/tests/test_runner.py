@@ -598,6 +598,31 @@ async def test_answer_text_is_rendered_from_the_verified_claims() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rejected_answer_is_resynthesized_once_with_a_correction() -> None:
+    hit = _hit()
+    document = _document()
+    unsupported = _answer(hit, document, claim="Siemens invented the moon")
+    grounded = _answer(hit, document)
+    provider = _Provider(unsupported)
+
+    # The first synthesis is rejected; the second returns a grounded answer.
+    def second_attempt_recovers() -> None:
+        if len(provider.messages) >= 2:
+            provider.answer = grounded
+
+    provider.hook = second_attempt_recovers
+    result = await _run(_runner(provider=provider))
+
+    assert result.snapshot.status is RunStatus.COMPLETED
+    assert result.snapshot.answer is not None
+    assert result.snapshot.answer.answer_text == SOURCE_TEXT
+    # The corrective line reaches the system role, never the untrusted payload.
+    retry_system_prompt = provider.messages[-1][0].content
+    assert "Choose a shorter span and copy it exactly" in retry_system_prompt
+    assert result.usage.model_calls == 3
+
+
+@pytest.mark.asyncio
 async def test_rejected_answer_trace_names_the_abstention_reason() -> None:
     hit = _hit()
     document = _document()
@@ -607,10 +632,19 @@ async def test_rejected_answer_trace_names_the_abstention_reason() -> None:
 
     result = await _run(runner)
 
+    # The rejection is retried once with a corrective hint, then reported.
     assert result.snapshot.failure_reason is FailureReason.VALIDATION_FAILED
-    assert [
-        record.reason for record in result.trace if record.action == "answer.validate"
-    ] == ["unsupported_claim"]
+    validations = [
+        record for record in result.trace if record.action == "answer.validate"
+    ]
+    assert [record.reason for record in validations] == [
+        "unsupported_claim",
+        "unsupported_claim",
+    ]
+    assert [record.outcome for record in validations] == [
+        TraceOutcome.RETRIED,
+        TraceOutcome.FAILED,
+    ]
 
 
 @pytest.mark.asyncio
@@ -1453,9 +1487,10 @@ async def test_failed_model_call_still_consumes_one_attempt() -> None:
 
     result = await _run(_runner(provider=provider))
 
+    # Planning plus both synthesis attempts, each counted even though each failed.
     assert result.snapshot.failure_reason is FailureReason.VALIDATION_FAILED
-    assert result.usage.model_calls == 2
-    assert result.usage.model_attempts == 2
+    assert result.usage.model_calls == 3
+    assert result.usage.model_attempts == 3
 
 
 @pytest.mark.asyncio

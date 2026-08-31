@@ -222,6 +222,7 @@ main() {
     AGENT_API_DATABASE_PATH="$database_path" \
     AGENT_API_KEY_PEPPER="$pepper" \
     AGENT_API_BIND_HOST=127.0.0.1 \
+    AGENT_API_UI_PREFILL_API_KEY="$api_key" \
     AGENT_API_INFERENCE_MODE=ollama \
     AGENT_MODEL_NAME="$model_name" \
     AGENT_MODEL_BASE_URL="$model_base_url" \
@@ -271,7 +272,8 @@ main() {
     [[ $response =~ ^[Yy]$ ]] && keep_running=true
   fi
   if [[ $keep_running == true ]]; then
-    printf 'Reviewer UI: http://127.0.0.1:%s/\n' "$api_port"
+    printf 'Reviewer UI: http://127.0.0.1:%s/ (API key already filled in)\n' \
+      "$api_port"
     printf 'Local API key (shown once): %s\n' "$api_key"
     printf 'Press Ctrl+C to stop the API and any Ollama server started by this script.\n'
     wait "$LIVE_ACCEPTANCE_API_PID"
