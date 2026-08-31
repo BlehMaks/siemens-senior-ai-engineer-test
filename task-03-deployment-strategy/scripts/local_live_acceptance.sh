@@ -221,6 +221,7 @@ main() {
     -u K_SERVICE \
     AGENT_API_DATABASE_PATH="$database_path" \
     AGENT_API_KEY_PEPPER="$pepper" \
+    AGENT_API_BIND_HOST=127.0.0.1 \
     AGENT_API_INFERENCE_MODE=ollama \
     AGENT_MODEL_NAME="$model_name" \
     AGENT_MODEL_BASE_URL="$model_base_url" \
@@ -253,6 +254,7 @@ main() {
   LIVE_API_KEY="$api_key" \
   LIVE_MODEL_NAME="$model_name" \
   LIVE_RESEARCH_QUERY="$query" \
+  PYTHON_BIN="$LIVE_ACCEPTANCE_TEMP_DIR/venv/bin/python" \
     "$repository_root/task-03-deployment-strategy/scripts/live_api_smoke.sh" \
     "http://127.0.0.1:$api_port" "$run_dir"
 

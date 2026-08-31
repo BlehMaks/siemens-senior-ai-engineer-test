@@ -26,6 +26,7 @@ from deployment_strategy.container import (
     CloudReadinessProbe,
     CloudRuntimeSettings,
     FakeRunExecutor,
+    _bind_host,
     _bounded_integer,
     _run_executor,
     build_application,
@@ -56,6 +57,31 @@ def test_main_builds_cloud_clients_inside_uvicorn_event_loop(
 
     assert captured["app"] == "deployment_strategy.container:build_application"
     assert captured["factory"] is True
+
+
+def test_bind_host_defaults_to_loopback_outside_cloud(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENT_API_BIND_HOST", raising=False)
+    monkeypatch.delenv("K_SERVICE", raising=False)
+
+    assert _bind_host() == "127.0.0.1"
+
+
+def test_bind_host_defaults_to_all_interfaces_on_cloud_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENT_API_BIND_HOST", raising=False)
+    monkeypatch.setenv("K_SERVICE", "siemens-agent-api")
+
+    assert _bind_host() == "0.0.0.0"
+
+
+def test_bind_host_rejects_unreviewed_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_API_BIND_HOST", "192.168.1.20")
+
+    with pytest.raises(ValueError, match="AGENT_API_BIND_HOST"):
+        _bind_host()
 
 
 class CloudFakeStore(DocumentStoreTransaction):

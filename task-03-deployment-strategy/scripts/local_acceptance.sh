@@ -72,6 +72,7 @@ main() {
     -u K_SERVICE \
     AGENT_API_DATABASE_PATH="$database_path" \
     AGENT_API_KEY_PEPPER="$pepper" \
+    AGENT_API_BIND_HOST=127.0.0.1 \
     AGENT_API_INFERENCE_MODE=fake \
     PORT="$port" \
     "$UV_BIN" run --frozen --all-packages python -m deployment_strategy.container \

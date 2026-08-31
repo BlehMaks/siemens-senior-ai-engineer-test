@@ -379,7 +379,7 @@ def main() -> None:
     uvicorn.run(
         "deployment_strategy.container:build_application",
         factory=True,
-        host="0.0.0.0",
+        host=_bind_host(),
         port=_bounded_integer("PORT", default=8080, minimum=1, maximum=65_535),
         workers=1,
         access_log=False,
@@ -391,6 +391,17 @@ def main() -> None:
             "AGENT_API_SHUTDOWN_SECONDS", default=10, minimum=1, maximum=30
         ),
     )
+
+
+def _bind_host() -> str:
+    """Keep local execution loopback-only while preserving Cloud Run ingress."""
+
+    configured = os.environ.get("AGENT_API_BIND_HOST")
+    if configured is not None:
+        if configured not in {"127.0.0.1", "0.0.0.0"}:
+            raise ValueError("AGENT_API_BIND_HOST must be 127.0.0.1 or 0.0.0.0")
+        return configured
+    return "0.0.0.0" if os.environ.get("K_SERVICE") else "127.0.0.1"
 
 
 def _bounded_integer(name: str, *, default: int, minimum: int, maximum: int) -> int:

@@ -25,6 +25,57 @@ expect_status() {
     fail "$operation returned HTTP $actual, expected $expected"
 }
 
+validate_public_citations() {
+  local response_path=$1 python_bin=${PYTHON_BIN:-python3}
+  "$python_bin" - "$response_path" <<'PY'
+import ipaddress
+import json
+from pathlib import Path
+import sys
+from urllib.parse import urlsplit
+
+
+def reject(reason: str) -> None:
+    print(f"public-web citation validation failed: {reason}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    citations = payload["answer"]["citations"]
+    if type(citations) is not list or not citations:
+        reject("citations are missing")
+    for citation in citations:
+        if type(citation) is not dict or type(citation.get("source_url")) is not str:
+            reject("citation URL is missing")
+        parsed = urlsplit(citation["source_url"])
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not host
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            reject("citation URL is not a clean HTTP origin")
+        if parsed.port not in {None, 80, 443}:
+            reject("citation URL uses a non-public port")
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            if (
+                "." not in host
+                or host == "localhost"
+                or host.endswith((".localhost", ".local", ".internal", ".home.arpa"))
+            ):
+                reject("citation hostname is not public")
+        else:
+            if not address.is_global:
+                reject("citation IP address is not public")
+except (KeyError, OSError, UnicodeError, ValueError, json.JSONDecodeError):
+    reject("response is invalid")
+PY
+}
+
 main() {
   [[ $# -eq 2 ]] || fail "usage: live_api_smoke.sh BASE_URL OUTPUT_DIR"
   local base_url=${1%/} output_dir=$2 timeout query smoke_id auth status
@@ -37,6 +88,7 @@ main() {
   command -v curl >/dev/null 2>&1 || fail "curl is required"
   command -v jq >/dev/null 2>&1 || fail "jq is required"
   command -v openssl >/dev/null 2>&1 || fail "openssl is required"
+  command -v "${PYTHON_BIN:-python3}" >/dev/null 2>&1 || fail "python3 is required"
 
   timeout=${LIVE_RUN_TIMEOUT_SECONDS:-600}
   [[ $timeout =~ ^[1-9][0-9]*$ && $timeout -ge 60 && $timeout -le 1800 ]] ||
@@ -107,6 +159,8 @@ main() {
     )
   ' "$output_dir/result.json" >/dev/null ||
     fail "completed live run did not contain a grounded answer with citations"
+  validate_public_citations "$output_dir/result.json" ||
+    fail "completed live run did not contain public-web citations"
 
   jq -n \
     --arg session_id "$session_id" \

@@ -7,6 +7,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import pytest
+
 TASK_ROOT = Path(__file__).resolve().parents[1]
 LIVE_ACCEPTANCE = TASK_ROOT / "scripts" / "local_live_acceptance.sh"
 LIVE_SMOKE = TASK_ROOT / "scripts" / "live_api_smoke.sh"
@@ -14,6 +16,7 @@ LIVE_SMOKE = TASK_ROOT / "scripts" / "live_api_smoke.sh"
 
 class _LiveApiHandler(BaseHTTPRequestHandler):
     grounded = True
+    source_url = "https://www.siemens.com/global/en/company/sustainability.html"
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -37,7 +40,7 @@ class _LiveApiHandler(BaseHTTPRequestHandler):
                     {
                         "claim": "Siemens states a reviewed sustainability commitment.",
                         "evidence_id": "evidence-live-1",
-                        "source_url": "https://www.siemens.com/global/en/company/sustainability.html",
+                        "source_url": self.source_url,
                     }
                 )
             self._send(
@@ -66,9 +69,13 @@ class _LiveApiHandler(BaseHTTPRequestHandler):
 
 
 def _run_live_smoke(
-    tmp_path: Path, *, grounded: bool
+    tmp_path: Path,
+    *,
+    grounded: bool,
+    source_url: str = "https://www.siemens.com/global/en/company/sustainability.html",
 ) -> subprocess.CompletedProcess[str]:
     _LiveApiHandler.grounded = grounded
+    _LiveApiHandler.source_url = source_url
     server = ThreadingHTTPServer(("127.0.0.1", 0), _LiveApiHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -155,3 +162,32 @@ def test_live_smoke_rejects_an_ungrounded_response(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "grounded answer with citations" in result.stderr
+
+
+def test_live_smoke_rejects_private_loopback_citations(tmp_path: Path) -> None:
+    result = _run_live_smoke(
+        tmp_path,
+        grounded=True,
+        source_url="http://127.0.0.1/private-evidence",
+    )
+
+    assert result.returncode != 0
+    assert "public-web" in result.stderr
+
+
+def test_local_live_api_entrypoint_binds_only_to_loopback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from deployment_strategy.container import main as container_main
+
+    captured: dict[str, object] = {}
+
+    def run(app: object, **options: object) -> None:
+        captured["app"] = app
+        captured.update(options)
+
+    monkeypatch.setattr("deployment_strategy.container.uvicorn.run", run)
+
+    container_main()
+
+    assert captured["host"] == "127.0.0.1"
