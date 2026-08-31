@@ -120,6 +120,23 @@ class FakeRunRepository:
             selected.sort(key=lambda run: (run.created_at, run.run_id))
             return tuple(selected[:limit])
 
+    async def list_session_completed(
+        self, *, tenant_id: OpaqueId, session_id: OpaqueId, limit: int = 6
+    ) -> tuple[RunRecord, ...]:
+        checked_tenant = _scope_id(tenant_id)
+        checked_session = _scope_id(session_id)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        async with self._lock:
+            selected = [
+                run
+                for (run_tenant, _), run in self._runs.items()
+                if (run_tenant, run.session_id) == (checked_tenant, checked_session)
+                and run.state is RunState.COMPLETED
+            ]
+            selected.sort(key=lambda run: (run.created_at, run.run_id))
+            return tuple(selected[-limit:])
+
     async def claim(self, request: ClaimRequest) -> ClaimResult:
         checked = _checked(ClaimRequest, request)
         key = (checked.tenant_id, checked.run_id)

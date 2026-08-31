@@ -160,6 +160,41 @@ resource "google_firestore_index" "runs" {
   }
 }
 
+resource "google_firestore_index" "runs_completed" {
+  project    = var.project_id
+  database   = google_firestore_database.assessment.name
+  collection = "runs"
+
+  fields {
+    field_path = "tenant_id"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "session_id"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "state"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "created_at"
+    order      = "DESCENDING"
+  }
+
+  fields {
+    field_path = "run_id"
+    order      = "DESCENDING"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 resource "google_firestore_index" "runs_ascending" {
   project    = var.project_id
   database   = google_firestore_database.assessment.name

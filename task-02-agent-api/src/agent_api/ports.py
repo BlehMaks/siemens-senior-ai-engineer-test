@@ -587,6 +587,13 @@ class RunRepository(Protocol):
 
         ...
 
+    async def list_session_completed(
+        self, *, tenant_id: OpaqueId, session_id: OpaqueId, limit: int = 6
+    ) -> tuple[RunRecord, ...]:
+        """Return the latest completed records in chronological order."""
+
+        ...
+
     async def claim(self, request: ClaimRequest) -> ClaimResult:
         """Claim queued or expired work; an active lease permits no second owner."""
 

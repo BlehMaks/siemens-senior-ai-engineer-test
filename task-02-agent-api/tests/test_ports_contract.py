@@ -163,6 +163,82 @@ class RunRepositoryContract:
             )
 
     @pytest.mark.asyncio
+    async def test_completed_session_listing_filters_before_limiting(
+        self, repository: RunRepository
+    ) -> None:
+        for index in range(3):
+            created_at = NOW + timedelta(minutes=index)
+            run_id = f"run-completed-{index}"
+            await repository.create(
+                submission(
+                    run_id=run_id,
+                    idempotency_key=f"request-key-completed-{index}",
+                    created_at=created_at,
+                )
+            )
+            claimed = await repository.claim(
+                claim(
+                    run_id=run_id,
+                    lease_id=f"lease-completed-{index}",
+                    now=created_at,
+                )
+            )
+            assert claimed.run is not None
+            completed = await repository.compare_and_set(
+                StateUpdate(
+                    tenant_id="tenant-one",
+                    run_id=run_id,
+                    expected_version=claimed.run.version,
+                    expected_state=RunState.RUNNING,
+                    next_state=RunState.COMPLETED,
+                    lease_id=f"lease-completed-{index}",
+                    worker_id="worker-one",
+                    at=created_at + timedelta(seconds=1),
+                    answer=_public_answer(),
+                )
+            )
+            assert completed.disposition is WriteDisposition.APPLIED
+
+        failed_at = NOW + timedelta(minutes=3)
+        await repository.create(
+            submission(
+                run_id="run-failed",
+                idempotency_key="request-key-failed",
+                created_at=failed_at,
+            )
+        )
+        claimed = await repository.claim(
+            claim(run_id="run-failed", lease_id="lease-failed", now=failed_at)
+        )
+        assert claimed.run is not None
+        failed = await repository.compare_and_set(
+            StateUpdate(
+                tenant_id="tenant-one",
+                run_id="run-failed",
+                expected_version=claimed.run.version,
+                expected_state=RunState.RUNNING,
+                next_state=RunState.FAILED,
+                lease_id="lease-failed",
+                worker_id="worker-one",
+                at=failed_at + timedelta(seconds=1),
+                failure_code=RunFailureCode.EXECUTION_FAILED,
+            )
+        )
+        assert failed.disposition is WriteDisposition.APPLIED
+
+        selected = await repository.list_session_completed(
+            tenant_id="tenant-one", session_id="session-one", limit=2
+        )
+        assert tuple(run.run_id for run in selected) == (
+            "run-completed-1",
+            "run-completed-2",
+        )
+        with pytest.raises(ValueError):
+            await repository.list_session_completed(
+                tenant_id="tenant-one", session_id="session-one", limit=0
+            )
+
+    @pytest.mark.asyncio
     async def test_only_one_concurrent_owner_claims_a_run(
         self, repository: RunRepository
     ) -> None:

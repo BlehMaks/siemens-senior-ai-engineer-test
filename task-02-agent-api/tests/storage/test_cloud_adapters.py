@@ -224,8 +224,10 @@ class FakeDocumentStore(DocumentStoreTransaction):
             loaded = copy.deepcopy(row)
             loaded["document_id"] = document_id
             selected.append(loaded)
-        if order_by:
-            selected.sort(key=lambda row: tuple(row[field] for field in order_by))
+        for field in reversed(order_by):
+            descending = field.startswith("-")
+            field_name = field.removeprefix("-")
+            selected.sort(key=lambda row: row[field_name], reverse=descending)
         if start_after is not None:
             cursor = tuple(start_after[field] for field in order_by)
             selected = [

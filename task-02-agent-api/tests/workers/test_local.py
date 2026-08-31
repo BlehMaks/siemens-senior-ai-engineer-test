@@ -386,6 +386,20 @@ class SessionRunRepository(FakeRunRepository):
         selected.sort(key=lambda run: (run.created_at, run.run_id))
         return tuple(selected[:limit])
 
+    async def list_session_completed(
+        self, *, tenant_id: OpaqueId, session_id: OpaqueId, limit: int = 6
+    ) -> tuple[RunRecord, ...]:
+        async with self._lock:
+            selected = [
+                run
+                for run in self._runs.values()
+                if run.tenant_id == tenant_id
+                and run.session_id == session_id
+                and run.state is RunState.COMPLETED
+            ]
+        selected.sort(key=lambda run: (run.created_at, run.run_id))
+        return tuple(selected[-limit:])
+
 
 class RecentWindowRunRepository(SessionRunRepository):
     async def list_session_recent(

@@ -634,6 +634,30 @@ class SQLiteRunRepository(_PathRepository):
             ).fetchall()
         return tuple(_decode_run(row) for row in rows)
 
+    async def list_session_completed(
+        self, *, tenant_id: OpaqueId, session_id: OpaqueId, limit: int = 6
+    ) -> tuple[RunRecord, ...]:
+        checked_tenant = _scope_id(tenant_id)
+        checked_session = _scope_id(session_id)
+        checked_limit = _limit(limit)
+        async with _connection(self._path) as connection:
+            rows = await (
+                await connection.execute(
+                    "SELECT * FROM ("
+                    + _RUN_SELECT
+                    + " WHERE tenant_id = ? AND session_id = ? AND state = ? "
+                    "ORDER BY created_at DESC, run_id DESC LIMIT ?) "
+                    "ORDER BY created_at, run_id",
+                    (
+                        checked_tenant,
+                        checked_session,
+                        RunState.COMPLETED.value,
+                        checked_limit,
+                    ),
+                )
+            ).fetchall()
+        return tuple(_decode_run(row) for row in rows)
+
     async def claim(self, request: ClaimRequest) -> ClaimResult:
         checked = _checked(ClaimRequest, request)
         async with _connection(self._path, write=True) as connection:

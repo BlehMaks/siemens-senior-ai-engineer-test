@@ -397,33 +397,18 @@ class LocalWorker:
                 run_id=run.run_id,
                 request=run.query,
             )
-        list_recent = getattr(self._repository, "list_session_recent", None)
-        if callable(list_recent):
-            history = await list_recent(
-                tenant_id=run.tenant_id,
-                session_id=run.session_id,
-                limit=100,
-            )
-        else:
-            history = await self._repository.list_session(
-                tenant_id=run.tenant_id,
-                session_id=run.session_id,
-                limit=100,
-            )
-        completed = [
-            item
-            for item in history
-            if item.run_id != run.run_id
-            and item.state is RunState.COMPLETED
-            and item.answer is not None
-        ][-6:]
+        completed = await self._repository.list_session_completed(
+            tenant_id=run.tenant_id,
+            session_id=run.session_id,
+            limit=6,
+        )
         conversation_context = tuple(
             ConversationTurn(
                 request=item.query,
                 answer=item.answer.answer_text[:2000],
             )
             for item in completed
-            if item.answer is not None
+            if item.run_id != run.run_id and item.answer is not None
         )
         context_executor = cast(ContextRunExecutor, self._executor)
         return await context_executor.run_with_context(
