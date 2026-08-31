@@ -48,8 +48,8 @@ def test_query_plan_rejects_over_budget_fetches() -> None:
         )
 
 
-def test_scoped_answer_requires_unique_citations() -> None:
-    with pytest.raises(ValidationError, match="unique"):
+def test_scoped_answer_requires_one_source_url_per_evidence_id() -> None:
+    with pytest.raises(ValidationError, match="one source URL"):
         ScopedAnswer(
             answer_text="Evidence-backed answer",
             citations=(
@@ -65,6 +65,38 @@ def test_scoped_answer_requires_unique_citations() -> None:
                 ),
             ),
         )
+
+
+def test_scoped_answer_rejects_a_repeated_claim_for_one_evidence_id() -> None:
+    citation = Citation(
+        claim="Claim A",
+        evidence_id="ev-report",
+        source_url=_url("https://example.com/report"),
+    )
+
+    with pytest.raises(ValidationError, match="unique per evidence id"):
+        ScopedAnswer(answer_text="Claim A Claim A", citations=(citation, citation))
+
+
+def test_scoped_answer_allows_distinct_claims_from_one_source() -> None:
+    # A single page routinely supports more than one sentence of an answer.
+    answer = ScopedAnswer(
+        answer_text="Claim A Claim B",
+        citations=(
+            Citation(
+                claim="Claim A",
+                evidence_id="ev-report",
+                source_url=_url("https://example.com/report"),
+            ),
+            Citation(
+                claim="Claim B",
+                evidence_id="ev-report",
+                source_url=_url("https://example.com/report"),
+            ),
+        ),
+    )
+
+    assert len(answer.citations) == 2
 
 
 def test_scoped_answer_allows_a_direct_answer_without_citations() -> None:

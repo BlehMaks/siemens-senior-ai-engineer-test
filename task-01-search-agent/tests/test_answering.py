@@ -232,6 +232,57 @@ def test_positional_claim_must_equal_the_selected_section() -> None:
     assert error.value.reason is AbstentionReason.UNSUPPORTED_CLAIM
 
 
+def test_positional_claim_accepts_the_dated_selected_item_text() -> None:
+    url = "https://press.siemens.com/global/en"
+    headline = "Siemens strengthens AI infrastructure leadership"
+    dated_headline = f"07 August 2026 {headline}"
+    hit = SearchHit(
+        title="Siemens Press",
+        url=_URL.validate_python(url),
+        snippet="Siemens press listings",
+        rank=1,
+    )
+    document = ExtractedDocument(
+        canonical_url=url,
+        title="Siemens Press",
+        text=f"07 August 2026\n{headline}",
+        blocks=(ExtractedBlock(text=f"07 August 2026\n{headline}", section=headline),),
+    )
+    research_document = build_research_document(hit, document, retrieved_at=_NOW)
+    selected = select_context(
+        "Return the exact first listed headline dated 2026",
+        (research_document,),
+    )
+    record = build_evidence(
+        hit,
+        document,
+        retrieved_at=_NOW,
+        quotes=selected.quotes,
+        selected_chunks=selected.chunks,
+        now=_NOW,
+    )
+
+    # Positional retrieval selects the chunk whose text carries the list date ahead
+    # of the section title, so the dated item text is the selected structured item.
+    accepted = AnswerValidator().validate(
+        _answer(record, claim=dated_headline),
+        (record,),
+        now=_NOW,
+        require_selected_section_claims=True,
+    )
+    assert accepted.answer_text == dated_headline
+
+    with pytest.raises(AnswerAbstained) as error:
+        AnswerValidator().validate(
+            _answer(record, claim="07 August 2026"),
+            (record,),
+            now=_NOW,
+            require_selected_section_claims=True,
+        )
+
+    assert error.value.reason is AbstentionReason.UNSUPPORTED_CLAIM
+
+
 def test_rejects_uncited_answer_content_and_partial_word_support() -> None:
     record = _record(text="The internet service remains available.")
     extra_content = _answer(record).model_copy(

@@ -18,6 +18,7 @@ from pydantic import (
     model_validator,
 )
 
+from .answering import claim_identifies_selected_item
 from .contracts import (
     ConversationTurn,
     OptionalAssistance,
@@ -76,6 +77,10 @@ _WEB_RESOURCE_CUE_TOKENS = frozenset(
     }
 )
 _CLAIM_SEGMENT_PATTERN = re.compile(r"(?:\n+|;+|(?<!\d)[.!?]+|[.!?]+(?!\d))")
+_LETTER_PATTERN = re.compile(r"[^\W\d_]", flags=re.UNICODE)
+_BRACKETED_SPAN_PATTERN = re.compile(r"\([^()]*\)|\[[^\[\]]*\]|\{[^{}]*\}")
+# Private-use stand-ins keep bracketed punctuation out of the sentence splitter.
+_PROTECTED_PUNCTUATION = {";": "\ue001", ".": "\ue002", "!": "\ue003", "?": "\ue004"}
 _EXPLICIT_RESEARCH_REQUEST_PATTERN = re.compile(
     r"\A(?:(?:please|kindly)\s+)?"
     r"(?:(?:can|could|would)\s+you\s+(?:(?:please|kindly)\s+)?)?"
@@ -623,8 +628,23 @@ class AnswerScopePolicy:
         for citation in answer.citations:
             if citation.evidence_id in verified_evidence_ids:
                 continue
+            # The claim as a whole must be firmly on topic, and then every
+            # content-bearing sentence in it must still touch that topic. Judging
+            # each sentence alone at full strength rejects ordinary quoted prose,
+            # where a following sentence carries the subject as a pronoun.
+            if not _claim_stays_scoped(
+                request=request,
+                answer_focus=answer_focus,
+                claim=citation.claim,
+            ):
+                raise PlanningPolicyError(
+                    "answer claim must stay scoped to the research request"
+                )
             for segment in _claim_segments(citation.claim):
-                if not segment.strip():
+                # A footnote marker or a bare number holds no topic of its own and
+                # cannot name a target, so such a segment carries nothing to keep
+                # in scope. The dotted-acronym check skips these parts too.
+                if not _topic_bearing_tokens(segment):
                     continue
                 if not _claim_segment_stays_scoped(
                     request=request,
@@ -805,7 +825,41 @@ def _stays_scoped(
 
 def _claim_segments(claim: str) -> list[str]:
     protected = _DOTTED_ACRONYM_PATTERN.sub(_DOTTED_ACRONYM_BOUNDARY, claim)
-    return _CLAIM_SEGMENT_PATTERN.split(protected)
+    protected = _BRACKETED_SPAN_PATTERN.sub(_protected_bracketed_span, protected)
+    return [
+        _restored_punctuation(segment)
+        for segment in _CLAIM_SEGMENT_PATTERN.split(protected)
+    ]
+
+
+def _protected_bracketed_span(match: re.Match[str]) -> str:
+    # A parenthetical aside, a pronunciation or a footnote marker is part of the
+    # sentence around it, so its punctuation never ends a sentence. Judging such
+    # a fragment as its own sentence would reject verbatim encyclopedic prose.
+    span = match.group()
+    for character, replacement in _PROTECTED_PUNCTUATION.items():
+        span = span.replace(character, replacement)
+    return span
+
+
+def _restored_punctuation(segment: str) -> str:
+    for character, replacement in _PROTECTED_PUNCTUATION.items():
+        segment = segment.replace(replacement, character)
+    return segment
+
+
+def _claim_stays_scoped(*, request: str, answer_focus: str, claim: str) -> bool:
+    return any(
+        _stays_scoped(request=scope, candidate=claim, min_shared_tokens=2)
+        for scope in (request, answer_focus)
+    )
+
+
+def _topic_bearing_tokens(text: str) -> set[str]:
+    # A token without a letter is a footnote number or a bare figure, never a topic.
+    return {
+        token for token in _meaningful_tokens(text) if _LETTER_PATTERN.search(token)
+    }
 
 
 def _claim_segment_stays_scoped(
@@ -813,7 +867,7 @@ def _claim_segment_stays_scoped(
 ) -> bool:
     scopes = (request, answer_focus)
     if not any(
-        _stays_scoped(request=scope, candidate=segment, min_shared_tokens=2)
+        _stays_scoped(request=scope, candidate=segment, min_shared_tokens=1)
         for scope in scopes
     ):
         return False
@@ -822,7 +876,7 @@ def _claim_segment_stays_scoped(
     adjacent_text = (
         part
         for part in segment.split(_DOTTED_ACRONYM_BOUNDARY)
-        if _meaningful_tokens(part)
+        if _topic_bearing_tokens(part)
     )
     return all(
         any(
@@ -851,12 +905,7 @@ def _verified_positional_evidence_ids(
         record = indexed_records.get(citation.evidence_id)
         if record is None or str(citation.source_url) != record.source_url:
             continue
-        claim = _normalized_exact_text(citation.claim)
-        if any(
-            chunk.section is not None
-            and _normalized_exact_text(chunk.section) == claim
-            for chunk in record.selected_chunks
-        ):
+        if claim_identifies_selected_item(record, citation.claim):
             verified_ids.add(citation.evidence_id)
     return frozenset(verified_ids)
 
@@ -868,10 +917,6 @@ def _meaningful_tokens(text: str) -> set[str]:
 def _normalized_policy_text(text: str) -> str:
     normalized = unicodedata.normalize("NFKC", text).casefold()
     return " ".join(_POLICY_WORD_PATTERN.findall(normalized))
-
-
-def _normalized_exact_text(text: str) -> str:
-    return " ".join(unicodedata.normalize("NFKC", text).split())
 
 
 def _explicitly_requests_research(request: str) -> bool:

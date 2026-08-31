@@ -237,9 +237,20 @@ class ScopedAnswer(StrictModel):
 
     @model_validator(mode="after")
     def require_unique_citations(self) -> ScopedAnswer:
-        citation_ids = {citation.evidence_id for citation in self.citations}
-        if len(citation_ids) != len(self.citations):
-            msg = "citation evidence ids must be unique"
+        # One evidence record carries exactly one provenance, but it can support
+        # several distinct claims, so identity is the claim plus its evidence.
+        provenance: dict[str, str] = {}
+        for citation in self.citations:
+            source_url = str(citation.source_url)
+            recorded = provenance.setdefault(citation.evidence_id, source_url)
+            if recorded != source_url:
+                msg = "citation evidence ids must keep one source URL"
+                raise ValueError(msg)
+        identities = {
+            (citation.claim, citation.evidence_id) for citation in self.citations
+        }
+        if len(identities) != len(self.citations):
+            msg = "citation claims must be unique per evidence id"
             raise ValueError(msg)
         return self
 

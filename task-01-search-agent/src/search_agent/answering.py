@@ -116,9 +116,8 @@ class AnswerValidator:
                     AbstentionReason.CLAIM_NOT_IN_ANSWER,
                     "citation claim does not occur in the answer",
                 )
-            if require_selected_section_claims and not any(
-                chunk.section is not None and _normalize(chunk.section) == claim
-                for chunk in record.selected_chunks
+            if require_selected_section_claims and not claim_identifies_selected_item(
+                record, claim
             ):
                 raise AnswerAbstained(
                     AbstentionReason.UNSUPPORTED_CLAIM,
@@ -253,6 +252,33 @@ class AnswerValidator:
             records[evidence_id] = record
             hashes[content_hash] = source_text
         return records
+
+
+def claim_identifies_selected_item(record: EvidenceRecord, claim: str) -> bool:
+    """Confirm a claim is verbatim selected-chunk text naming its structured item.
+
+    Positional retrieval deliberately selects the chunk group whose text carries a
+    prefix, a list date for example, ahead of the item's section title, so exact
+    equality with the section would reject the selection the ranker just made.
+    Requiring verbatim selected-chunk text that still contains a selected section
+    keeps the claim pinned to that one item without inventing support.
+    """
+    normalized_claim = _normalize(claim)
+    sections: list[str] = []
+    for chunk in record.selected_chunks:
+        if chunk.section is None:
+            continue
+        section = _normalize(chunk.section)
+        if section:
+            sections.append(section)
+    if not sections:
+        return False
+    if normalized_claim in sections:
+        return True
+    selected_text = _normalize(" ".join(chunk.text for chunk in record.selected_chunks))
+    return _contains_exact_text(selected_text, normalized_claim) and any(
+        _contains_exact_text(normalized_claim, section) for section in sections
+    )
 
 
 def _normalize(value: str) -> str:

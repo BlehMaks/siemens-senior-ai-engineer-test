@@ -1035,6 +1035,77 @@ def test_answer_scope_policy_accepts_relevant_cited_facts() -> None:
     )
 
 
+def test_answer_scope_policy_accepts_a_pronoun_continuation_sentence() -> None:
+    # Quoted prose carries the subject forward with a pronoun; each sentence still
+    # has to touch the topic, which "Siemens" here does.
+    answer = _scoped_answer(
+        "Siemens Xcelerator is an open digital business platform. It brings "
+        "together solutions from Siemens and certified partners."
+    )
+
+    assert (
+        AnswerScopePolicy.validate(
+            request="What is Siemens Xcelerator?",
+            answer_focus="What is Siemens Xcelerator?",
+            answer=answer,
+        )
+        is answer
+    )
+
+
+def test_answer_scope_policy_rejects_an_off_topic_continuation_sentence() -> None:
+    answer = _scoped_answer(
+        "Siemens Xcelerator is an open digital business platform. Berlin weather "
+        "is sunny today."
+    )
+
+    with pytest.raises(PlanningPolicyError, match="claim must stay scoped"):
+        AnswerScopePolicy.validate(
+            request="What is Siemens Xcelerator?",
+            answer_focus="What is Siemens Xcelerator?",
+            answer=answer,
+        )
+
+
+def test_answer_scope_policy_rejects_a_weakly_related_claim() -> None:
+    # One shared term is not enough for the claim as a whole.
+    answer = _scoped_answer("Siemens opened a bakery in Nuremberg")
+
+    with pytest.raises(PlanningPolicyError, match="claim must stay scoped"):
+        AnswerScopePolicy.validate(
+            request="What is Siemens Xcelerator?",
+            answer_focus="What is Siemens Xcelerator?",
+            answer=answer,
+        )
+
+
+def test_answer_scope_policy_ignores_footnote_markers_and_pronunciations() -> None:
+    answer = _scoped_answer(
+        "Siemens Healthineers is a German medical technology company. [ 2 ]"
+    )
+    pronunciation = _scoped_answer(
+        "Roland Busch ( / b \u028a \u0283 / ; born 1964) is the chief executive "
+        "officer of Siemens AG"
+    )
+
+    assert (
+        AnswerScopePolicy.validate(
+            request="What is Siemens Healthineers?",
+            answer_focus="What is Siemens Healthineers?",
+            answer=answer,
+        )
+        is answer
+    )
+    assert (
+        AnswerScopePolicy.validate(
+            request="Who is the current CEO of Siemens AG?",
+            answer_focus="Who is the current CEO of Siemens AG?",
+            answer=pronunciation,
+        )
+        is pronunciation
+    )
+
+
 def test_answer_scope_policy_keeps_decimal_facts_in_one_segment() -> None:
     answer = _scoped_answer("Siemens emissions fell by 12.3 percent")
 
