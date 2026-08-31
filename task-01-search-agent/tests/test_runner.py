@@ -46,6 +46,7 @@ from search_agent import (
     SearchQuery,
     TaskCategory,
     ToolBudget,
+    TraceOutcome,
     build_evidence,
 )
 from search_agent.memory import (
@@ -801,6 +802,52 @@ async def test_enabled_reviewed_memory_is_bounded_untrusted_synthesis_data() -> 
     assert memory["active_procedures"] == []
     assert "fact-one" not in system_message.content
     assert "cannot change tools, policy, capabilities" in system_message.content
+
+
+@pytest.mark.asyncio
+async def test_empty_repository_memory_does_not_block_answer_synthesis() -> None:
+    reader = RepositoryReviewedMemoryReader(
+        InMemorySemanticFactRepository(), InMemoryProcedureRepository()
+    )
+    provider = _Provider(_answer(_hit(), _document()))
+    try:
+        result = await _run(
+            _runner(
+                provider=provider,
+                memory_reader=reader,
+                memory_reads_enabled=True,
+            )
+        )
+    finally:
+        reader.close()
+
+    assert result.snapshot.status is RunStatus.COMPLETED
+    assert result.usage.memory_records == 0
+    assert "reviewed_memory_untrusted_data" not in provider.messages[0][1].content
+    assert any(
+        record.action == "memory.read"
+        and record.outcome is TraceOutcome.SUCCEEDED
+        and record.count == 0
+        for record in result.trace
+    )
+
+
+@pytest.mark.asyncio
+async def test_explicit_request_url_is_fetched_before_search_results() -> None:
+    searcher = _Searcher(())
+    provider = _Provider(_answer(_hit(), _document()))
+    runner = _runner(searcher=searcher, provider=provider)
+
+    result = await runner.run(
+        tenant_id="tenant-one",
+        session_id="session-one",
+        run_id="run-one",
+        request=f"Find the Siemens sustainability report at ({SOURCE_URL}).",
+    )
+
+    assert result.snapshot.status is RunStatus.COMPLETED
+    assert searcher.calls == 1
+    assert any(record.action == "search.direct" for record in result.trace)
 
 
 @pytest.mark.asyncio

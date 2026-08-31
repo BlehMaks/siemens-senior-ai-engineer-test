@@ -141,6 +141,18 @@ async def test_context_exposes_only_bounded_answer_data() -> None:
     assert not hasattr(RepositoryReviewedMemoryReader, "propose")
 
 
+@pytest.mark.asyncio
+async def test_empty_repository_context_preserves_its_revision_when_revalidated() -> (
+    None
+):
+    with RepositoryReviewedMemoryReader(
+        InMemorySemanticFactRepository(), InMemoryProcedureRepository()
+    ) as reader:
+        context = await reader.read_active(tenant_id="tenant-one", at=NOW)
+
+    assert context.revalidated_copy() == context
+
+
 @pytest.mark.parametrize(
     ("facts", "procedures"),
     (

@@ -207,12 +207,15 @@ class ReviewedMemoryContext(StrictModel):
             )
             for fact in self.facts
         )
-        return ReviewedMemoryContext(
+        checked = ReviewedMemoryContext(
             tenant_id=self.tenant_id,
             observed_at=self.observed_at,
             facts=facts,
             procedures=(),
         )
+        checked._activation_revision = self._activation_revision
+        checked._validate_records()
+        return checked
 
     def to_untrusted_payload(self) -> dict[str, object]:
         return {
