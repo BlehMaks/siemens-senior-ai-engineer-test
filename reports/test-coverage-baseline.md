@@ -4,7 +4,7 @@ On 2026-08-31, the repository was re-measured after the Tasks 1-6 submission
 cleanup with the deterministic full-suite command flow rooted at
 `make coverage-report` and a clean comparison snapshot of `origin/master`
 (`b2256a1`). The current `HEAD` evidence comes from
-`/private/tmp/siemens-current-coverage.json`; the baseline evidence comes from
+`/private/tmp/siemens-final-coverage.json`; the baseline evidence comes from
 `/private/tmp/siemens-origin-coverage.json`.
 
 Definitions used below:
@@ -24,10 +24,10 @@ change.
 
 | Scope | Statements | Branches | Combined coverage context | Notes |
 |---|---:|---:|---:|---|
-| Repository audits (`scripts/`) | 88.03% (544/618) | 84.23% (283/336) | 86.17% weighted by coverage.py internals | Audit and submission helpers are measured together |
+| Repository audits (`scripts/`) | 88.03% (544/618) | 84.23% (283/336) | 86.69% weighted by coverage.py internals | Audit and submission helpers are measured together |
 | Task 1 | 87.54% (4,428/5,058) | 70.86% (1,077/1,520) | 83.69% weighted by coverage.py internals | Large trace, memory, and retrieval surface dominates remaining misses |
 | Task 2 | 89.03% (4,293/4,822) | 72.75% (1,113/1,530) | 85.11% weighted by coverage.py internals | Storage, cloud-state, and schema branches drive the remainder |
-| Task 3 | 94.71% (376/397) | 80.26% (61/76) | 92.09% weighted by coverage.py internals | Remaining misses are in deployment helper edge paths |
+| Task 3 | 94.71% (376/397) | 80.26% (61/76) | 92.39% weighted by coverage.py internals | Remaining misses are in deployment helper edge paths |
 | Task 4 | 100.00% (946/946) | 100.00% (214/214) | 100.00% | Three owner-private-data checks stay skipped unless `SIEMENS_TASK4_INPUT_DIR` is supplied |
 | Task 5 | 100.00% (1,345/1,345) | 100.00% (396/396) | 100.00% | Fully covered in public deterministic scope |
 | Task 6 | 100.00% (660/660) | 100.00% (202/202) | 100.00% | Fully covered in public deterministic scope |
