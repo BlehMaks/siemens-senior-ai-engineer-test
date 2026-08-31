@@ -4,7 +4,7 @@ A small LLM agent that answers questions beyond the model's embedded knowledge b
 searching the live web, reading the pages it finds, and writing an answer in its
 own words with the sources it actually opened.
 
-It runs entirely locally against Ollama. One file, ~320 lines, and it reuses the
+It runs entirely locally against Ollama. One file, under 400 lines, and it reuses the
 two dependencies this workspace already has.
 
 It sits beside the bounded research agent in [`../README.md`](../README.md),
