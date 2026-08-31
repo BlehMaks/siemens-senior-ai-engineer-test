@@ -221,6 +221,49 @@ async def test_real_runtime_answers_greeting_without_search_or_fetch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_adversarial_cloud_trace_records_model_transport_profile() -> None:
+    async def model_handler(request: httpx.Request) -> httpx.Response:
+        return _ollama_response(
+            {
+                "task_category": "direct_reply",
+                "requires_search": False,
+                "answer_focus": "Hello there",
+                "query_plan": None,
+                "assistance": None,
+            }
+        )
+
+    origin = "https://model.example"
+    executor = OllamaResearchExecutor(
+        settings=OllamaRuntimeSettings(
+            model_name="test-model",
+            base_url=origin,
+            transport_profile="cloud",
+            google_id_token_audience=origin,
+        ),
+        model_transport=httpx.MockTransport(model_handler),
+        model_auth=httpx.BasicAuth("unused", "unused"),
+        search_backend_factory=lambda: _SearchBackend(()),
+        fetch_client_factory=lambda: httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(500))
+        ),
+        resolver=_Resolver(),
+    )
+
+    result = await executor.run(
+        tenant_id="tenant-one",
+        session_id="session-one",
+        run_id="run-one",
+        request="Hello there",
+    )
+
+    assert any(
+        record.action == "model.transport" and record.profile == "cloud"
+        for record in result.trace
+    )
+
+
+@pytest.mark.asyncio
 async def test_real_runtime_searches_fetches_extracts_and_synthesizes() -> None:
     claim = "Siemens reduced operational emissions by 20 percent."
     source_url = "https://example.com/report"

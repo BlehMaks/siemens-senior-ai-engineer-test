@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -361,13 +363,31 @@ async def test_success_runs_every_state_and_reports_bounded_usage() -> None:
         "fetch",
         "extract",
         "rank",
+        "rank",
         "synthesize",
         "validate",
         "final",
     ]
+    assert [
+        record.action for record in result.trace if record.stage.value == "rank"
+    ] == [
+        "rank.context",
+        "rank.chunk",
+    ]
     serialized_trace = json.dumps(result.model_dump(mode="json")["trace"])
     assert "Find the Siemens" not in serialized_trace
     assert SOURCE_URL not in serialized_trace
+
+
+@pytest.mark.asyncio
+async def test_adversarial_live_action_log_does_not_emit_raw_run_id(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.INFO, logger="search_agent.actions"):
+        await _run(_runner())
+
+    serialized = "\n".join(record.message for record in caplog.records)
+    assert "run-one" not in serialized
 
 
 @pytest.mark.asyncio
@@ -424,6 +444,128 @@ async def test_synthesis_receives_ranked_late_document_quotes() -> None:
     evidence = synthesis_payload["evidence_records_untrusted_data"][0]
     assert evidence["excerpt"].startswith("General report background")
     assert evidence["quotes"][0] == late_fact
+
+
+@pytest.mark.asyncio
+async def test_adversarial_synthesis_keeps_selected_pdf_location_provenance() -> None:
+    introduction = "General report background without the requested measurement."
+    late_fact = "Siemens Scope 3 emissions were 14.7 million tonnes CO2e in 2025."
+    document = ExtractedDocument(
+        canonical_url=SOURCE_URL,
+        title=SOURCE_TITLE,
+        text=f"{introduction}\n\n{late_fact}",
+        media_type="application/pdf",
+        blocks=(
+            ExtractedBlock(text=introduction, page_number=1),
+            ExtractedBlock(
+                text=late_fact,
+                page_number=42,
+                section="Scope 3 Emissions",
+                table_index=1,
+            ),
+        ),
+    )
+    hit = _hit()
+    provider = _Provider(_answer(hit, document, claim=late_fact))
+    decision = _plan().model_copy(
+        update={
+            "answer_focus": "Siemens Scope 3 emissions in 2025",
+            "query_plan": QueryPlan(
+                tool_budget=ToolBudget(max_search_queries=1, max_fetches=1),
+                searches=(
+                    SearchQuery(
+                        text="Siemens Scope 3 emissions 2025",
+                        max_results=1,
+                    ),
+                ),
+            ),
+        }
+    )
+    fetched = FetchedDocument(
+        canonical_url=SOURCE_URL,
+        content_type="application/pdf",
+        body=b"bounded-pdf-fixture",
+    )
+    runner = _runner(
+        planner=_Planner(decision=decision),
+        fetcher=_Fetcher({SOURCE_URL: fetched}),
+        extractor=_Extractor({SOURCE_URL: document}),
+        provider=provider,
+    )
+
+    result = await runner.run(
+        tenant_id="tenant-one",
+        session_id="session-one",
+        run_id="run-one",
+        request="What were Siemens Scope 3 emissions in 2025?",
+    )
+
+    assert result.snapshot.status is RunStatus.COMPLETED
+    synthesis_payload = provider.messages[0][1].content
+    assert '"page_number":42' in synthesis_payload
+    assert '"section":"Scope 3 Emissions"' in synthesis_payload
+    assert '"table_index":1' in synthesis_payload
+
+
+@pytest.mark.asyncio
+async def test_adversarial_trace_identifies_the_selected_pdf_chunk() -> None:
+    late_fact = "Siemens Scope 3 emissions were 14.7 million tonnes CO2e in 2025."
+    document = ExtractedDocument(
+        canonical_url=SOURCE_URL,
+        title=SOURCE_TITLE,
+        text=late_fact,
+        media_type="application/pdf",
+        blocks=(
+            ExtractedBlock(
+                text=late_fact,
+                page_number=42,
+                section="Scope 3 Emissions",
+                table_index=1,
+            ),
+        ),
+    )
+    hit = _hit()
+    provider = _Provider(_answer(hit, document, claim=late_fact))
+    decision = _plan().model_copy(
+        update={
+            "answer_focus": "Siemens Scope 3 emissions in 2025",
+            "query_plan": QueryPlan(
+                tool_budget=ToolBudget(max_search_queries=1, max_fetches=1),
+                searches=(
+                    SearchQuery(
+                        text="Siemens Scope 3 emissions 2025",
+                        max_results=1,
+                    ),
+                ),
+            ),
+        }
+    )
+    runner = _runner(
+        planner=_Planner(decision=decision),
+        fetcher=_Fetcher(
+            {
+                SOURCE_URL: FetchedDocument(
+                    canonical_url=SOURCE_URL,
+                    content_type="application/pdf",
+                    body=b"bounded-pdf-fixture",
+                )
+            }
+        ),
+        extractor=_Extractor({SOURCE_URL: document}),
+        provider=provider,
+    )
+
+    result = await runner.run(
+        tenant_id="tenant-one",
+        session_id="session-one",
+        run_id="run-one",
+        request="What were Siemens Scope 3 emissions in 2025?",
+    )
+
+    payload = json.loads(provider.messages[0][1].content)
+    chunk_id = payload["evidence_records_untrusted_data"][0]["locations"][0]["chunk_id"]
+    safe_chunk_id = hashlib.sha256(chunk_id.encode()).hexdigest()[:24]
+    assert any(record.safe_id == safe_chunk_id for record in result.trace)
 
 
 @pytest.mark.asyncio

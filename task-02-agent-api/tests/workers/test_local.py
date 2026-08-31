@@ -387,6 +387,18 @@ class SessionRunRepository(FakeRunRepository):
         return tuple(selected[:limit])
 
 
+class RecentWindowRunRepository(SessionRunRepository):
+    async def list_session_recent(
+        self, *, tenant_id: OpaqueId, session_id: OpaqueId, limit: int = 100
+    ) -> tuple[RunRecord, ...]:
+        selected = await self.list_session(
+            tenant_id=tenant_id,
+            session_id=session_id,
+            limit=100,
+        )
+        return selected[-limit:]
+
+
 @dataclass(slots=True)
 class ContextExecutor:
     result: RunResult
@@ -504,6 +516,109 @@ async def test_context_executor_receives_only_prior_completed_same_session_turns
                 answer="Siemens published its sustainability report for 2025.",
             ),
         )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_adversarial_context_uses_six_most_recent_completed_turns() -> None:
+    prior_runs = []
+    for index in range(8):
+        prior_runs.append(
+            RunRecord(
+                tenant_id="tenant-one",
+                session_id="session-one",
+                run_id=f"run-prior-{index}",
+                generation_id=f"generation-prior-{index}",
+                idempotency_key=f"request-key-prior-{index}",
+                query=f"Research Siemens topic number {index}",
+                state=RunState.COMPLETED,
+                version=1,
+                delivery_attempts=1,
+                created_at=NOW - timedelta(minutes=20 - index),
+                updated_at=NOW - timedelta(minutes=19 - index),
+                terminal_at=NOW - timedelta(minutes=19 - index),
+                answer=ScopedAnswer(
+                    answer_text=f"Completed Siemens answer number {index}.",
+                    citations=(),
+                ),
+            )
+        )
+    current = queued_run().model_copy(update={"created_at": NOW, "updated_at": NOW})
+    repository = SessionRunRepository(*prior_runs, current)
+    executor = ContextExecutor(result=completed_result())
+    worker = LocalWorker(
+        repository=cast(RunRepository, repository),
+        queue=FakeQueue(work_item()),
+        executor=executor,
+        worker_id="worker-one",
+        clock=MutableClock(NOW),
+        lease_id_factory=lambda: "lease-one",
+    )
+
+    await worker._invoke_executor(current)
+
+    assert [turn.request for turn in executor.contexts[0]] == [
+        f"Research Siemens topic number {index}" for index in range(2, 8)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_adversarial_recent_failures_do_not_evict_completed_context() -> None:
+    completed = [
+        RunRecord(
+            tenant_id="tenant-one",
+            session_id="session-one",
+            run_id=f"run-completed-{index}",
+            generation_id=f"generation-completed-{index}",
+            idempotency_key=f"request-key-completed-{index}",
+            query=f"Research completed Siemens topic {index}",
+            state=RunState.COMPLETED,
+            version=1,
+            delivery_attempts=1,
+            created_at=NOW - timedelta(minutes=20 - index),
+            updated_at=NOW - timedelta(minutes=19 - index),
+            terminal_at=NOW - timedelta(minutes=19 - index),
+            answer=ScopedAnswer(
+                answer_text=f"Completed Siemens answer {index}.",
+                citations=(),
+            ),
+        )
+        for index in range(6)
+    ]
+    failed = [
+        RunRecord(
+            tenant_id="tenant-one",
+            session_id="session-one",
+            run_id=f"run-failed-{index}",
+            generation_id=f"generation-failed-{index}",
+            idempotency_key=f"request-key-failed-{index}",
+            query=f"Failed Siemens topic {index}",
+            state=RunState.FAILED,
+            version=1,
+            delivery_attempts=1,
+            created_at=NOW - timedelta(minutes=6 - index),
+            updated_at=NOW - timedelta(minutes=5 - index),
+            terminal_at=NOW - timedelta(minutes=5 - index),
+            failure_code=RunFailureCode.EXECUTION_FAILED,
+        )
+        for index in range(6)
+    ]
+    current = queued_run().model_copy(update={"created_at": NOW, "updated_at": NOW})
+    repository = RecentWindowRunRepository(*completed, *failed, current)
+    executor = ContextExecutor(result=completed_result())
+    worker = LocalWorker(
+        repository=cast(RunRepository, repository),
+        queue=FakeQueue(work_item()),
+        executor=executor,
+        worker_id="worker-one",
+        clock=MutableClock(NOW),
+        lease_id_factory=lambda: "lease-one",
+    )
+
+    await worker._invoke_executor(current)
+
+    assert [turn.request for turn in executor.contexts[0]] == [
+        f"Research completed Siemens topic {index}" for index in range(6)
     ]
 
 
