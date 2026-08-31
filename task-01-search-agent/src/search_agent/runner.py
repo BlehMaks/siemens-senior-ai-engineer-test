@@ -101,9 +101,12 @@ _SYNTHESIS_SYSTEM_PROMPT = (
     "single string in that record's quotes array. Keep every character of the "
     "span, including spacing, punctuation, brackets and footnote markers. Never "
     "reword, summarize, translate, tidy, join two quotes, or drop a middle part. "
-    "Prefer one shortest span that answers the request and satisfies the sentence "
-    "rule above; cite the same record again with a different span only when one "
-    "span is not enough. Set answer_text to those claims joined in citation order. "
+    "The quotes array lists whole passages and also their individual sentences. "
+    "Pick the single shortest entry that answers the request and satisfies the "
+    "sentence rule above, which is normally one sentence, never a long "
+    "multi-sentence passage carrying sentences that do not name the subject. "
+    "Cite the same record again with a different span only when one span is not "
+    "enough. Set answer_text to those claims joined in citation order. "
     "Always return at least one citation."
 )
 _SYNTHESIS_ATTEMPTS = 2
@@ -1302,7 +1305,7 @@ class ResearchRunner:
                     if record.selected_chunks
                     else record.public.summary
                 ),
-                "quotes": list(record.public.quotes),
+                "quotes": _citable_spans(record.public.quotes),
                 "locations": [
                     {
                         "chunk_id": chunk.chunk_id,
@@ -1526,6 +1529,30 @@ def _correction_for(error: BaseException) -> str | None:
     if isinstance(error, ProviderResponseError):
         return _CONTRACT_CORRECTION
     return None
+
+
+_QUOTE_SENTENCE_PATTERN = re.compile(r"[^.!?]+(?:[.!?]+|\Z)", flags=re.UNICODE)
+_MIN_CITABLE_SENTENCE_CHARS = 40
+
+
+def _citable_spans(quotes: Sequence[str]) -> list[str]:
+    """Offer each quote and its individual sentences as citation candidates.
+
+    Every sentence is a substring of the quote it came from, so the validator's
+    verbatim-containment rule is unchanged. Offering them separately is what
+    stops a model from copying a whole 400-character quote whose trailing
+    sentences wander off the request and get the answer rejected as out of scope.
+    """
+    spans: list[str] = []
+    seen: set[str] = set()
+    for quote in quotes:
+        for candidate in (quote, *_QUOTE_SENTENCE_PATTERN.findall(quote)):
+            span = candidate.strip()
+            if len(span) < _MIN_CITABLE_SENTENCE_CHARS or span in seen:
+                continue
+            seen.add(span)
+            spans.append(span)
+    return spans
 
 
 def _rendered_answer(answer: ScopedAnswer) -> ScopedAnswer:

@@ -13,6 +13,7 @@ from search_agent.planning import (
     is_conversational_request,
 )
 from search_agent.providers import FakeStructuredChatProvider
+from search_agent.runner import _citable_spans
 from search_agent.tools.search import search_text_for
 
 
@@ -96,3 +97,22 @@ def test_search_text_stays_a_subset_of_the_request() -> None:
 
 def test_search_text_survives_an_all_common_word_request() -> None:
     assert search_text_for("what is it?") == "what is it"
+
+
+def test_citable_spans_offer_each_sentence_of_a_quote() -> None:
+    quote = (
+        "Munich currently reports 18 degrees Celsius with light rain. "
+        "The forecast for tomorrow is dry and sunny all day long."
+    )
+
+    spans = _citable_spans((quote,))
+
+    assert quote in spans
+    assert "Munich currently reports 18 degrees Celsius with light rain." in spans
+    assert "The forecast for tomorrow is dry and sunny all day long." in spans
+    # Every offered span stays a verbatim substring, so the validator is unchanged.
+    assert all(span in quote for span in spans)
+
+
+def test_citable_spans_drop_fragments_too_short_to_carry_a_claim() -> None:
+    assert _citable_spans(("Yes. No. Maybe.",)) == []
