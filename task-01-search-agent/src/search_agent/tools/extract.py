@@ -303,14 +303,22 @@ class _HTMLTableParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.tables: list[str] = []
+        self._suppressed_depth = 0
         self._table_depth = 0
         self._rows: list[list[str]] = []
         self._row: list[str] | None = None
         self._cell_parts: list[str] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        del attrs
         tag = tag.lower()
+        if self._suppressed_depth:
+            if tag not in _VOID_HTML_TAGS:
+                self._suppressed_depth += 1
+            return
+        if _starts_suppressed_html(tag, attrs):
+            if tag not in _VOID_HTML_TAGS:
+                self._suppressed_depth = 1
+            return
         if tag == "table":
             self._table_depth += 1
             if self._table_depth == 1:
@@ -329,6 +337,10 @@ class _HTMLTableParser(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
+        if self._suppressed_depth:
+            if tag not in _VOID_HTML_TAGS:
+                self._suppressed_depth -= 1
+            return
         if self._table_depth == 1 and tag in {"td", "th"}:
             if self._row is not None and self._cell_parts is not None:
                 cell = _space_normalized(" ".join(self._cell_parts))
@@ -354,22 +366,26 @@ class _HTMLTableParser(HTMLParser):
 
 class _HTMLBlockParser(HTMLParser):
     _BLOCK_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6", "li", "p", "pre"})
-    _IGNORED_TAGS = frozenset({"script", "style"})
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.blocks: list[ExtractedBlock] = []
-        self._ignored_depth = 0
+        self._suppressed_depth = 0
         self._active_tag: str | None = None
         self._parts: list[str] = []
         self._section: str | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        del attrs
         tag = tag.lower()
-        if tag in self._IGNORED_TAGS:
-            self._ignored_depth += 1
-        if self._ignored_depth or tag not in self._BLOCK_TAGS:
+        if self._suppressed_depth:
+            if tag not in _VOID_HTML_TAGS:
+                self._suppressed_depth += 1
+            return
+        if _starts_suppressed_html(tag, attrs):
+            if tag not in _VOID_HTML_TAGS:
+                self._suppressed_depth = 1
+            return
+        if tag not in self._BLOCK_TAGS:
             return
         if self._active_tag is not None:
             self._finish_block()
@@ -377,15 +393,16 @@ class _HTMLBlockParser(HTMLParser):
         self._parts = []
 
     def handle_data(self, data: str) -> None:
-        if not self._ignored_depth and self._active_tag is not None:
+        if not self._suppressed_depth and self._active_tag is not None:
             self._parts.append(data)
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
-        if tag in self._IGNORED_TAGS and self._ignored_depth:
-            self._ignored_depth -= 1
+        if self._suppressed_depth:
+            if tag not in _VOID_HTML_TAGS:
+                self._suppressed_depth -= 1
             return
-        if not self._ignored_depth and tag == self._active_tag:
+        if tag == self._active_tag:
             self._finish_block()
 
     def close(self) -> None:
@@ -402,6 +419,49 @@ class _HTMLBlockParser(HTMLParser):
             self.blocks.append(ExtractedBlock(text=text, section=self._section))
         self._active_tag = None
         self._parts = []
+
+
+_VOID_HTML_TAGS = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "source",
+        "track",
+        "wbr",
+    }
+)
+_NON_VISIBLE_HTML_TAGS = frozenset({"script", "style", "template", "noscript"})
+
+
+def _starts_suppressed_html(tag: str, attrs: list[tuple[str, str | None]]) -> bool:
+    if tag in _NON_VISIBLE_HTML_TAGS:
+        return True
+    for raw_name, raw_value in attrs:
+        name = raw_name.casefold()
+        if name in {"hidden", "inert"}:
+            return True
+        value = (raw_value or "").strip().casefold()
+        if name == "aria-hidden" and value == "true":
+            return True
+        if name != "style":
+            continue
+        for declaration in value.split(";"):
+            property_name, separator, property_value = declaration.partition(":")
+            checked_value = property_value.split("!", 1)[0].strip()
+            if separator and (
+                (property_name.strip() == "display" and checked_value == "none")
+                or (property_name.strip() == "visibility" and checked_value == "hidden")
+            ):
+                return True
+    return False
 
 
 def _extract_html_tables(body: bytes) -> tuple[str, ...]:

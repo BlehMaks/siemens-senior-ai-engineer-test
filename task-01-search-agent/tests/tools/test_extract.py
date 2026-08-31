@@ -141,6 +141,35 @@ def test_appends_visible_headings_missed_by_main_content_extraction(
     )
 
 
+@pytest.mark.parametrize(
+    "hidden_markup",
+    [
+        "<div hidden><h3>Hidden nonce 71e5c4e8</h3></div>",
+        '<div aria-hidden="true"><h3>Hidden nonce 71e5c4e8</h3></div>',
+        '<div style="display: none"><h3>Hidden nonce 71e5c4e8</h3></div>',
+    ],
+)
+def test_does_not_append_non_visible_html_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+    hidden_markup: str,
+) -> None:
+    monkeypatch.setattr(
+        extract_module,
+        "bare_extraction",
+        lambda *args, **kwargs: SimpleNamespace(
+            title="Press",
+            text="Main public article content.",
+        ),
+    )
+    html = (
+        f"<article><p>Main public article content.</p></article>{hidden_markup}"
+    ).encode()
+
+    extracted = LocalExtractor().extract(_document(html))
+
+    assert "Hidden nonce 71e5c4e8" not in extracted.text
+
+
 def test_html_table_text_and_metadata_are_preserved() -> None:
     html = (_FIXTURES / "report_table.html").read_bytes()
 
