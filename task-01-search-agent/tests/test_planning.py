@@ -1048,7 +1048,7 @@ def test_answer_scope_policy_keeps_decimal_facts_in_one_segment() -> None:
     )
 
 
-def test_answer_scope_policy_accepts_verified_positional_quote() -> None:
+def test_answer_scope_policy_requires_evidence_for_positional_quote() -> None:
     request = (
         "Find and return the exact first listed headline at "
         "https://press.siemens.com/global/en dated 2026"
@@ -1065,15 +1065,13 @@ def test_answer_scope_policy_accepts_verified_positional_quote() -> None:
             answer=answer,
         )
 
-    assert (
+    with pytest.raises(PlanningPolicyError, match="claim must stay scoped"):
         AnswerScopePolicy.validate(
             request=request,
             answer_focus=request,
             answer=answer,
             verified_positional_claims=True,
         )
-        is answer
-    )
 
 
 def test_verified_positional_quote_still_rejects_instructions() -> None:

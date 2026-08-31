@@ -750,16 +750,21 @@ class ResearchRunner:
         )
         ledger.start_iteration()
         ledger.check_boundary()
+        positionally_scoped = _is_positional_request(decision.answer_focus)
         try:
-            answer = self.answer_validator.validate(answer, records, now=self._now())
+            answer = self.answer_validator.validate(
+                answer,
+                records,
+                now=self._now(),
+                require_selected_section_claims=positionally_scoped,
+            )
             scoped_request = _conversation_scope(snapshot.request, conversation_context)
             AnswerScopePolicy.validate(
                 request=scoped_request,
                 answer_focus=decision.answer_focus,
                 answer=answer,
-                verified_positional_claims=_is_positional_request(
-                    decision.answer_focus
-                ),
+                verified_positional_claims=positionally_scoped,
+                evidence=records,
             )
             AssistancePolicy.validate(
                 answer_completed=True,

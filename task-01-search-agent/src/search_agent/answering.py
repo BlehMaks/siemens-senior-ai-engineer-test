@@ -65,6 +65,7 @@ class AnswerValidator:
         evidence: Sequence[EvidenceRecord],
         *,
         now: datetime | None = None,
+        require_selected_section_claims: bool = False,
     ) -> ScopedAnswer:
         checked_answer = self._validate_answer_contract(answer)
         try:
@@ -114,6 +115,14 @@ class AnswerValidator:
                 raise AnswerAbstained(
                     AbstentionReason.CLAIM_NOT_IN_ANSWER,
                     "citation claim does not occur in the answer",
+                )
+            if require_selected_section_claims and not any(
+                chunk.section is not None and _normalize(chunk.section) == claim
+                for chunk in record.selected_chunks
+            ):
+                raise AnswerAbstained(
+                    AbstentionReason.UNSUPPORTED_CLAIM,
+                    "citation claim is not the selected structured item",
                 )
             # Exact normalized containment is deliberately conservative. It is
             # explainable and cannot turn model similarity into fabricated support.

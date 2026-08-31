@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Annotated
 
@@ -27,6 +28,7 @@ from .contracts import (
     ToolBudget,
     validate_conversation_context,
 )
+from .evidence import EvidenceRecord, EvidenceValidationError, validate_record
 from .providers import (
     ProviderMessage,
     ProviderMetadata,
@@ -56,6 +58,7 @@ _BARE_HOST_PATTERN = re.compile(
     rf"(?<![@\w]){_DOMAIN_NAME_PATTERN}(?=$|[\s,;:!?.])",
     flags=re.IGNORECASE,
 )
+_DOTTED_ACRONYM_PATTERN = re.compile(r"\b(?:[^\W\d_]\.){2,}", flags=re.UNICODE)
 _WEB_RESOURCE_CUE_TOKENS = frozenset(
     {
         "article",
@@ -588,6 +591,7 @@ class AnswerScopePolicy:
         answer_focus: str,
         answer: ScopedAnswer,
         verified_positional_claims: bool = False,
+        evidence: Sequence[EvidenceRecord] = (),
     ) -> ScopedAnswer:
         if not _stays_scoped(
             request=request,
@@ -610,11 +614,16 @@ class AnswerScopePolicy:
             and ((answer_actions | answer_targets) - request_tokens)
         ):
             raise PlanningPolicyError("answer contains unrequested instructions")
+        verified_evidence_ids = (
+            _verified_positional_evidence_ids(answer=answer, evidence=evidence)
+            if verified_positional_claims
+            else frozenset()
+        )
         for citation in answer.citations:
-            for segment in _CLAIM_SEGMENT_PATTERN.split(citation.claim):
+            if citation.evidence_id in verified_evidence_ids:
+                continue
+            for segment in _claim_segments(citation.claim):
                 if not segment.strip():
-                    continue
-                if verified_positional_claims:
                     continue
                 if not (
                     _stays_scoped(
@@ -800,6 +809,44 @@ def _stays_scoped(
     )
 
 
+def _claim_segments(claim: str) -> list[str]:
+    # Sentence punctuation is a useful boundary for scope checks, but periods in
+    # dotted acronyms such as "U.S." are not sentence boundaries.
+    protected = _DOTTED_ACRONYM_PATTERN.sub(
+        lambda match: match.group(0).replace(".", ""),
+        claim,
+    )
+    return _CLAIM_SEGMENT_PATTERN.split(protected)
+
+
+def _verified_positional_evidence_ids(
+    *,
+    answer: ScopedAnswer,
+    evidence: Sequence[EvidenceRecord],
+) -> frozenset[str]:
+    try:
+        records = tuple(evidence)
+        for checked_record in records:
+            validate_record(checked_record)
+    except (EvidenceValidationError, TypeError):
+        raise PlanningPolicyError("positional evidence failed validation") from None
+
+    indexed_records = {record.evidence_id: record for record in records}
+    verified_ids: set[str] = set()
+    for citation in answer.citations:
+        record = indexed_records.get(citation.evidence_id)
+        if record is None or str(citation.source_url) != record.source_url:
+            continue
+        claim = _normalized_exact_text(citation.claim)
+        if any(
+            chunk.section is not None
+            and _normalized_exact_text(chunk.section) == claim
+            for chunk in record.selected_chunks
+        ):
+            verified_ids.add(citation.evidence_id)
+    return frozenset(verified_ids)
+
+
 def _meaningful_tokens(text: str) -> set[str]:
     return set(_TOKEN_PATTERN.findall(text.casefold())) - _SCOPE_GENERIC_TOKENS
 
@@ -807,6 +854,10 @@ def _meaningful_tokens(text: str) -> set[str]:
 def _normalized_policy_text(text: str) -> str:
     normalized = unicodedata.normalize("NFKC", text).casefold()
     return " ".join(_POLICY_WORD_PATTERN.findall(normalized))
+
+
+def _normalized_exact_text(text: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", text).split())
 
 
 def _explicitly_requests_research(request: str) -> bool:
