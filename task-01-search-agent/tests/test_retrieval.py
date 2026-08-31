@@ -11,6 +11,7 @@ from search_agent import (
     ExtractedDocument,
     FetchedDocument,
     LocalExtractor,
+    ResearchDocument,
     SearchHit,
     SourceType,
     build_research_document,
@@ -67,6 +68,26 @@ def _document(
     )
 
 
+def _listing_document(
+    url: str, *, title: str, blocks: tuple[ExtractedBlock, ...]
+) -> ResearchDocument:
+    return build_research_document(
+        SearchHit(
+            title=title,
+            url=_URL.validate_python(url),
+            snippet="Listing page",
+            rank=1,
+        ),
+        ExtractedDocument(
+            canonical_url=url,
+            title=title,
+            text="\n\n".join(block.text for block in blocks),
+            blocks=blocks,
+        ),
+        retrieved_at=_NOW,
+    )
+
+
 def test_late_pdf_fact_is_selected_with_exact_page_and_table_provenance() -> None:
     first = retrieve_context(
         "What were Siemens Scope 3 emissions in 2025?",
@@ -119,21 +140,22 @@ def test_frozen_pdf_pipeline_selects_the_late_page_fact() -> None:
 
 def test_dated_listing_keeps_date_with_following_heading_for_ranking() -> None:
     url = "https://press.siemens.com/global/en"
-    first_headline = "Fresh nonce announcement 71e5c4e8"
+    first_headline = "H" * 241
     extracted = LocalExtractor().extract(
         FetchedDocument(
             canonical_url=url,
             content_type="text/html",
             body=(
                 "<html><head><title>Press</title></head><body><article>"
-                "<h2>Featured news</h2>"
+                "<h2>Featured news</h2><ul><li>"
                 '<span class="Date" data-original="2026-08-07">'
                 "07 August 2026</span>"
                 f"<h3>{first_headline}</h3>"
+                "</li><li>"
                 '<span class="StartDate" data-original="2026-08-06">'
                 "06 August 2026</span>"
                 "<h3>CES 2026 partnership update</h3>"
-                "</article></body></html>"
+                "</li></ul></article></body></html>"
             ).encode(),
         )
     )
@@ -153,6 +175,61 @@ def test_dated_listing_keeps_date_with_following_heading_for_ranking() -> None:
 
     assert first_headline in context.chunks[0].text
     assert context.chunks[0].text.startswith("07 August 2026")
+
+
+def test_negated_first_listed_phrase_keeps_relevance_ranking() -> None:
+    desired = "desirednonce71e5c4e8"
+    document = _listing_document(
+        "https://example.com/listing",
+        title="Listing",
+        blocks=(
+            ExtractedBlock(
+                text="31 August 2026\nIrrelevant listing heading",
+                section="Irrelevant listing heading",
+            ),
+            ExtractedBlock(text=f"Return {desired} instead."),
+        ),
+    )
+
+    context = select_context(
+        f"Do not select the first listed headline; return {desired} instead.",
+        (document,),
+        top_k=1,
+    )
+
+    assert desired in context.chunks[0].text
+
+
+def test_first_listed_phrase_targets_the_explicit_url() -> None:
+    target_url = "https://press.siemens.com/global/en"
+    unrelated = _listing_document(
+        "https://example.com/unrelated",
+        title="Unrelated listings",
+        blocks=(
+            ExtractedBlock(
+                text="31 August 2026\nUnrelated listing headline",
+                section="Unrelated listing headline",
+            ),
+        ),
+    )
+    target = _listing_document(
+        target_url,
+        title="Siemens Press",
+        blocks=(
+            ExtractedBlock(
+                text="31 August 2026\nTarget Siemens press headline",
+                section="Target Siemens press headline",
+            ),
+        ),
+    )
+
+    context = select_context(
+        f"Find and return the exact first listed headline at {target_url} dated 2026",
+        (unrelated, target),
+        top_k=1,
+    )
+
+    assert context.chunks[0].canonical_url == target_url
 
 
 def test_document_and_chunk_ids_ignore_incidental_whitespace() -> None:

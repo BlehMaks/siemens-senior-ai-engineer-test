@@ -390,10 +390,12 @@ class _HTMLBlockParser(HTMLParser):
             return
         attributes = {name.casefold(): value or "" for name, value in attrs}
         classes = set(attributes.get("class", "").casefold().split())
-        if self._active_tag is None and (
-            tag == "time"
-            or (tag == "span" and classes.intersection({"date", "startdate"}))
-        ):
+        is_date = tag == "time" or (
+            tag == "span" and classes.intersection({"date", "startdate"})
+        )
+        if is_date and (self._active_tag is None or self._active_tag == "li"):
+            if self._active_tag is not None:
+                self._finish_block()
             self._active_tag = tag
             self._active_is_date = True
             self._date_attribute = (

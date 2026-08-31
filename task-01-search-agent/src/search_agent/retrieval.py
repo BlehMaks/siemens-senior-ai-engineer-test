@@ -27,8 +27,16 @@ _MAX_QUOTE_CHARS = 400
 _MAX_CONTEXT_CHARS = 8_000
 _MAX_REQUEST_CHARS = 1_000
 _TOKEN_PATTERN = re.compile(r"[^\W_]+(?:[-./][^\W_]+)*", flags=re.UNICODE)
+_EXPLICIT_URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", flags=re.IGNORECASE)
+_FIRST_LISTED_PHRASE = (
+    r"\bfirst\s+(?:listed\s+)?(?:headline|item|entry|result|release|announcement)\b"
+)
 _FIRST_LISTED_PATTERN = re.compile(
-    r"\bfirst\s+(?:listed\s+)?(?:headline|item|entry|result|release|announcement)\b",
+    _FIRST_LISTED_PHRASE,
+    flags=re.IGNORECASE,
+)
+_NEGATED_FIRST_LISTED_PATTERN = re.compile(
+    rf"\b(?:do\s+not|don't|not|without)\b[^.!?;:]{{0,48}}{_FIRST_LISTED_PHRASE}",
     flags=re.IGNORECASE,
 )
 _AUTHORITY = {
@@ -170,13 +178,31 @@ def select_context(
             "retrieval input failed validation",
         ) from None
 
+    positional_requested = (
+        _FIRST_LISTED_PATTERN.search(request) is not None
+        and _NEGATED_FIRST_LISTED_PATTERN.search(request) is None
+    )
+    requested_resources = {
+        match.group(0).rstrip(".,;:!?)]}").rstrip("/")
+        for match in _EXPLICIT_URL_PATTERN.finditer(request)
+    }
+    applicable_documents = {
+        document.document_id
+        for document in materialized
+        if not requested_resources
+        or document.canonical_url.rstrip("/") in requested_resources
+    }
     by_content: dict[str, ResearchChunk] = {}
     positional: ResearchChunk | None = None
     for document in materialized:
         document_chunks = chunk_document(
             request, document, max_chunk_chars=max_chunk_chars
         )
-        if positional is None and _FIRST_LISTED_PATTERN.search(request):
+        if (
+            positional is None
+            and positional_requested
+            and document.document_id in applicable_documents
+        ):
             positional = min(
                 (
                     chunk
@@ -193,13 +219,12 @@ def select_context(
                 by_content[chunk.content_hash] = chunk
     ranked = sorted(by_content.values(), key=_rank_key)
     if positional is not None:
-        selected_positional = by_content[positional.content_hash]
         ranked = [
-            selected_positional,
+            positional,
             *(
                 chunk
                 for chunk in ranked
-                if chunk.content_hash != selected_positional.content_hash
+                if chunk.content_hash != positional.content_hash
             ),
         ]
     selected = tuple(ranked[:top_k])
