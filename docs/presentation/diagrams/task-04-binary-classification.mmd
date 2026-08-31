@@ -1,0 +1,21 @@
+---
+title: Task 4 - Binary classification decisions
+---
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Arial","fontSize":"18px","primaryTextColor":"#172033","lineColor":"#64748b"},"flowchart":{"curve":"linear","nodeSpacing":32,"rankSpacing":40,"htmlLabels":true}}}%%
+flowchart LR
+    I[Private files<br/>validated join and grouped split]
+    I --> BASE[Assignment baseline - default<br/>Fold-fitted CV, sklearn, OOF threshold<br/>Raw holdout metrics]:::baseline
+    BASE --> R[Versioned aggregate<br/>JSON and Markdown]:::evaluation
+    BASE -. selected OOF scores .-> CAL[Opt-in extension<br/>Sigmoid calibration and cost policy]:::extension
+    I --> DIAG[Opt-in extension<br/>Training-fitted diagnostics]:::extension
+    CAL --> Q[Optional local review queue<br/>Opaque ID, priority, reason]:::extension
+    CAL --> R
+    DIAG --> R
+    Q -. row count only .-> R
+    B[Safety boundary<br/>Train-only fit; holdout once<br/>Queue has no target or raw features]:::safety -.-> BASE
+    B -.-> Q
+
+    classDef baseline fill:#eef6ff,stroke:#2f6bff,stroke-width:2px,color:#173a7a;
+    classDef extension fill:#effaf3,stroke:#14804a,stroke-width:2px,color:#145c38;
+    classDef evaluation fill:#fff7e6,stroke:#b36b00,stroke-width:2px,color:#6f4200;
+    classDef safety fill:#fff1f0,stroke:#c73e1d,stroke-width:2px,stroke-dasharray:6 4,color:#7a271a;

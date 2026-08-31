@@ -1,0 +1,20 @@
+---
+title: Task 6 - Leakage-safe category consolidation
+---
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Arial","fontSize":"18px","primaryTextColor":"#172033","lineColor":"#64748b"},"flowchart":{"curve":"linear","nodeSpacing":32,"rankSpacing":40,"htmlLabels":true}}}%%
+flowchart LR
+    T[Training categories or DataFrame]
+    T --> BASE[Assignment baseline - default<br/>Single-column percent rule<br/>Collision-safe fallback]:::baseline
+    BASE --> R[Fixture comparison<br/>JSON and Markdown]:::evaluation
+    T -. explicit opt-in .-> A[Reviewed exact aliases<br/>Disabled path stays unchanged]:::extension
+    A --> F[Per-column rule<br/>Frozen sklearn transformer]:::extension
+    I[Validation or inference DataFrame] --> F
+    F --> O[Diagnostics and mapping artifact<br/>Schema v1 or alias-aware v2]:::extension
+    O --> R
+    B[Safety boundary<br/>Train-only fit; no fuzzy aliases<br/>Validated JSON, non-executable load]:::safety -.-> A
+    B -.-> O
+
+    classDef baseline fill:#eef6ff,stroke:#2f6bff,stroke-width:2px,color:#173a7a;
+    classDef extension fill:#effaf3,stroke:#14804a,stroke-width:2px,color:#145c38;
+    classDef evaluation fill:#fff7e6,stroke:#b36b00,stroke-width:2px,color:#6f4200;
+    classDef safety fill:#fff1f0,stroke:#c73e1d,stroke-width:2px,stroke-dasharray:6 4,color:#7a271a;

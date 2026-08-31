@@ -1,0 +1,16 @@
+---
+title: Task 3 - GCP assessment deployment
+---
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Arial","fontSize":"18px","primaryTextColor":"#172033","lineColor":"#64748b"},"flowchart":{"curve":"linear","nodeSpacing":34,"rankSpacing":42,"htmlLabels":true}}}%%
+flowchart LR
+    C[Client to Cloud Run API<br/>scale to zero] -->|persist first| DB[(Firestore)]
+    C -->|OIDC task| Q[Cloud Tasks to private<br/>Cloud Run worker]
+    Q --> DB
+    Q --> P[Policy-checked web<br/>provider port: fake default]
+    D[Delivery<br/>WIF, Artifact Registry<br/>Secret references]:::evidence -.-> C
+    D -.-> Q
+    O[Operations<br/>Redacted logs and readiness]:::evidence -.-> C
+    B[Safety boundary<br/>Reference artifacts, not live<br/>GPU profile gated off]:::safety -.-> Q
+
+    classDef evidence fill:#fff7e6,stroke:#b36b00,stroke-width:2px,color:#6f4200;
+    classDef safety fill:#fff1f0,stroke:#c73e1d,stroke-width:2px,stroke-dasharray:6 4,color:#7a271a;

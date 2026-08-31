@@ -1,0 +1,16 @@
+---
+title: Task 2 - Durable agent API
+---
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Arial","fontSize":"18px","primaryTextColor":"#172033","lineColor":"#64748b"},"flowchart":{"curve":"linear","nodeSpacing":34,"rankSpacing":42,"htmlLabels":true}}}%%
+flowchart LR
+    C[Client or reviewer UI<br/>status, SSE, cancel] --> API[Versioned FastAPI<br/>auth, idempotency, quota]
+    API -->|persist first| R[(Durable run, event<br/>and memory state)]
+    API -->|then enqueue| E[Queue and worker<br/>Task 1 runner]
+    E -->|events and result| R
+    D[Adapter profiles<br/>Local or GCP assessment]:::profile -.-> R
+    D -.-> E
+    B[Safety boundary<br/>Tenant context on every access<br/>No prompts or raw pages in events]:::safety -.-> API
+    B -.-> R
+
+    classDef profile fill:#eef6ff,stroke:#2f6bff,stroke-width:2px,color:#173a7a;
+    classDef safety fill:#fff1f0,stroke:#c73e1d,stroke-width:2px,stroke-dasharray:6 4,color:#7a271a;

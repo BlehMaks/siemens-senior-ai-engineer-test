@@ -1,0 +1,14 @@
+---
+title: Task 1 - Bounded search agent
+---
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Arial","fontSize":"18px","primaryTextColor":"#172033","lineColor":"#64748b"},"flowchart":{"curve":"linear","nodeSpacing":34,"rankSpacing":42,"htmlLabels":true}}}%%
+flowchart LR
+    Q[Query and planner<br/>search or direct] -->|research| R[Bounded search<br/>guard, fetch, extract, rank]
+    Q -->|direct| A[Provider plus validation<br/>grounded answer or failure]
+    W[[Public web]] --> R
+    R --> A
+    M[(Reviewed tenant memory)] -. bounded context .-> Q
+    B[Safety boundary<br/>Budgets and provenance<br/>Prompt isolation]:::safety -.-> R
+    B -.-> A
+
+    classDef safety fill:#fff1f0,stroke:#c73e1d,stroke-width:2px,stroke-dasharray:6 4,color:#7a271a;

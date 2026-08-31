@@ -1,0 +1,19 @@
+---
+title: Task 5 - Explainable material alternatives
+---
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Arial","fontSize":"18px","primaryTextColor":"#172033","lineColor":"#64748b"},"flowchart":{"curve":"linear","nodeSpacing":32,"rankSpacing":40,"htmlLabels":true}}}%%
+flowchart LR
+    C[Private material catalog]
+    C --> BASE[Assignment baseline - default<br/>TF-IDF, cosine, five alternatives<br/>or honest limitation]:::baseline
+    BASE --> R[Same-case JSON, Markdown<br/>and reviewed safety cases]:::evaluation
+    C --> STRICT[Opt-in extension<br/>Parsers, hard gates, strict ranking]:::extension
+    STRICT --> R
+    STRICT -. explicit Tier 2 .-> RELAX[Tolerance-only relaxation<br/>Current or dimensions<br/>Review always required]:::extension
+    RELAX --> R
+    B[Safety boundary<br/>AC/DC and categories never relax<br/>Engineering aid, not certification]:::safety -.-> STRICT
+    B -.-> RELAX
+
+    classDef baseline fill:#eef6ff,stroke:#2f6bff,stroke-width:2px,color:#173a7a;
+    classDef extension fill:#effaf3,stroke:#14804a,stroke-width:2px,color:#145c38;
+    classDef evaluation fill:#fff7e6,stroke:#b36b00,stroke-width:2px,color:#6f4200;
+    classDef safety fill:#fff1f0,stroke:#c73e1d,stroke-width:2px,stroke-dasharray:6 4,color:#7a271a;
