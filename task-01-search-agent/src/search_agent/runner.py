@@ -757,6 +757,9 @@ class ResearchRunner:
                 request=scoped_request,
                 answer_focus=decision.answer_focus,
                 answer=answer,
+                verified_positional_claims=_is_positional_request(
+                    decision.answer_focus
+                ),
             )
             AssistancePolicy.validate(
                 answer_completed=True,

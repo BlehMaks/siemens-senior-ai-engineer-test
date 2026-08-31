@@ -587,6 +587,7 @@ class AnswerScopePolicy:
         request: str,
         answer_focus: str,
         answer: ScopedAnswer,
+        verified_positional_claims: bool = False,
     ) -> ScopedAnswer:
         if not _stays_scoped(
             request=request,
@@ -612,6 +613,8 @@ class AnswerScopePolicy:
         for citation in answer.citations:
             for segment in _CLAIM_SEGMENT_PATTERN.split(citation.claim):
                 if not segment.strip():
+                    continue
+                if verified_positional_claims:
                     continue
                 if not (
                     _stays_scoped(

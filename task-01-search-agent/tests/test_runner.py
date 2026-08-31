@@ -451,6 +451,64 @@ async def test_synthesis_receives_ranked_late_document_quotes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verified_first_listed_headline_completes_the_run() -> None:
+    request = (
+        "Find and return the exact first listed headline at "
+        f"{SOURCE_URL} dated 2026"
+    )
+    headline = (
+        "Siemens strengthens AI infrastructure leadership with more than $200 "
+        "million in U.S. manufacturing investments"
+    )
+    document = ExtractedDocument(
+        canonical_url=SOURCE_URL,
+        title=SOURCE_TITLE,
+        text=f"07 August 2026\n{headline}",
+        blocks=(
+            ExtractedBlock(
+                text=f"07 August 2026\n{headline}",
+                section=headline,
+            ),
+        ),
+    )
+    hit = _hit()
+    decision = _plan().model_copy(
+        update={
+            "answer_focus": request,
+            "query_plan": QueryPlan(
+                tool_budget=ToolBudget(max_search_queries=1, max_fetches=1),
+                searches=(SearchQuery(text=request, max_results=1),),
+            ),
+        }
+    )
+    runner = _runner(
+        planner=_Planner(decision=decision),
+        fetcher=_Fetcher(
+            {
+                SOURCE_URL: FetchedDocument(
+                    canonical_url=SOURCE_URL,
+                    content_type="text/html",
+                    body=document.text.encode(),
+                )
+            }
+        ),
+        extractor=_Extractor({SOURCE_URL: document}),
+        provider=_Provider(_answer(hit, document, claim=headline)),
+    )
+
+    result = await runner.run(
+        tenant_id="tenant-one",
+        session_id="session-one",
+        run_id="run-one",
+        request=request,
+    )
+
+    assert result.snapshot.status is RunStatus.COMPLETED
+    assert result.snapshot.answer is not None
+    assert result.snapshot.answer.answer_text == headline
+
+
+@pytest.mark.asyncio
 async def test_adversarial_synthesis_keeps_selected_pdf_location_provenance() -> None:
     introduction = "General report background without the requested measurement."
     late_fact = "Siemens Scope 3 emissions were 14.7 million tonnes CO2e in 2025."
