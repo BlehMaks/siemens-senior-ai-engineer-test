@@ -131,7 +131,9 @@ class CategoryConsolidationTransformer(
             output[column] = pd.Series(result.values, index=frame.index, dtype=object)
             row_count = len(result.values)
             fallback_count = sum(
-                value == consolidator.resolved_rare_label for value in result.values
+                value is consolidator.resolved_rare_label
+                or value == consolidator.resolved_rare_label
+                for value in result.values
             )
             unseen_count = len(result.diagnostics.unseen_indexes)
             diagnostics[column] = ColumnTransformDiagnostics(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import pickle
 import subprocess
 import sys
@@ -80,6 +81,22 @@ def test_empty_transform_has_zero_rates() -> None:
 
     assert diagnostics["region"].unseen_rate == 0.0
     assert diagnostics["region"].fallback_rate == 0.0
+
+
+def test_nan_fallback_label_is_counted_in_diagnostics() -> None:
+    transformer = CategoryConsolidationTransformer(
+        columns=("region",),
+        threshold_percent=100.0,
+        rare_label=float("nan"),
+    ).fit(pd.DataFrame({"region": ["north", "south"]}))
+
+    result, diagnostics = transformer.transform_with_diagnostics(
+        pd.DataFrame({"region": ["west"]})
+    )
+
+    assert math.isnan(result["region"].iloc[0])
+    assert diagnostics["region"].fallback_count == 1
+    assert diagnostics["region"].fallback_rate == 1.0
 
 
 def test_clone_parameters_pipeline_and_pickle_are_supported() -> None:
