@@ -328,10 +328,11 @@ def test_safety_benchmark_detects_a_mutated_expected_label(tmp_path: Path) -> No
 def test_comparison_report_renders_json_and_markdown_from_one_object(
     tmp_path: Path,
 ) -> None:
-    materials = (
-        *(_material(part_id, "shared fuse") for part_id in "QABCDEF"),
-        _material("BLANK", ""),
-    )
+    text_materials = [_material(part_id, "shared fuse") for part_id in "QABCDEF"]
+    for material in text_materials:
+        material["Current Rating"] = "2A"
+    text_materials[5]["Current Rating"] = "8A"
+    materials = (*text_materials, _material("BLANK", ""))
     benchmark = Benchmark(
         _FIXTURE_DIGEST,
         len(materials),
@@ -364,11 +365,32 @@ def test_comparison_report_renders_json_and_markdown_from_one_object(
     assert json.loads(json_path.read_text(encoding="utf-8")) == report
     markdown = markdown_path.read_text(encoding="utf-8")
     assert "| Lexical v1 | evaluated | 1 | 1.0 | 1.0 | 1.0 |" in markdown
-    assert "| Relaxed hybrid | not_implemented |" in markdown
+    assert "| Relaxed hybrid v2.1 | evaluated | 7 | 1.0 | 1.0 | 1.0 |" in markdown
     extension = report["business_extension"]
     assert isinstance(extension, dict)
-    assert extension["status_counts"] == {"insufficient_evidence": 1, "ok": 7}
+    assert extension["status_counts"] == {
+        "insufficient_evidence": 2,
+        "review_required": 6,
+    }
+    assert extension["relaxed_status_counts"] == {
+        "insufficient_evidence": 1,
+        "review_required": 7,
+    }
+    assert extension["relaxed_hybrid"]["mode_status"] == "evaluated"
+    assert extension["relaxed_hybrid"]["relaxed_candidate_count"] == 11
+    assert extension["relaxed_hybrid"]["reviewed_hard_negative_rate"] == 0.0
+    assert extension["relaxed_hybrid"]["defensible_candidate_shortfall"] == 0
+    assert extension["relaxed_hybrid"]["representative_relaxations"][0][
+        "relaxed_rules"
+    ] == ["current:numeric_hard_conflict"]
     assert extension["safety_benchmark"]["passed_count"] == 20
+    without_relaxations = json.loads(json.dumps(report))
+    without_relaxations["business_extension"]["relaxed_hybrid"][
+        "representative_relaxations"
+    ] = []
+    assert "None observed" in evaluation_module.render_comparison_markdown(
+        without_relaxations
+    )
     reports = Path(__file__).parents[1] / "reports"
     assert (
         json.loads((reports / "baseline-vs-extension.json").read_text(encoding="utf-8"))
@@ -413,7 +435,7 @@ def test_comparison_cli_writes_both_report_views(tmp_path: Path) -> None:
         == 0
     )
 
-    assert json.loads(json_path.read_text(encoding="utf-8"))["schema_version"] == "1.0"
+    assert json.loads(json_path.read_text(encoding="utf-8"))["schema_version"] == "1.1"
     assert markdown_path.read_text(encoding="utf-8").startswith(
         "# Task 5 baseline versus business extension"
     )
@@ -641,6 +663,12 @@ def test_comparison_helpers_cover_review_and_missing_package_paths(
     )
     with pytest.raises(BenchmarkError, match="strict hybrid"):
         evaluation_module._business_as_retrieval(structured)
+    relaxed_structured = evaluation_module.RelaxedBusinessRetrievalResult(
+        "2.1", "Q", "structured_only", "insufficient_evidence", (), (), (), 0.0, "none"
+    )
+    with pytest.raises(BenchmarkError, match="relaxed hybrid"):
+        evaluation_module._relaxed_business_as_retrieval(relaxed_structured)
+    assert evaluation_module._exactly_five_relaxed_rate(()) == 0.0
 
     material = _material("Q", "fuse")
     material["Current Rating"] = "bad"

@@ -39,8 +39,18 @@ Mode = Literal["ac", "dc", "unspecified"]
 HybridMode = Literal["hybrid", "text_only", "structured_only"]
 ValueKind = Literal["current", "voltage", "length", "category"]
 ExtensionMode = Literal["strict_hybrid", "structured_only"]
+RelaxedMode = Literal["relaxed_hybrid", "structured_only"]
 ExtensionStatus = Literal["ok", "review_required", "insufficient_evidence"]
 CompatibilityOutcome = Literal["compatible", "conflict", "insufficient_evidence"]
+
+_TOLERANCE_ONLY_CONFLICTS = frozenset(
+    {
+        ("current", "numeric_hard_conflict"),
+        ("dimensions", "dimension_mismatch"),
+    }
+)
+_RELAXATION_REVIEW_REASON = "tolerance_only_relaxation_requires_engineering_review"
+_HYBRID_TEXT_WEIGHT = 0.65
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +220,30 @@ class BusinessRetrievalResult:
     mode: ExtensionMode
     status: ExtensionStatus
     alternatives: tuple[HybridAlternative, ...]
+    excluded: tuple[ExcludedAlternative, ...]
+    evidence_coverage: float
+    reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class RelaxedAlternative:
+    """One strict exclusion admitted only by the reviewed tolerance rung."""
+
+    candidate: HybridAlternative
+    relaxed_rules: tuple[str, ...]
+    review_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class RelaxedBusinessRetrievalResult:
+    """Separate version-2.1 result; strict candidates always precede reviewed ones."""
+
+    schema_version: str
+    part_id: str
+    mode: RelaxedMode
+    status: ExtensionStatus
+    alternatives: tuple[HybridAlternative, ...]
+    relaxed_alternatives: tuple[RelaxedAlternative, ...]
     excluded: tuple[ExcludedAlternative, ...]
     evidence_coverage: float
     reason: str | None
@@ -430,7 +464,7 @@ def assess_compatibility(
 def rank_hybrid_alternatives(
     materials: Sequence[Mapping[str, str]],
     *,
-    text_weight: float = 0.65,
+    text_weight: float = _HYBRID_TEXT_WEIGHT,
     minimum_structured_coverage: float = 0.25,
     policy: CompatibilityPolicy | None = None,
 ) -> tuple[HybridRetrievalResult, ...]:
@@ -565,6 +599,92 @@ def rank_business_alternatives(
                 part_id,
                 parsed,
                 selected_policy,
+            )
+        )
+    return tuple(results)
+
+
+def rank_relaxed_business_alternatives(
+    materials: Sequence[Mapping[str, str]],
+    *,
+    policy: CompatibilityPolicy | None = None,
+) -> tuple[RelaxedBusinessRetrievalResult, ...]:
+    """Apply one reviewed tolerance rung after the unchanged strict extension."""
+
+    selected_policy = policy or DEFAULT_COMPATIBILITY_POLICY
+    strict_results = rank_business_alternatives(materials, policy=selected_policy)
+    text_materials = tuple(
+        material for material in materials if material[DESCRIPTION_COLUMN].strip()
+    )
+    if not text_materials:
+        return tuple(_relaxed_schema(result) for result in strict_results)
+
+    by_id = {material[PART_ID_COLUMN].strip(): material for material in text_materials}
+    specs = _specs_for_policy(selected_policy)
+    parsed = {
+        part_id: {
+            item.name: item
+            for item in parse_material_attributes(material, policy=selected_policy)
+        }
+        for part_id, material in by_id.items()
+    }
+    text_results = {
+        result.part_id: result for result in rank_alternatives(text_materials)
+    }
+    results: list[RelaxedBusinessRetrievalResult] = []
+    for strict in strict_results:
+        if strict.mode == "structured_only":
+            results.append(_relaxed_schema(strict))
+            continue
+        text_candidates = {
+            candidate.part_id: candidate
+            for candidate in text_results[strict.part_id].alternatives
+        }
+        relaxed: list[RelaxedAlternative] = []
+        excluded: list[ExcludedAlternative] = []
+        for rejected in strict.excluded:
+            scored = _score_candidate(
+                text_candidates[rejected.part_id],
+                parsed[strict.part_id],
+                parsed[rejected.part_id],
+                text_weight=_HYBRID_TEXT_WEIGHT,
+                minimum_coverage=selected_policy.minimum_structured_coverage,
+                specs=specs,
+            )
+            hard_conflicts = tuple(
+                conflict for conflict in scored.conflicts if conflict.hard
+            )
+            relaxed_rules = _tolerance_relaxation_rules(hard_conflicts, selected_policy)
+            if relaxed_rules is None:
+                excluded.append(rejected)
+            else:
+                relaxed.append(
+                    RelaxedAlternative(
+                        candidate=scored,
+                        relaxed_rules=relaxed_rules,
+                        review_reason=_RELAXATION_REVIEW_REASON,
+                    )
+                )
+        relaxed.sort(
+            key=lambda item: (-item.candidate.final_score, item.candidate.part_id)
+        )
+        available = max(
+            0, selected_policy.required_candidates - len(strict.alternatives)
+        )
+        selected_relaxed = tuple(relaxed[:available])
+        status = "review_required" if selected_relaxed else strict.status
+        reason = _RELAXATION_REVIEW_REASON if selected_relaxed else strict.reason
+        results.append(
+            RelaxedBusinessRetrievalResult(
+                schema_version="2.1",
+                part_id=strict.part_id,
+                mode="relaxed_hybrid",
+                status=status,
+                alternatives=strict.alternatives,
+                relaxed_alternatives=selected_relaxed,
+                excluded=tuple(excluded),
+                evidence_coverage=strict.evidence_coverage,
+                reason=reason,
             )
         )
     return tuple(results)
@@ -1149,6 +1269,37 @@ def _extension_status(
     return "insufficient_evidence", "no_defensible_candidates"
 
 
+def _relaxed_schema(
+    strict: BusinessRetrievalResult,
+) -> RelaxedBusinessRetrievalResult:
+    return RelaxedBusinessRetrievalResult(
+        schema_version="2.1",
+        part_id=strict.part_id,
+        mode="structured_only",
+        status=strict.status,
+        alternatives=strict.alternatives,
+        relaxed_alternatives=(),
+        excluded=strict.excluded,
+        evidence_coverage=strict.evidence_coverage,
+        reason=strict.reason,
+    )
+
+
+def _tolerance_relaxation_rules(
+    conflicts: Sequence[StructuredConflict], policy: CompatibilityPolicy
+) -> tuple[str, ...] | None:
+    """Return exact rules only when every hard conflict belongs to the safe rung."""
+
+    by_name = {rule.name: rule for rule in policy.rules}
+    if not conflicts or any(
+        by_name[conflict.field].never_relax
+        or (conflict.field, conflict.code) not in _TOLERANCE_ONLY_CONFLICTS
+        for conflict in conflicts
+    ):
+        return None
+    return tuple(f"{conflict.field}:{conflict.code}" for conflict in conflicts)
+
+
 def _specs_for_policy(policy: CompatibilityPolicy) -> tuple[_AttributeSpec, ...]:
     _validate_policy(policy)
     by_name = {rule.name: rule for rule in policy.rules}
@@ -1239,6 +1390,8 @@ __all__ = [
     "HybridRetrievalResult",
     "ParsedAttribute",
     "Quantity",
+    "RelaxedAlternative",
+    "RelaxedBusinessRetrievalResult",
     "ScoreComponent",
     "ScorePenalty",
     "StructuredConflict",
@@ -1251,4 +1404,5 @@ __all__ = [
     "parse_quantity",
     "rank_business_alternatives",
     "rank_hybrid_alternatives",
+    "rank_relaxed_business_alternatives",
 ]

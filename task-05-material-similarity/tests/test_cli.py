@@ -79,6 +79,27 @@ def test_cli_exposes_text_and_hybrid_only_by_explicit_mode(
     assert extension["schema_version"] == "2.0"
     assert extension["mode"] == "strict_hybrid"
 
+    assert (
+        main(
+            [
+                str(catalog),
+                "--mode",
+                "extension-relaxed",
+                "--policy",
+                str(policy),
+                "--part-id",
+                "2",
+            ]
+        )
+        == 0
+    )
+    relaxed = json.loads(capsys.readouterr().out)
+    assert relaxed["schema_version"] == "2.1"
+    assert relaxed["mode"] == "relaxed_hybrid"
+    assert relaxed["status"] == "ok"
+    assert len(relaxed["alternatives"]) == 5
+    assert relaxed["relaxed_alternatives"] == []
+
 
 @pytest.mark.parametrize("mode", ["text", "complete"])
 def test_cli_rejects_policy_for_non_policy_modes(tmp_path: Path, mode: str) -> None:

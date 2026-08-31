@@ -140,6 +140,27 @@ uv run material-similarity "input/IT DA AI Tasks/Fuse.csv" \
   --part-id <PART_ID>
 ```
 
+After reviewing the strict result, callers can explicitly run the separate Tier 2
+tolerance rung:
+
+```bash
+uv run material-similarity "input/IT DA AI Tasks/Fuse.csv" \
+  --mode extension-relaxed \
+  --policy task-05-material-similarity/evals/compatibility-policy.yaml \
+  --part-id <PART_ID>
+```
+
+This mode reconsiders only strict top-five exclusions caused by
+`current:numeric_hard_conflict` or `dimensions:dimension_mismatch`. It never expands
+the lexical candidate pool and never relaxes AC/DC, categorical, dimension-axis,
+contradictory-source, or unsupported evidence. Strict candidates remain in
+`alternatives`; they always precede the separately serialized
+`relaxed_alternatives`, regardless of score. Every relaxed entry contains its full
+candidate evidence, ordered `relaxed_rules`, and the exact
+`tolerance_only_relaxation_requires_engineering_review` reason. Any result containing
+a relaxed candidate has status `review_required`, even when the two candidate lists
+contain five entries in total.
+
 Rows with text use `strict_hybrid`. Blank descriptions never enter a TF-IDF query;
 they use the separately labeled `structured_only` mode only when reviewed typed
 fields meet the minimum evidence coverage. Version-2 status is `ok` only for five
@@ -170,6 +191,13 @@ and unique `supported_values`. Invalid policy shapes, unsupported parser values,
 unknown part IDs, and missing comparison outputs fail closed instead of silently
 falling back to the assignment baseline.
 
+The tolerance command uses a separate `2.1` result schema so strict `2.0` consumers
+remain unchanged. It adds `relaxed_alternatives` to the fields above, sets `mode` to
+`relaxed_hybrid` for text-backed rows, and keeps `structured_only` rows unrelaxed.
+Each relaxed entry has exactly `candidate`, `relaxed_rules`, and `review_reason`.
+When no tolerance rule applies, status and reason retain the strict result; the
+command cannot manufacture candidates outside the original lexical top five.
+
 The safety benchmark contains 20 reviewed, sanitized cases split into training and
 held-out groups. It covers every policy rule plus blank and duplicate descriptions,
 sparse rows, parser failures, strict candidates, hard conflicts, and mandatory
@@ -187,8 +215,9 @@ uv run python -m material_similarity.evaluation \
 
 Both report files are rendered from one versioned object. The committed example is
 a sanitized deterministic fixture; private-catalog output must be generated locally
-with the owner-authorized catalog and reviewed before use. Relaxed hybrid retrieval is recorded as
-`not_implemented` in Tier 1. Structured-only precision@5 and nDCG@5 remain unset
+with the owner-authorized catalog and reviewed before use. The version-1.1 report
+evaluates relaxed hybrid separately from strict hybrid. Structured-only precision@5
+and nDCG@5 remain unset
 until blank-description rows have reviewed relevance labels; compatibility checks
 must not be mislabeled as interchangeability ground truth.
 

@@ -13,9 +13,11 @@ from material_similarity.data import load_materials
 from material_similarity.hybrid import (
     BusinessRetrievalResult,
     HybridRetrievalResult,
+    RelaxedBusinessRetrievalResult,
     load_compatibility_policy,
     rank_business_alternatives,
     rank_hybrid_alternatives,
+    rank_relaxed_business_alternatives,
 )
 from material_similarity.retrieval import (
     RetrievalResult,
@@ -33,11 +35,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--mode",
-        choices=("complete", "text", "hybrid", "extension"),
+        choices=("complete", "text", "hybrid", "extension", "extension-relaxed"),
         default="complete",
         help=(
             "Return complete labeled results, the reviewed text baseline, or the "
-            "non-promoted hybrid prototype, or the opt-in version-2 business mode"
+            "non-promoted hybrid prototype, the strict version-2 extension, or its "
+            "explicit version-2.1 tolerance-only review mode"
         ),
     )
     parser.add_argument(
@@ -51,11 +54,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     materials = load_materials(cast(Path, args.catalog))
     results: tuple[
-        RetrievalResult | HybridRetrievalResult | BusinessRetrievalResult, ...
+        RetrievalResult
+        | HybridRetrievalResult
+        | BusinessRetrievalResult
+        | RelaxedBusinessRetrievalResult,
+        ...,
     ]
     policy_path = cast(Path | None, args.policy)
     policy = load_compatibility_policy(policy_path) if policy_path is not None else None
-    if args.mode == "extension":
+    if args.mode == "extension-relaxed":
+        results = rank_relaxed_business_alternatives(materials, policy=policy)
+    elif args.mode == "extension":
         results = rank_business_alternatives(materials, policy=policy)
     elif args.mode == "hybrid":
         results = rank_hybrid_alternatives(materials, policy=policy)

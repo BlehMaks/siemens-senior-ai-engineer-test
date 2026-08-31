@@ -26,6 +26,7 @@ from material_similarity.hybrid import (
     Dimensions,
     HybridRetrievalResult,
     Quantity,
+    StructuredConflict,
     assess_compatibility,
     load_compatibility_policy,
     parse_category,
@@ -34,6 +35,7 @@ from material_similarity.hybrid import (
     parse_quantity,
     rank_business_alternatives,
     rank_hybrid_alternatives,
+    rank_relaxed_business_alternatives,
 )
 
 
@@ -243,6 +245,115 @@ def test_structured_only_abstains_on_sparse_or_conflicting_evidence() -> None:
     assert conflict_query.status == "insufficient_evidence"
     assert conflict_query.alternatives == ()
     assert len(conflict_query.excluded) == 6
+
+
+def test_tolerance_ladder_is_bounded_deterministic_and_keeps_strict_first() -> None:
+    materials = (
+        _rated_material("Q", description="shared fuse"),
+        _rated_material("A_STRICT", description="shared fuse"),
+        _rated_material(
+            "B_BOTH",
+            description="shared fuse",
+            **{"Current Rating": "8A", "Fuse Size": "3mm x 15mm"},
+        ),
+        _rated_material(
+            "C_CURRENT", description="shared fuse", **{"Current Rating": "8A"}
+        ),
+        _rated_material(
+            "D_DIMENSION", description="shared fuse", **{"Fuse Size": "3mm x 15mm"}
+        ),
+        _rated_material(
+            "E_AC", description="shared fuse", **{"Maximum AC Voltage Rating": "250VDC"}
+        ),
+        _rated_material(
+            "F_ACTING",
+            description="shared fuse",
+            Acting="fast",
+            **{"Blow Characteristic": "fast"},
+        ),
+    )
+
+    first = rank_relaxed_business_alternatives(materials)[0]
+    second = next(
+        result
+        for result in rank_relaxed_business_alternatives(tuple(reversed(materials)))
+        if result.part_id == "Q"
+    )
+
+    assert first == second
+    assert first.schema_version == "2.1"
+    assert first.mode == "relaxed_hybrid"
+    assert first.status == "review_required"
+    assert first.reason == "tolerance_only_relaxation_requires_engineering_review"
+    assert [item.part_id for item in first.alternatives] == ["A_STRICT"]
+    assert {item.candidate.part_id for item in first.relaxed_alternatives} == {
+        "B_BOTH",
+        "C_CURRENT",
+        "D_DIMENSION",
+    }
+    both = next(
+        item
+        for item in first.relaxed_alternatives
+        if item.candidate.part_id == "B_BOTH"
+    )
+    assert both.relaxed_rules == (
+        "current:numeric_hard_conflict",
+        "dimensions:dimension_mismatch",
+    )
+    assert both.review_reason == first.reason
+    assert [item.part_id for item in first.excluded] == ["E_AC"]
+    assert len(first.alternatives) + len(first.relaxed_alternatives) == 4
+
+
+@pytest.mark.parametrize(
+    ("field", "code"),
+    (
+        ("ac_voltage", "numeric_hard_conflict"),
+        ("dc_voltage", "numeric_hard_conflict"),
+        ("acting", "categorical_mismatch"),
+        ("material", "categorical_mismatch"),
+        ("mounting", "categorical_mismatch"),
+        ("mounting_feature", "categorical_mismatch"),
+        ("dimensions", "dimension_axis_mismatch"),
+        ("current", "unit_or_mode_mismatch"),
+    ),
+)
+def test_relaxation_prohibits_non_tolerance_and_never_relaxed_conflicts(
+    field: str, code: str
+) -> None:
+    conflict = StructuredConflict(field, code, True, None, None)
+
+    assert (
+        hybrid_module._tolerance_relaxation_rules(
+            (conflict,), DEFAULT_COMPATIBILITY_POLICY
+        )
+        is None
+    )
+
+
+def test_policy_can_prohibit_an_otherwise_reviewed_tolerance() -> None:
+    policy = replace(
+        DEFAULT_COMPATIBILITY_POLICY,
+        rules=tuple(
+            replace(rule, never_relax=True) if rule.name == "current" else rule
+            for rule in DEFAULT_COMPATIBILITY_POLICY.rules
+        ),
+    )
+    conflict = StructuredConflict("current", "numeric_hard_conflict", True, None, None)
+
+    assert hybrid_module._tolerance_relaxation_rules((), policy) is None
+    assert hybrid_module._tolerance_relaxation_rules((conflict,), policy) is None
+
+
+def test_relaxed_mode_preserves_structured_only_without_relaxing_it() -> None:
+    materials = tuple(_rated_material(part_id, description="") for part_id in "QABCDEF")
+
+    result = rank_relaxed_business_alternatives(materials)[0]
+
+    assert result.schema_version == "2.1"
+    assert result.mode == "structured_only"
+    assert result.status == "ok"
+    assert result.relaxed_alternatives == ()
 
 
 def test_quantity_parser_normalizes_units_ranges_qualifiers_and_modes() -> None:

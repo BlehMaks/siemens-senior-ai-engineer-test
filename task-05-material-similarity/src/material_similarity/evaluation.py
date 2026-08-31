@@ -27,10 +27,12 @@ from material_similarity.hybrid import (
     BusinessRetrievalResult,
     CompatibilityPolicy,
     HybridRetrievalResult,
+    RelaxedBusinessRetrievalResult,
     assess_compatibility,
     parse_material_attributes,
     rank_business_alternatives,
     rank_hybrid_alternatives,
+    rank_relaxed_business_alternatives,
 )
 from material_similarity.normalize import normalize_description
 from material_similarity.retrieval import (
@@ -336,6 +338,7 @@ def build_comparison_report(
     baseline_seconds = perf_counter() - baseline_started
     extension_started = perf_counter()
     extension_results = rank_business_alternatives(materials, policy=policy)
+    relaxed_results = rank_relaxed_business_alternatives(materials, policy=policy)
     extension_seconds = perf_counter() - extension_started
     if runtime_seconds is not None:
         if len(runtime_seconds) != 2 or any(value < 0.0 for value in runtime_seconds):
@@ -352,6 +355,7 @@ def build_comparison_report(
         raise BenchmarkError("comparison benchmark has no non-blank extension queries")
     baseline_by_id = _results_by_id(baseline_results)
     extension_by_id = {result.part_id: result for result in extension_results}
+    relaxed_by_id = {result.part_id: result for result in relaxed_results}
     strict_retrieval = tuple(
         _business_as_retrieval(extension_by_id[query.part_id])
         for query in nonblank_queries
@@ -359,6 +363,14 @@ def build_comparison_report(
     strict_metrics = _score_queries(
         nonblank_queries,
         _results_by_id(strict_retrieval),
+    )
+    relaxed_retrieval = tuple(
+        _relaxed_business_as_retrieval(relaxed_by_id[query.part_id])
+        for query in nonblank_queries
+    )
+    relaxed_metrics = _score_queries(
+        nonblank_queries,
+        _results_by_id(relaxed_retrieval),
     )
     comparable_baseline_metrics = _score_queries(nonblank_queries, baseline_by_id)
     baseline_metrics = score_results(benchmark, baseline_results)
@@ -369,11 +381,19 @@ def build_comparison_report(
     structured = tuple(
         result for result in extension_results if result.mode == "structured_only"
     )
+    relaxed = tuple(
+        result for result in relaxed_results if result.mode == "relaxed_hybrid"
+    )
     parser_support, parser_failures = _parser_summary(materials, policy)
     mode_counts = Counter(result.status for result in extension_results)
+    relaxed_mode_counts = Counter(result.status for result in relaxed_results)
     strict_hard_negative_rate = _hard_negative_rate(
         nonblank_queries,
         _results_by_id(strict_retrieval),
+    )
+    relaxed_hard_negative_rate = _hard_negative_rate(
+        nonblank_queries,
+        _results_by_id(relaxed_retrieval),
     )
     baseline_hard_negative_rate = _hard_negative_rate(
         nonblank_queries,
@@ -385,9 +405,10 @@ def build_comparison_report(
         "Structured-only precision@5 and nDCG@5 are not reported without reviewed relevance labels for blank-description rows.",
         "The batch API does not expose reliable per-query p50/p95 latency; those fields remain null.",
         "The bundled policy requires engineering-owner confirmation before operational use.",
+        "Tolerance-only review can admit current-ratio and dimension-ratio conflicts; it never relaxes AC/DC, categorical, axis-count, contradictory, or unsupported evidence.",
     ]
     report: dict[str, object] = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "metadata": {
             "dataset_fingerprint": dataset_fingerprint,
             "row_count": profile.row_count,
@@ -436,8 +457,53 @@ def build_comparison_report(
                     max(0, 5 - len(result.alternatives)) for result in structured
                 ),
             },
-            "relaxed_hybrid": {"mode_status": "not_implemented"},
+            "relaxed_hybrid": {
+                "schema_version": "2.1",
+                "mode_status": "evaluated",
+                "eligible_case_count": len(relaxed),
+                "metrics": asdict(relaxed_metrics),
+                "reviewed_hard_negative_rate": relaxed_hard_negative_rate,
+                "exactly_five_coverage": _exactly_five_relaxed_rate(relaxed),
+                "defensible_candidate_shortfall": sum(
+                    max(
+                        0,
+                        TOP_K
+                        - len(result.alternatives)
+                        - len(result.relaxed_alternatives),
+                    )
+                    for result in relaxed
+                ),
+                "strict_pass_case_count": sum(
+                    len(result.alternatives) == TOP_K for result in relaxed
+                ),
+                "relaxed_pass_case_count": sum(
+                    bool(result.relaxed_alternatives) for result in relaxed
+                ),
+                "strict_candidate_count": sum(
+                    len(result.alternatives) for result in relaxed
+                ),
+                "relaxed_candidate_count": sum(
+                    len(result.relaxed_alternatives) for result in relaxed
+                ),
+                "review_required_case_count": sum(
+                    result.status == "review_required" for result in relaxed
+                ),
+                "insufficient_evidence_case_count": sum(
+                    result.status == "insufficient_evidence" for result in relaxed
+                ),
+                "representative_relaxations": [
+                    {
+                        "query_part_id": result.part_id,
+                        "candidate_part_id": item.candidate.part_id,
+                        "relaxed_rules": list(item.relaxed_rules),
+                        "review_reason": item.review_reason,
+                    }
+                    for result in relaxed
+                    for item in result.relaxed_alternatives
+                ][:3],
+            },
             "status_counts": dict(sorted(mode_counts.items())),
+            "relaxed_status_counts": dict(sorted(relaxed_mode_counts.items())),
             "safety_benchmark": {
                 "case_count": len(safety_results),
                 "passed_count": safety_passed,
@@ -456,10 +522,13 @@ def build_comparison_report(
             "parser_failures": parser_failures,
             "review_workload": {
                 "candidates_rejected_automatically": sum(
-                    len(result.excluded) for result in extension_results
+                    len(result.excluded) for result in relaxed_results
                 ),
-                "cases_requiring_review": mode_counts["review_required"],
-                "cases_without_evidence_backed_result": mode_counts[
+                "candidates_relaxed_for_review": sum(
+                    len(result.relaxed_alternatives) for result in relaxed_results
+                ),
+                "cases_requiring_review": relaxed_mode_counts["review_required"],
+                "cases_without_evidence_backed_result": relaxed_mode_counts[
                     "insufficient_evidence"
                 ],
             },
@@ -497,9 +566,21 @@ def render_comparison_markdown(report: Mapping[str, object]) -> str:
     strict = cast(Mapping[str, object], extension["strict_hybrid"])
     strict_metrics = cast(Mapping[str, object], strict["metrics"])
     structured = cast(Mapping[str, object], extension["structured_only"])
+    relaxed = cast(Mapping[str, object], extension["relaxed_hybrid"])
+    relaxed_metrics = cast(Mapping[str, object], relaxed["metrics"])
     safety = cast(Mapping[str, object], extension["safety_benchmark"])
     workload = cast(Mapping[str, object], extension["review_workload"])
     limitations = cast(Sequence[str], report["limitations"])
+    representative_relaxations = cast(
+        Sequence[Mapping[str, object]], relaxed["representative_relaxations"]
+    )
+    representative_lines = [
+        "- "
+        f"`{item['query_part_id']}` → `{item['candidate_part_id']}`: "
+        f"{', '.join(cast(Sequence[str], item['relaxed_rules']))} "
+        f"({item['review_reason']})"
+        for item in representative_relaxations
+    ] or ["- None observed in this evaluated fixture."]
     lines = [
         "# Task 5 baseline versus business extension",
         "",
@@ -515,14 +596,19 @@ def render_comparison_markdown(report: Mapping[str, object]) -> str:
         f"| Lexical v1 | {baseline['mode_status']} | {baseline_metrics['query_count']} | {baseline_metrics['precision_at_5']} | {baseline_metrics['ndcg_at_5']} | {baseline_metrics['coverage']} |",
         f"| Strict hybrid v2 | {strict['mode_status']} | {strict['eligible_case_count']} | {strict_metrics['precision_at_5']} | {strict_metrics['ndcg_at_5']} | {strict['exactly_five_coverage']} |",
         f"| Structured only v2 | {structured['mode_status']} | {structured['eligible_case_count']} | not evaluated | not evaluated | {structured['exactly_five_coverage']} |",
-        f"| Relaxed hybrid | {cast(Mapping[str, object], extension['relaxed_hybrid'])['mode_status']} | 0 | not evaluated | not evaluated | not evaluated |",
+        f"| Relaxed hybrid v2.1 | {relaxed['mode_status']} | {relaxed['eligible_case_count']} | {relaxed_metrics['precision_at_5']} | {relaxed_metrics['ndcg_at_5']} | {relaxed['exactly_five_coverage']} |",
         "",
         "## Safety and review workload",
         "",
         f"- Reviewed safety cases passed: {safety['passed_count']}/{safety['case_count']}",
         f"- Automatically rejected candidates: {workload['candidates_rejected_automatically']}",
+        f"- Candidates relaxed for engineering review: {workload['candidates_relaxed_for_review']}",
         f"- Cases requiring review: {workload['cases_requiring_review']}",
         f"- Cases without an evidence-backed result: {workload['cases_without_evidence_backed_result']}",
+        "",
+        "## Representative tolerance relaxations",
+        "",
+        *representative_lines,
         "",
         "## Limitations",
         "",
@@ -759,6 +845,20 @@ def _business_as_retrieval(result: BusinessRetrievalResult) -> RetrievalResult:
     )
 
 
+def _relaxed_business_as_retrieval(
+    result: RelaxedBusinessRetrievalResult,
+) -> RetrievalResult:
+    if result.mode != "relaxed_hybrid":
+        raise BenchmarkError("relevance comparison accepts relaxed hybrid results only")
+    alternatives = tuple(item.text for item in result.alternatives) + tuple(
+        item.candidate.text for item in result.relaxed_alternatives
+    )
+    status: RetrievalStatus = (
+        "ok" if len(alternatives) == TOP_K else "insufficient_candidates"
+    )
+    return RetrievalResult(result.part_id, status, alternatives)
+
+
 def _parser_summary(
     materials: Sequence[Mapping[str, str]], policy: CompatibilityPolicy
 ) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]]:
@@ -781,6 +881,23 @@ def _parser_summary(
 def _status_rate(results: Sequence[BusinessRetrievalResult], status: str) -> float:
     return (
         round(sum(result.status == status for result in results) / len(results), 6)
+        if results
+        else 0.0
+    )
+
+
+def _exactly_five_relaxed_rate(
+    results: Sequence[RelaxedBusinessRetrievalResult],
+) -> float:
+    return (
+        round(
+            sum(
+                len(result.alternatives) + len(result.relaxed_alternatives) == TOP_K
+                for result in results
+            )
+            / len(results),
+            6,
+        )
         if results
         else 0.0
     )
