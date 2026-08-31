@@ -983,7 +983,7 @@ class ResearchRunner:
                 raise
             except _InvalidAdapter:
                 raise
-            except FetchError:
+            except FetchError as error:
                 ledger.failed_pages += 1
                 self._record(
                     trace,
@@ -991,12 +991,12 @@ class ResearchRunner:
                         stage=TraceStage.FETCH,
                         action="fetch.document",
                         outcome=TraceOutcome.FAILED,
-                        reason="fetch_failed",
+                        reason=error.reason.value,
                         safe_id=run_id,
                         context_hash=source_hash,
                     ),
                 )
-            except (ExtractionError, EvidenceValidationError, ValueError):
+            except ExtractionError as error:
                 ledger.failed_pages += 1
                 self._record(
                     trace,
@@ -1004,7 +1004,20 @@ class ResearchRunner:
                         stage=TraceStage.EXTRACT,
                         action="extract.document",
                         outcome=TraceOutcome.FAILED,
-                        reason="extract_failed",
+                        reason=error.reason.value,
+                        safe_id=run_id,
+                        context_hash=source_hash,
+                    ),
+                )
+            except (EvidenceValidationError, ValueError):
+                ledger.failed_pages += 1
+                self._record(
+                    trace,
+                    ActionTraceRecord(
+                        stage=TraceStage.EXTRACT,
+                        action="extract.document",
+                        outcome=TraceOutcome.FAILED,
+                        reason="invalid_extracted_document",
                         safe_id=run_id,
                         context_hash=source_hash,
                     ),
@@ -1091,8 +1104,19 @@ class ResearchRunner:
                         now=retrieved_at,
                     )
                 )
-            except EvidenceValidationError:
+            except EvidenceValidationError as error:
                 ledger.failed_pages += 1
+                self._record(
+                    trace,
+                    ActionTraceRecord(
+                        stage=TraceStage.RANK,
+                        action="rank.evidence",
+                        outcome=TraceOutcome.FAILED,
+                        reason=error.reason.value,
+                        safe_id=run_id,
+                        context_hash=_safe_hash(str(hit.url)),
+                    ),
+                )
         return records
 
     async def _extract(self, document: FetchedDocument) -> ExtractedDocument:

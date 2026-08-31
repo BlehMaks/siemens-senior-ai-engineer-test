@@ -80,7 +80,7 @@ def build_evidence(
     now: datetime | None = None,
     max_age: timedelta = _DEFAULT_MAX_AGE,
 ) -> EvidenceRecord:
-    """Build evidence only when search and fetch provenance agree exactly."""
+    """Build evidence only when search and fetch URL provenance agree exactly."""
 
     checked_now = _utc_time(now or datetime.now(UTC), field="now")
     checked_retrieved_at = _utc_time(retrieved_at, field="retrieved_at")
@@ -94,31 +94,34 @@ def build_evidence(
             "search and extracted document URLs do not match",
         )
 
-    title = _normalize_text(hit.title, field="source title", limit=400)
-    document_title = _normalize_text(
-        document.title,
-        field="document title",
-        limit=400,
+    search_title = _normalize_text(hit.title, field="search title", limit=400)
+    title = (
+        search_title
+        if document.title is None
+        else _normalize_text(document.title, field="document title", limit=400)
     )
-    if document_title != title:
-        raise EvidenceValidationError(
-            EvidenceFailureReason.SOURCE_MISMATCH,
-            "search and extracted document titles do not match",
-        )
 
     source_text = _normalize_text(
         document.text,
         field="source text",
         limit=_MAX_SOURCE_CHARS,
     )
+    checked_chunks = _materialized_chunks(selected_chunks)
+    research_document = None
     try:
-        if selected_context is not None:
-            validate_selected_context(selected_context)
+        if selected_context is not None or checked_chunks:
             research_document = build_research_document(
                 hit,
                 document,
                 retrieved_at=checked_retrieved_at,
             )
+        if selected_context is not None:
+            validate_selected_context(selected_context)
+            if research_document is None:
+                raise RetrievalError(
+                    reason=RetrievalFailureReason.INVALID_CONTEXT,
+                    message="research document was not materialized",
+                )
             if any(
                 chunk.document_id != research_document.document_id
                 for chunk in selected_context.chunks
@@ -142,16 +145,32 @@ def build_evidence(
     if selected_context is not None:
         quotes = selected_context.quotes
     normalized_quotes = _validated_quotes(quotes, source_text)
-    checked_chunks = tuple(selected_chunks)
-    if any(
-        chunk.canonical_url != hit_url
-        or chunk.text[:400].rstrip() not in normalized_quotes
-        for chunk in checked_chunks
-    ):
-        raise EvidenceValidationError(
-            EvidenceFailureReason.INVALID_DATA,
-            "selected chunk provenance does not match evidence",
-        )
+    if checked_chunks:
+        if research_document is None:
+            raise EvidenceValidationError(
+                EvidenceFailureReason.INVALID_DATA,
+                "selected chunk provenance does not match evidence",
+            )
+        for chunk in checked_chunks:
+            if type(chunk) is not ResearchChunk:
+                raise EvidenceValidationError(
+                    EvidenceFailureReason.INVALID_DATA,
+                    "selected chunk provenance does not match evidence",
+                )
+            chunk_quote = _normalize_text(
+                chunk.text[:_MAX_PUBLIC_TEXT_CHARS].rstrip(),
+                field="selected chunk quote",
+                limit=_MAX_PUBLIC_TEXT_CHARS,
+            )
+            if (
+                chunk.document_id != research_document.document_id
+                or chunk.canonical_url != hit_url
+                or chunk_quote not in normalized_quotes
+            ):
+                raise EvidenceValidationError(
+                    EvidenceFailureReason.INVALID_DATA,
+                    "selected chunk provenance does not match evidence",
+                )
     content_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
     evidence_id = _evidence_id(hit_url, content_hash)
     public = ExtractedEvidence(
@@ -267,6 +286,27 @@ def _validated_quotes(quotes: object, source_text: str) -> tuple[str, ...]:
         if candidate not in normalized:
             normalized.append(candidate)
     return tuple(normalized)
+
+
+def _materialized_chunks(values: object) -> tuple[ResearchChunk, ...]:
+    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+        raise EvidenceValidationError(
+            EvidenceFailureReason.INVALID_DATA,
+            "selected chunks must be a bounded sequence",
+        )
+    try:
+        chunks = tuple(islice(values, _MAX_QUOTES + 1))
+    except Exception:
+        raise EvidenceValidationError(
+            EvidenceFailureReason.INVALID_DATA,
+            "selected chunks must be a bounded sequence",
+        ) from None
+    if len(chunks) > _MAX_QUOTES:
+        raise EvidenceValidationError(
+            EvidenceFailureReason.INVALID_DATA,
+            "selected chunks must be a bounded sequence",
+        )
+    return chunks
 
 
 def _normalize_text(value: object, *, field: str, limit: int) -> str:

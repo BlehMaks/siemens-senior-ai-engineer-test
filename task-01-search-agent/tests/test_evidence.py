@@ -8,12 +8,14 @@ import pytest
 from pydantic import AnyHttpUrl, TypeAdapter
 
 from search_agent.contracts import ExtractedEvidence, SearchHit
+from search_agent.documents import build_research_document
 from search_agent.evidence import (
     EvidenceFailureReason,
     EvidenceValidationError,
     build_evidence,
     validate_record,
 )
+from search_agent.retrieval import select_context
 from search_agent.tools import ExtractedBlock, ExtractedDocument
 
 _URL = TypeAdapter(AnyHttpUrl)
@@ -135,20 +137,69 @@ def test_builds_evidence_quotes_from_relevant_late_document_chunks() -> None:
     validate_record(record)
 
 
-@pytest.mark.parametrize(
-    ("hit", "document"),
-    [
-        (_hit(), _document(url="https://other.example/report")),
-        (_hit(), _document(title="Different report")),
-    ],
-)
-def test_rejects_url_and_title_provenance_mismatch(
-    hit: SearchHit, document: ExtractedDocument
-) -> None:
+def test_rejects_url_provenance_mismatch() -> None:
     with pytest.raises(EvidenceValidationError) as error:
-        build_evidence(hit, document, retrieved_at=_NOW, now=_NOW)
+        build_evidence(
+            _hit(),
+            _document(url="https://other.example/report"),
+            retrieved_at=_NOW,
+            now=_NOW,
+        )
 
     assert error.value.reason is EvidenceFailureReason.SOURCE_MISMATCH
+
+
+def test_uses_fetched_title_and_falls_back_when_document_has_no_title() -> None:
+    fetched_title = build_evidence(
+        _hit(title="Search result title | Example"),
+        _document(title="Canonical page title"),
+        retrieved_at=_NOW,
+        now=_NOW,
+    )
+    search_fallback = build_evidence(
+        _hit(title="Search result title | Example"),
+        _document(title=None),
+        retrieved_at=_NOW,
+        now=_NOW,
+    )
+
+    assert fetched_title.source_title == "Canonical page title"
+    assert fetched_title.public.source_title == "Canonical page title"
+    assert search_fallback.source_title == "Search result title | Example"
+    validate_record(fetched_title)
+    validate_record(search_fallback)
+
+
+def test_accepts_normalized_multiline_ranked_chunk_provenance() -> None:
+    hit = _hit(title="Search result title | Example")
+    document = _document(
+        title="Canonical page title",
+        text="Siemens was founded\nby Werner von Siemens and Johann Georg Halske.",
+    )
+    research_document = build_research_document(
+        hit,
+        document,
+        retrieved_at=_NOW,
+    )
+    selected = select_context(
+        "Who founded Siemens?",
+        (research_document,),
+        top_k=1,
+    )
+
+    record = build_evidence(
+        hit,
+        document,
+        retrieved_at=_NOW,
+        quotes=(selected.chunks[0].text,),
+        selected_chunks=selected.chunks,
+        now=_NOW,
+    )
+
+    assert record.public.quotes == (
+        "Siemens was founded by Werner von Siemens and Johann Georg Halske.",
+    )
+    validate_record(record)
 
 
 @pytest.mark.parametrize(
@@ -222,15 +273,7 @@ def test_revalidates_hash_and_evidence_id_before_answering() -> None:
     assert error.value.reason is EvidenceFailureReason.INVALID_DATA
 
 
-def test_requires_document_title_and_rejects_public_title_tamper() -> None:
-    with pytest.raises(EvidenceValidationError) as missing:
-        build_evidence(
-            _hit(),
-            _document(title=None),
-            retrieved_at=_NOW,
-            now=_NOW,
-        )
-
+def test_rejects_public_title_tamper() -> None:
     record = build_evidence(_hit(), _document(), retrieved_at=_NOW, now=_NOW)
     object.__setattr__(
         record,
@@ -250,7 +293,6 @@ def test_requires_document_title_and_rejects_public_title_tamper() -> None:
     with pytest.raises(EvidenceValidationError) as joint_tamper:
         validate_record(jointly_tampered)
 
-    assert missing.value.reason is EvidenceFailureReason.INVALID_DATA
     assert tampered.value.reason is EvidenceFailureReason.INVALID_DATA
     assert joint_tamper.value.reason is EvidenceFailureReason.INVALID_DATA
 

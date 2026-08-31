@@ -13,9 +13,12 @@ from typing import cast
 import pytest
 from pydantic import AnyHttpUrl, BaseModel, TypeAdapter
 
+import search_agent.runner as runner_module
 from search_agent import (
     Citation,
     EventType,
+    EvidenceFailureReason,
+    EvidenceValidationError,
     ExtractedBlock,
     ExtractedDocument,
     ExtractionPort,
@@ -660,6 +663,32 @@ async def test_all_page_failures_terminate_without_model_answer(
     assert result.usage.failed_pages == 1
     assert provider.messages == []
     assert "secret" not in result.model_dump_json().casefold()
+
+
+@pytest.mark.asyncio
+async def test_evidence_rejection_records_a_safe_diagnostic_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _Provider(_answer(_hit(), _document()))
+
+    def reject_evidence(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise EvidenceValidationError(
+            EvidenceFailureReason.SOURCE_MISMATCH,
+            "private mismatch detail",
+        )
+
+    monkeypatch.setattr(runner_module, "build_evidence", reject_evidence)
+    result = await _run(_runner(provider=provider))
+
+    rejected = [record for record in result.trace if record.action == "rank.evidence"]
+    assert result.snapshot.failure_reason is FailureReason.NO_EVIDENCE
+    assert result.usage.failed_pages == 1
+    assert provider.messages == []
+    assert len(rejected) == 1
+    assert rejected[0].reason == "source_mismatch"
+    assert rejected[0].context_hash == hashlib.sha256(SOURCE_URL.encode()).hexdigest()
+    assert SOURCE_URL not in result.model_dump_json()
 
 
 @pytest.mark.asyncio
