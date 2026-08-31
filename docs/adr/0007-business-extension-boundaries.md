@@ -5,6 +5,11 @@
 Tasks 4–6 already satisfy independent assignment contracts. Business-oriented
 decision, safety, and integration behavior is useful, but it must not silently
 change the reviewed defaults or couple otherwise independent packages.
+The added scope is deliberate: Task 4 adds decision-aware model comparison,
+Task 5 adds constraint-aware hybrid retrieval and a relaxed engineering-review
+tier, and Task 6 adds a reusable sklearn transformer with explicit alias
+normalization. These capabilities extend, rather than redefine, the assignment
+baselines.
 
 ## Decision
 

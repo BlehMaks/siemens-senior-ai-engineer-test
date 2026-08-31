@@ -224,7 +224,9 @@ Acceptance:
 - [ ] Blank descriptions never enter the text model.
 - [ ] Hard conflicts cannot be overridden by a similarity score.
 - [ ] `review_required` and `insufficient_evidence` remain honest outcomes.
-- [ ] Relaxed hybrid is reported as `not_implemented` until its separate release.
+- [ ] Relaxed hybrid is reported as `evaluated`, remains separate from the
+  lexical baseline and strict hybrid, and emits review candidates rather than
+  approved substitutes.
 - [ ] The owner reviews representative candidates and records that similarity and
   benchmark labels are not electrical interchangeability certification.
 
@@ -261,7 +263,9 @@ The command prints two `Wrote ...` lines. Acceptance:
 - [ ] `baseline_equivalent` is `true`.
 - [ ] All recorded sklearn checks are `true`.
 - [ ] The artifact has schema version `1` and a `sha256:` fingerprint.
-- [ ] Alias normalization is explicitly `not_implemented`.
+- [ ] Alias normalization is `evaluated`, disabled by default, maps only declared
+  aliases, and leaves undeclared variants subject to the normal unseen-category
+  fallback.
 - [ ] Runtime/memory values are treated as bounded local evidence, not a universal
   performance promise.
 

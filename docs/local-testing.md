@@ -153,12 +153,13 @@ jq '{
 `status` must be `completed`. The answer must contain a citation, and the usage
 object must report the bounded search and model-call counters.
 
-The submitted executable path uses deterministic inference and deterministic
+The submitted acceptance path uses deterministic inference and deterministic
 search evidence. It exercises the state machine, budgets, citation contract,
 durable API flow, and failure boundaries without downloading a model. The Ollama
-adapter is present and contract-tested, but the current CLI and assessment API do
-not connect it to live internet research. This test therefore proves the submitted
-agent path, not the quality of an external LLM or a live search provider.
+and live-search adapters and the CLI live mode are implemented and contract-tested;
+selecting the external providers and accepting their live output remain an explicit
+owner-run check. This test therefore proves the submitted agent path, not the
+quality of an external LLM or a live search provider.
 
 ## 6. Train and evaluate Task 4
 
