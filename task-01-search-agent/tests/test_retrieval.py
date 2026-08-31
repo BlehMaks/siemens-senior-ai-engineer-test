@@ -165,6 +165,40 @@ def test_exact_duplicate_content_keeps_the_more_authoritative_source() -> None:
     assert context.score_components[0].authority == 1.0
 
 
+def test_future_publication_metadata_cannot_win_duplicate_ranking() -> None:
+    text = "Siemens Scope 3 emissions were 14.7 million tonnes CO2e in 2025."
+    honest_url = "https://honest.example/reports/sustainability.pdf"
+    future_url = "https://future.example/reports/sustainability.pdf"
+    honest = build_research_document(
+        _hit(honest_url),
+        _document(
+            url=honest_url,
+            text=text,
+            blocks=(ExtractedBlock(text=text, page_number=2),),
+            published_at=datetime(2026, 1, 15, tzinfo=UTC),
+        ),
+        retrieved_at=_NOW,
+    )
+    future = build_research_document(
+        _hit(future_url),
+        _document(
+            url=future_url,
+            text=text,
+            blocks=(ExtractedBlock(text=text, page_number=2),),
+            published_at=datetime(9999, 1, 15, tzinfo=UTC),
+        ),
+        retrieved_at=_NOW,
+    )
+
+    context = select_context(
+        "Siemens Scope 3 emissions 2025",
+        (honest, future),
+        top_k=1,
+    )
+
+    assert context.chunks[0].canonical_url == honest_url
+
+
 def test_authority_freshness_and_lexical_components_have_stable_ordering() -> None:
     primary_text = "Siemens 2025 Scope 3 emissions result is 14.7 million tonnes."
     secondary_text = "Siemens 2024 Scope 3 emissions commentary is secondary."

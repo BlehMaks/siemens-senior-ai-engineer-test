@@ -232,7 +232,10 @@ def chunk_document(
     query_tokens = frozenset(_tokens(request))
     exact_terms = frozenset(token for token in query_tokens if _is_exact_term(token))
     authority = _AUTHORITY[document.source_type]
-    freshness = _freshness(document.updated_at or document.published_at)
+    freshness = _freshness(
+        document.updated_at or document.published_at,
+        retrieved_at=document.retrieved_at,
+    )
     chunks: list[ResearchChunk] = []
     seen_hashes: set[str] = set()
     ordinal = 0
@@ -412,8 +415,8 @@ def _lexical_scores(
     return lexical, round(min(1.0, exact), 6)
 
 
-def _freshness(timestamp: datetime | None) -> float:
-    if timestamp is None:
+def _freshness(timestamp: datetime | None, *, retrieved_at: datetime | None) -> float:
+    if timestamp is None or (retrieved_at is not None and timestamp > retrieved_at):
         return 0.0
     # Absolute recency is deterministic and never mistakes retrieval time for freshness.
     return round(min(1.0, max(0.0, (timestamp.year - 1970) / 130.0)), 6)
