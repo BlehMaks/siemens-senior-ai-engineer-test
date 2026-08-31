@@ -159,6 +159,12 @@ def test_live_smoke_accepts_a_completed_grounded_response(tmp_path: Path) -> Non
     assert summary["citation_count"] == 1
 
 
+def test_live_smoke_uses_a_scope_stable_default_query() -> None:
+    source = LIVE_SMOKE.read_text(encoding="utf-8")
+
+    assert "Find the latest official Siemens sustainability report." in source
+
+
 def test_live_smoke_rejects_an_ungrounded_response(tmp_path: Path) -> None:
     result = _run_live_smoke(tmp_path, grounded=False)
 

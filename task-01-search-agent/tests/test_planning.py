@@ -25,9 +25,16 @@ from search_agent import (
     ToolBudget,
 )
 from search_agent.contracts import QueryPlan
+from search_agent.planning import PLANNING_SYSTEM_PROMPT
 
 ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
 URL_ADAPTER = TypeAdapter(AnyHttpUrl)
+
+
+def test_planning_prompt_explains_the_closed_action_scope() -> None:
+    assert "reuse words from the request" in PLANNING_SYSTEM_PROMPT
+    assert "four-digit year" in PLANNING_SYSTEM_PROMPT
+    assert "max_fetches" in PLANNING_SYSTEM_PROMPT
 
 
 @pytest.mark.asyncio

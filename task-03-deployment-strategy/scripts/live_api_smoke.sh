@@ -71,7 +71,7 @@ main() {
   timeout=${LIVE_RUN_TIMEOUT_SECONDS:-600}
   [[ $timeout =~ ^[1-9][0-9]*$ && $timeout -ge 60 && $timeout -le 1800 ]] ||
     fail "LIVE_RUN_TIMEOUT_SECONDS must be between 60 and 1800"
-  query=${LIVE_RESEARCH_QUERY:-"Using current public web sources, summarize two sustainability commitments Siemens states on its official website. Cite each claim."}
+  query=${LIVE_RESEARCH_QUERY:-"Find the latest official Siemens sustainability report."}
   [[ ${#query} -ge 3 && ${#query} -le 400 ]] ||
     fail "LIVE_RESEARCH_QUERY must contain 3 to 400 characters"
 
