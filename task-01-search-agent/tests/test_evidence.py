@@ -181,6 +181,42 @@ def test_rejects_forged_selected_chunk_location_at_both_boundaries() -> None:
     assert recheck_error.value.reason is EvidenceFailureReason.INVALID_DATA
 
 
+def test_rejects_quote_outside_selected_chunks_at_recheck() -> None:
+    first = "Siemens invests in U.S. manufacturing"
+    decoy = "Siemens CES 2026 partnership update"
+    document = ExtractedDocument(
+        canonical_url="https://example.com/report",
+        title="Siemens Press",
+        text=f"07 August 2026\n{first}\n\n06 August 2026\n{decoy}",
+        blocks=(
+            ExtractedBlock(text=f"07 August 2026\n{first}", section=first),
+            ExtractedBlock(text=f"06 August 2026\n{decoy}", section=decoy),
+        ),
+    )
+    research_document = build_research_document(_hit(), document, retrieved_at=_NOW)
+    selected = select_context(
+        "Return the exact first listed headline dated 2026",
+        (research_document,),
+    )
+    record = build_evidence(
+        _hit(),
+        document,
+        retrieved_at=_NOW,
+        quotes=selected.quotes,
+        selected_chunks=selected.chunks,
+        now=_NOW,
+    )
+    tampered = replace(
+        record,
+        public=record.public.model_copy(update={"quotes": (decoy,)}),
+    )
+
+    with pytest.raises(EvidenceValidationError) as error:
+        validate_record(tampered)
+
+    assert error.value.reason is EvidenceFailureReason.INVALID_DATA
+
+
 def test_rejects_url_provenance_mismatch() -> None:
     with pytest.raises(EvidenceValidationError) as error:
         build_evidence(

@@ -162,17 +162,11 @@ def build_evidence(
                 EvidenceFailureReason.INVALID_DATA,
                 "selected chunk provenance does not match evidence",
             )
-        for chunk in checked_chunks:
-            chunk_quote = _normalize_text(
-                chunk.text[:_MAX_PUBLIC_TEXT_CHARS].rstrip(),
-                field="selected chunk quote",
-                limit=_MAX_PUBLIC_TEXT_CHARS,
+        if normalized_quotes != _selected_chunk_quotes(checked_chunks):
+            raise EvidenceValidationError(
+                EvidenceFailureReason.INVALID_DATA,
+                "selected chunk provenance does not match evidence",
             )
-            if chunk_quote not in normalized_quotes:
-                raise EvidenceValidationError(
-                    EvidenceFailureReason.INVALID_DATA,
-                    "selected chunk provenance does not match evidence",
-                )
     content_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
     evidence_id = _evidence_id(hit_url, content_hash)
     public = ExtractedEvidence(
@@ -250,6 +244,10 @@ def validate_record(record: EvidenceRecord) -> None:
             _selected_chunks_provenance_hash(record.selected_chunks)
         ):
             raise ValueError("selected chunk provenance does not match")
+        if record.selected_chunks and public.quotes != _selected_chunk_quotes(
+            record.selected_chunks
+        ):
+            raise ValueError("quotes do not match selected chunks")
         if record.selected_context is not None:
             validate_selected_context(record.selected_context)
             if public.quotes != record.selected_context.quotes:
@@ -316,6 +314,19 @@ def _materialized_chunks(values: object) -> tuple[ResearchChunk, ...]:
             "selected chunks must be a bounded sequence",
         )
     return chunks
+
+
+def _selected_chunk_quotes(
+    chunks: Sequence[ResearchChunk],
+) -> tuple[str, ...]:
+    return tuple(
+        _normalize_text(
+            chunk.text[:_MAX_PUBLIC_TEXT_CHARS].rstrip(),
+            field="selected chunk quote",
+            limit=_MAX_PUBLIC_TEXT_CHARS,
+        )
+        for chunk in chunks
+    )
 
 
 def _validate_chunk_provenance(

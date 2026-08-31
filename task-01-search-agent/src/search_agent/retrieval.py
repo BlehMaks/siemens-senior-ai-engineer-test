@@ -425,7 +425,7 @@ def _first_structured_item(
         for end in range(1, len(group) + 1):
             combined = " ".join(chunk.text for chunk in group[:end])
             combined = " ".join(combined.split())
-            if combined != section and combined.endswith(section):
+            if combined.find(section) > 0:
                 return group[:end]
     return (groups[0][0],)
 

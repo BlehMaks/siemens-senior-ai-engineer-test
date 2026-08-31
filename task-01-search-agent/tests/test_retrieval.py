@@ -185,6 +185,33 @@ def test_dated_listing_keeps_date_with_following_heading_for_ranking() -> None:
     assert "CES 2026" not in context.quotes[0]
 
 
+def test_first_listed_heading_survives_description_in_same_block() -> None:
+    first = "Siemens invests in U.S. manufacturing"
+    decoy = "Siemens CES 2026 partnership update"
+    document = _listing_document(
+        "https://press.siemens.com/global/en",
+        title="Siemens Press",
+        blocks=(
+            ExtractedBlock(
+                text=f"07 August 2026\n{first}\nFirst release description.",
+                section=first,
+            ),
+            ExtractedBlock(
+                text=f"06 August 2026\n{decoy}",
+                section=decoy,
+            ),
+        ),
+    )
+
+    context = select_context(
+        "Return the exact first listed headline dated 2026",
+        (document,),
+    )
+
+    assert first in " ".join(context.quotes)
+    assert decoy not in " ".join(context.quotes)
+
+
 @pytest.mark.parametrize("instruction", ["Do not select", "Skip"])
 def test_negated_first_listed_phrase_keeps_relevance_ranking(
     instruction: str,
