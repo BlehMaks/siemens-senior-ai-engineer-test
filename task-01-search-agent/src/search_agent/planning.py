@@ -43,7 +43,17 @@ _TOKEN_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
 _POLICY_WORD_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
 _ACRONYM_PATTERN = re.compile(r"\b[A-Z]{2,8}\b")
 _YEAR_PATTERN = re.compile(r"(?:19|20)\d{2}\Z")
+_WEB_TARGET_PATTERN = re.compile(
+    r"(?:https?://|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"[a-z]{2,}(?:/[^\s]*)?)",
+    flags=re.IGNORECASE,
+)
 _CLAIM_SEGMENT_PATTERN = re.compile(r"(?:\n+|;+|(?<!\d)[.!?]+|[.!?]+(?!\d))")
+_EXPLICIT_RESEARCH_REQUEST_PATTERN = re.compile(
+    r"\A(?:(?:please|kindly)\s+)?"
+    r"(?:(?:can|could|would)\s+you\s+)?"
+    r"(?:find|locate|look\s+up|research|search|retrieve)\b"
+)
 _SCOPE_GENERIC_TOKENS = {
     "a",
     "an",
@@ -283,6 +293,30 @@ def _request_bounded_company_research_decision(request: str) -> PlanningDecision
     )
 
 
+def _planning_repair_metadata() -> ProviderMetadata:
+    return ProviderMetadata(
+        provider_name="deterministic-planning-repair",
+        model_name="request-bounded-company-research",
+        attempt_count=1,
+    )
+
+
+def _is_structured_content_failure(exc: ProviderResponseError) -> bool:
+    return isinstance(
+        exc.__cause__, (json.JSONDecodeError, UnicodeDecodeError, ValidationError)
+    )
+
+
+def _can_repair_company_research_plan(request: str) -> bool:
+    return _explicitly_requests_research(request) or _has_web_target(request)
+
+
+def _has_web_target(request: str) -> bool:
+    return (
+        _WEB_TARGET_PATTERN.search(unicodedata.normalize("NFKC", request)) is not None
+    )
+
+
 class QueryPlanner:
     def __init__(
         self,
@@ -307,11 +341,30 @@ class QueryPlanner:
     ) -> PlanningOutcome:
         _reject_forbidden_request(request)
         context = validate_conversation_context(conversation_context)
-        result = await self._provider.generate_structured(
-            messages=planning_messages(request, context),
-            response_model=PlanningDraft,
-            temperature=0.0,
-        )
+        try:
+            result = await self._provider.generate_structured(
+                messages=planning_messages(request, context),
+                response_model=PlanningDraft,
+                temperature=0.0,
+            )
+        except ProviderResponseError as exc:
+            if (
+                self._repair_invalid_company_plans
+                and not context
+                and _has_web_target(request)
+                and _is_structured_content_failure(exc)
+            ):
+                decision = _request_bounded_company_research_decision(request)
+                validate_planning_decision(
+                    request=request,
+                    decision=decision,
+                    conversation_context=context,
+                )
+                return PlanningOutcome(
+                    decision=decision,
+                    metadata=_planning_repair_metadata(),
+                )
+            raise
         try:
             draft = PlanningDraft.model_validate(
                 result.response.model_dump(mode="python")
@@ -323,15 +376,22 @@ class QueryPlanner:
         try:
             decision = draft.to_decision()
         except ValidationError as exc:
-            if (
-                self._repair_invalid_company_plans
-                and draft.task_category is TaskCategory.COMPANY_RESEARCH
+            if self._repair_invalid_company_plans and (
+                draft.task_category is TaskCategory.COMPANY_RESEARCH
+                or (not context and _can_repair_company_research_plan(request))
             ):
                 decision = _request_bounded_company_research_decision(request)
             else:
                 raise ProviderResponseError(
                     "planner output violated the public planning contract"
                 ) from exc
+        if (
+            self._repair_invalid_company_plans
+            and not context
+            and decision.task_category is not TaskCategory.COMPANY_RESEARCH
+            and _can_repair_company_research_plan(request)
+        ):
+            decision = _request_bounded_company_research_decision(request)
         if decision.task_category is TaskCategory.CLARIFICATION:
             _validate_discarded_clarification(decision)
             decision = PlanningDecision(
@@ -701,6 +761,13 @@ def _meaningful_tokens(text: str) -> set[str]:
 def _normalized_policy_text(text: str) -> str:
     normalized = unicodedata.normalize("NFKC", text).casefold()
     return " ".join(_POLICY_WORD_PATTERN.findall(normalized))
+
+
+def _explicitly_requests_research(request: str) -> bool:
+    return (
+        _EXPLICIT_RESEARCH_REQUEST_PATTERN.match(_normalized_policy_text(request))
+        is not None
+    )
 
 
 def _expands_request_acronym(*, request: str, candidate: str) -> bool:

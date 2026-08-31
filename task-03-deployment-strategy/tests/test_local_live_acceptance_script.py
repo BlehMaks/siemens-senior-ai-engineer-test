@@ -177,11 +177,11 @@ def test_live_smoke_accepts_a_completed_grounded_response(tmp_path: Path) -> Non
 def test_live_smoke_uses_a_dynamic_html_fact_not_model_memory() -> None:
     source = LIVE_SMOKE.read_text(encoding="utf-8")
 
-    assert "first item headline contains $target_year" in source
+    assert "Find and return the exact first listed headline" in source
     assert "https://press.siemens.com/global/en" in source
     assert 'attributes.get("data-original")' in source
     assert "target_year = max" not in source
-    assert "press.siemens.com/global/en first item headline contains" in source
+    assert "dated $target_year" in source
 
 
 def test_live_smoke_oracle_uses_the_first_dated_press_item(tmp_path: Path) -> None:

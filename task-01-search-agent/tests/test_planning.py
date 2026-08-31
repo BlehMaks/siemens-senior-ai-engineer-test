@@ -140,6 +140,105 @@ async def test_query_planner_repairs_company_research_budget() -> None:
 
 
 @pytest.mark.asyncio
+async def test_query_planner_repairs_malformed_url_target_plan() -> None:
+    request = "press.siemens.com/global/en first item headline contains 2026"
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "company_research",
+                "requires_search": True,
+                "answer_focus": "Siemens press headline 2026",
+                "query_plan": {
+                    "tool_budget": {"max_search_queries": 1, "max_fetches": 5},
+                    "searches": [{"text": request, "max_results": "5"}],
+                },
+            }
+        ]
+    )
+
+    outcome = await QueryPlanner(
+        provider, repair_invalid_company_plans=True
+    ).plan_with_metadata(request)
+
+    assert outcome.decision == PlanningDecision(
+        task_category=TaskCategory.COMPANY_RESEARCH,
+        requires_search=True,
+        answer_focus=request,
+        query_plan=QueryPlan(
+            tool_budget=ToolBudget(max_search_queries=1, max_fetches=5),
+            searches=(SearchQuery(text=request, max_results=5),),
+        ),
+    )
+    assert outcome.metadata.provider_name == "deterministic-planning-repair"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "press.siemens.com/global/en first item headline contains 2026",
+        "Find the current Siemens sustainability report",
+    ],
+)
+async def test_query_planner_repairs_research_misclassification(
+    request_text: str,
+) -> None:
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "direct_reply",
+                "requires_search": False,
+                "answer_focus": request_text,
+            }
+        ]
+    )
+
+    decision = await QueryPlanner(provider, repair_invalid_company_plans=True).plan(
+        request_text
+    )
+
+    assert decision == PlanningDecision(
+        task_category=TaskCategory.COMPANY_RESEARCH,
+        requires_search=True,
+        answer_focus=request_text,
+        query_plan=QueryPlan(
+            tool_budget=ToolBudget(max_search_queries=1, max_fetches=5),
+            searches=(SearchQuery(text=request_text, max_results=5),),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_query_planner_does_not_mask_provider_failure_for_a_web_target() -> None:
+    provider = FakeStructuredChatProvider(responses=[])
+
+    with pytest.raises(ProviderResponseError, match="exhausted"):
+        await QueryPlanner(provider, repair_invalid_company_plans=True).plan(
+            "Find the headline at https://press.siemens.com/global/en"
+        )
+
+
+@pytest.mark.asyncio
+async def test_query_planner_does_not_force_search_for_an_ordinary_question() -> None:
+    provider = FakeStructuredChatProvider(
+        responses=[
+            {
+                "task_category": "direct_reply",
+                "requires_search": False,
+                "answer_focus": "Siemens",
+            }
+        ]
+    )
+
+    decision = await QueryPlanner(provider, repair_invalid_company_plans=True).plan(
+        "What is Siemens?"
+    )
+
+    assert decision.task_category is TaskCategory.DIRECT_REPLY
+    assert decision.requires_search is False
+
+
+@pytest.mark.asyncio
 async def test_query_planner_resolves_follow_up_only_from_bounded_untrusted_context() -> (
     None
 ):

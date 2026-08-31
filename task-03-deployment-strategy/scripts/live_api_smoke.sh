@@ -199,7 +199,7 @@ main() {
     ) || fail "Siemens press-page preflight failed"
     target_year=$(jq -er '.year | numbers' <<<"$oracle") ||
       fail "Siemens press-page preflight returned an invalid year"
-    query="press.siemens.com/global/en first item headline contains $target_year"
+    query="Find and return the exact first listed headline at https://press.siemens.com/global/en dated $target_year"
     if [[ -z $expected_answer ]]; then
       expected_answer=$(jq -er '.title | strings' <<<"$oracle") ||
         fail "Siemens press-page preflight returned an invalid title"
