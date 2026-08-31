@@ -26,12 +26,12 @@ change.
 |---|---:|---:|---:|---|
 | Repository audits (`scripts/`) | 88.03% (544/618) | 84.23% (283/336) | 86.17% weighted by coverage.py internals | Audit and submission helpers are measured together |
 | Task 1 | 87.54% (4,428/5,058) | 70.86% (1,077/1,520) | 83.69% weighted by coverage.py internals | Large trace, memory, and retrieval surface dominates remaining misses |
-| Task 2 | 89.03% (4,292/4,821) | 72.68% (1,112/1,530) | 84.96% weighted by coverage.py internals | Storage, cloud-state, and schema branches drive the remainder |
+| Task 2 | 89.03% (4,293/4,822) | 72.75% (1,113/1,530) | 85.11% weighted by coverage.py internals | Storage, cloud-state, and schema branches drive the remainder |
 | Task 3 | 94.71% (376/397) | 80.26% (61/76) | 92.09% weighted by coverage.py internals | Remaining misses are in deployment helper edge paths |
 | Task 4 | 100.00% (946/946) | 100.00% (214/214) | 100.00% | Three owner-private-data checks stay skipped unless `SIEMENS_TASK4_INPUT_DIR` is supplied |
 | Task 5 | 100.00% (1,345/1,345) | 100.00% (396/396) | 100.00% | Fully covered in public deterministic scope |
 | Task 6 | 100.00% (660/660) | 100.00% (202/202) | 100.00% | Fully covered in public deterministic scope |
-| Repository total | 90.94% (12,591/13,845) | 78.26% (3,345/4,274) | 87.95% | `coverage.py` total across `task-*/src` and `scripts` |
+| Repository total | 90.94% (12,592/13,846) | 78.29% (3,346/4,274) | 87.96% | `coverage.py` total across `task-*/src` and `scripts` |
 
 ## Test corpus comparison
 
@@ -44,8 +44,8 @@ change.
 ## Coverage comparison against `origin/master`
 
 `origin/master` measured 86.97% combined repository coverage. Current `HEAD`
-measured 87.95% combined repository coverage, 90.94% statement coverage, and
-78.26% branch coverage. The repository-wide combined increase is +0.98 points,
+measured 87.96% combined repository coverage, 90.94% statement coverage, and
+78.29% branch coverage. The repository-wide combined increase is +0.99 points,
 while the covered code surface grew materially because Tasks 4-6 added and
 closed new production modules instead of merely re-running the old suite.
 
